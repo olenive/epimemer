@@ -14,7 +14,7 @@ shared label rather than to an edge. And it is a judgment about the graph's
 kind: a reviewer auditing what the graph asserts must not have to read past
 vocabulary notes to do it.
 
-Both backends via the `storage` fixture — a description the two stores disagree
+Every backend, through the `storage` fixture: a description two stores disagree
 about is the divergence `tests/conftest.py` exists for.
 """
 

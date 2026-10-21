@@ -1,8 +1,8 @@
 """Check an `apply_reflection` batch before any of it applies.
 
-`apply_reflection` applies in ten steps with no transaction across them, and the
-step order is load-bearing — the anchoring rule: judgments first, because
-later steps retire the nodes those judgments name. So a malformed entry part-way
+`apply_reflection` applies in a sequence of steps with no transaction across
+them, and the step order is load-bearing (the anchoring rule): judgments first,
+because later steps retire the nodes those judgments name. So a malformed entry part-way
 down a batch cannot be rolled back. Everything above it is already committed,
 and the caller receives `{"error": "'pair'"}`: a response that says the call
 failed and cannot say what landed. Measured on the in-memory store, a valid

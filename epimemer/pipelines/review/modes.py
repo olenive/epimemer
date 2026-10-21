@@ -1,30 +1,26 @@
 """Which decisions `review()` is looking at, and how it is narrowed (§6.1, §6.3).
 
-**Three things are separate, and the design says so twice because the first
-draft ran them together**: *which* decisions, *what order*, and *whether* the
-list is narrowed further. Ordering lives in `difficulty.py`. This module owns
-the first and the third.
+**Three things are separate**: *which* decisions, *what order*, and *whether*
+the list is narrowed further. Ordering lives in `difficulty.py`. This module
+owns the first and the third.
 
-**A mode names the selection; the arguments narrow whatever it selected.** That
-is how §6.1's *"modes compose — `by_agent` and `since` is the ordinary case"*
-survives a single `mode` string: `agent_id`, `since` and `until` are available
-under every mode. Most modes are the thing that cannot be expressed as a field
+**A mode names the selection; the arguments narrow whatever it selected.**
+`agent_id`, `since` and `until` are available under every mode, so a single
+`mode` string still composes with them: `by_agent` and `since` is the ordinary
+case. Most modes are the thing that cannot be expressed as a field
 filter; `warning` is the exception and is a selection on kind, which is data in
 `MODE_KINDS` rather than a branch. One further name exists only to **refuse**.
 
 **`by_agent` and `since` are sugar over a required argument, and the refusal is
 the whole value.** `review(mode="all")` with an `agent_id` the caller forgot to
-pass returns the entire journal, which reads as *"agent-1 decided everything"*
-— a filter that silently returns everything, which is the exact failure
-`REVIEW_MODES` was kept short to avoid at step 6. Naming the mode makes the
-argument mandatory, so the mistake refuses instead of answering wrongly.
+pass returns the entire journal, which reads as *"agent-1 decided everything"*:
+a filter that silently returns everything, which is the failure a short
+`REVIEW_MODES` exists to avoid. Naming the mode makes the argument mandatory,
+so the mistake refuses instead of answering wrongly.
 
 **One designed name is refused rather than admitted.** `between` is not a
 second mode: it is `since` with an `until`, and two names for one selection is
-the *"two shapes for one question"* defect §6.6 names. (`warning` was refused
-here on the same grounds until warnings were built: it selected on a
-`DecisionKind` nothing wrote, so it would have returned an empty list reading as
-*nothing is contested*. The kind has a writer now, so the mode is real.)
+two shapes for one question (§6.1).
 """
 
 from epimemer.core.types import DecisionKind, DecisionRecord

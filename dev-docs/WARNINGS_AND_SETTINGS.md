@@ -1,14 +1,14 @@
 # Warnings, their settings, and inference merge
 
+A design, built: the code is `epimemer/core/advisories.py`, the
+`configure_warnings` tool and `merge_inferences`.
+
 A warning is a typed message a tool attaches to its response when the graph
 can compute something the agent cannot: that two premises never held together,
 that a contradiction was recorded across metacontexts, and so on. A warning policy,
 per process with per-graph overrides, decides which warnings are surfaced and
 whether they ask for a person. This document holds the reasoning behind that
-design. The mechanics live in code and are not repeated here:
-`epimemer/core/advisories.py` for the shape and vocabulary,
-`epimemer/pipelines/reflection/inference_dedup.py` for the merge gate and
-nomination, `epimemer/storage/protocol.py` for how a per-graph setting resolves.
+design.
 
 **The word is warning everywhere a person or an agent reads it.** Inside Python
 the class is called `Advisory`, because `Warning` is a builtin and a model
@@ -19,32 +19,21 @@ say warning.
 
 ---
 
-## 1. The pieces
+## 1. What a caller sees
 
-| Piece | Where |
-|---|---|
-| `Advisory`, `AdvisoryKind`, `AdvisoryAction`, `WarningPolicy` | `core/advisories.py` |
-| `AdvisoryStance` and the total `ADVISORY_STANCE` map | `core/advisories.py` |
-| Per-graph overrides and `resolve_warning_policy` | `storage/protocol.py`, both backends |
-| `configure_warnings` | `mcp/tools.py`, `mcp/server.py` |
-| `merge_inferences(source_ids, content)` | `mcp/tools.py` |
-| `inference_merge_candidates` | a `reflect` phase, in `REFLECT_PHASES` |
-| `DecisionKind.PROCEEDED_DESPITE_WARNING` | `core/types.py` |
-| `review(mode="warning")` | `pipelines/review/modes.py` |
-
-The response keys `warning` and `notify_user` predate the policy and keep
-their meaning: `warning` is the first surfaced warning's message, and
-`notify_user` is true when any surfaced warning resolves to `flag`. Both are documented in the agent guidance and in
-`INTEGRATION.md`, so their meaning is fixed even though what produces them is
-now a policy.
+The response keys `warning` and `notify_user` mean the same on every tool:
+`warning` is the first surfaced warning's message, and `notify_user` is true
+when any surfaced warning resolves to `flag`. The agent guide
+(`epimemer_prompts/DEFAULT.md`) tells an agent to act on `notify_user`, so its
+meaning stays fixed whatever the policy says.
 
 ---
 
 ## 2. Why a warning and not a rule
 
-An inference is its derivation, so merging two migrates both sets of
-`derived_from` edges onto the survivor: A resting on `{F1}` and B on `{F2}`
-becomes one node resting on `{F1, F2}`. Usually that is right, two pieces of
+An inference is its derivation, so merging two migrates both sets of premises
+(their `derived_from` and `supports` edges) onto the survivor: A resting on
+`{F1}` and B on `{F2}` becomes one node resting on `{F1, F2}`. Usually that is right, two pieces of
 evidence for one conclusion. It is wrong in exactly one checkable case: both
 premises are dated and their asserted periods provably fall clear.
 
@@ -72,7 +61,7 @@ trip to deliver it would be latency bought for nothing.
 
 ---
 
-## 3. The five kinds and their stance
+## 3. The kinds and their stance
 
 `AdvisoryKind` is a closed vocabulary because the reviewing agent groups and
 sorts on it, and re-parsing sentences is how that rots. Every kind has a writer,
@@ -122,10 +111,10 @@ produce is worse than no value at all, because a caller writes a branch for it
 and the branch is dead. It lands when something wants it, with its refusal path
 and its tests.
 
-**`same_metacontext_contradiction` defaults to `flag`, for compatibility.**
-`record_contradiction` has always returned `notify_user` for a same-metacontext pair.
-Under an empty `by_kind` and a `proceed` default, the same call would return
-`notify_user: false`, the key surviving with its trigger quietly changed. A user
+**`same_metacontext_contradiction` defaults to `flag`.** Under an empty
+`by_kind` and a `proceed` default, `record_contradiction` would return
+`notify_user: false` for a same-metacontext pair, the key surviving with its
+trigger quietly changed. A user
 can still set that kind to `proceed`; the point is that turning the notification
 off is somebody's decision rather than a side effect of the representation.
 Exempting the tool from policy entirely was rejected: `notify_user` would then
@@ -146,12 +135,12 @@ Without this rule, `notify_user: true` could arrive with no text to relay.
 
 **The mute governs every path that shows the agent a warning.** `reflect`
 attaches its warning to a merge candidate rather than to a finished operation,
-and for a while that was the one path the policy never reached, so a muted graph
-could answer *no warnings* from `record_contradiction` and *here is a warning*
-from `reflect` on the same run. It resolves the policy now and strips a muted
-kind from the candidate before answering. Nothing actionable is lost: the
-candidate arrives with its pair, its shared premises and its similarity, and a
-kind named `flag` survives there as it does everywhere. The `advisory_raised`
+and it resolves the policy and strips a muted kind from the candidate before
+answering, so a muted graph cannot answer *no warnings* from
+`record_contradiction` and *here is a warning* from `reflect` on the same run.
+Nothing actionable is lost: the candidate arrives with its pair, its shared
+premises and its similarity, and a kind named `flag` survives there as it does
+everywhere. The `advisory_raised`
 event still carries every warning `reflect` computed, with `surfaced` saying
 which of them the agent saw.
 
@@ -188,10 +177,8 @@ itself decides.
 
 **Nomination is scoped to shared evidence, never a global sweep.** Shared
 evidence is the case that actually arises once facts have been merged, and it
-is cheap. A global sweep over all inference pairs was measured on two real
-graphs (123 active inferences, 5,053 pairs) and found nothing above the 0.80
-bar: p99 similarity sat between 0.44 and 0.55. The reasoning is in
-`inference_dedup.py`'s header with the measurements. Similar inferences that
+is cheap; a global sweep found nothing on the graphs measured, and
+`inference_dedup.py`'s header has the measurements. Similar inferences that
 share no premise are a separate list, `similar_inferences`, offered for a
 `similarity` verdict rather than a merge; `SIMILAR_INFERENCES.md` has that
 design.
@@ -200,21 +187,16 @@ design.
 
 ## 5. On the dashboard
 
-**Warnings reach the dashboard.** A warning is published as its own event,
-`advisory_raised`, from the tool layer rather than from the storage wrapper,
-and becomes a `warned` row in the live log beside the act it accompanied. Every
-warning a call computed is published, muted or not, with `surfaced` saying
-whether the agent's response carried it: the dashboard is where a person looks
-at what the agent was *not* told. The settings panel beside it is read-only, and
-that is a decision rather than a phase, because a write from the browser would
-be the first write into a graph with no author. `WARNINGS_DASHBOARD.md` holds
-the design and `EVENT_LOG.md` §12 the event.
+Every warning a call computed reaches the dashboard, muted or not, with
+`surfaced` saying whether the agent's response carried it: the dashboard is
+where a person looks at what the agent was *not* told. `EVENT_LOG.md` §12 holds
+that design and the read-only settings panel beside it.
 
 ---
 
 ## 6. One question left open
 
 **Should a fact merge against a warning be possible at all?** `merge_facts`
-refuses rather than warns in every case, and nothing about it produces an
+refuses rather than warns in every case, and nothing about it produces a
 warning. The facility is general and the question is whether any of those
 refusals is really a warning wearing the wrong clothes. Nobody has needed it.

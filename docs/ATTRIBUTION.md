@@ -41,11 +41,6 @@ Three things follow from the identity being the user's:
 - **The same name can appear in two graphs**, because the user can assign it
   in both. Correlating them is a human act.
 
-Hashing the description to get an identity was rejected: reword it and you
-become a different judge; paste someone else's and you become the same one.
-The hash survives one level down, as the **digest** of a description
-*version*.
-
 ## Three layers: the key, the name, and the claim
 
 | Layer | Mutable | What it is for |
@@ -73,12 +68,13 @@ rewritten: the key each decision recorded does not change, and the name is
 resolved when the row is read. So nobody has to name a judge correctly before
 knowing what it will be used for.
 
-Two channels, the same two that can approve, because a handle an agent could
+Two channels, both in the user's hands, because a handle an agent could
 rename is a handle an agent could point at another judge's history:
 
 - The judge picker's **rename** option, which then asks which judge and what
   to call it;
-- `epimemer agents rename <handle> <name>`, on a served SurrealDB.
+- `epimemer agents rename <handle> <name>`, on a served SurrealDB, a SQLite
+  graph or Postgres.
 
 **A name already taken is a question, not an error.** Two records that
 should be one is the commonest reason to be renaming at all, so the collision
@@ -114,8 +110,9 @@ is out of use again now* stays readable. Two channels, the same two that can
 rename:
 
 - `epimemer agents retire <handle>` and `epimemer agents reinstate <handle>`,
-  on a served SurrealDB. Neither asks for confirmation, since retiring costs
-  nothing that reinstating does not give straight back;
+  on a served SurrealDB, a SQLite graph or Postgres. Neither asks for
+  confirmation, since retiring costs nothing that reinstating does not give
+  straight back;
 - the judge picker's **A retired judge…** entry, shown only where the graph has
   one. It opens a second picker over the retired judges, brings the chosen one
   back, and returns to the main picker with it on the list. Choosing it there
@@ -147,14 +144,9 @@ rival judge off the roster.
 
 ## Descriptions append, and are never edited
 
-`Agent.descriptions` is an append-only list of dated `AgentDescription`s, the
-same shape as `LifecycleEpisode` on a node, for the same reason: a scalar
-plus a timestamp cannot express *changed, and here is what it was before*. A
-decision made last week was made by whatever the agent claimed to be last
-week, and that claim has to stay readable after it changes its mind.
-
-Re-claiming with **identical** text is not a new version. Only changed
-wording appends.
+A decision made last week was made by whatever the agent claimed to be last
+week, and that claim stays readable after it changes its mind. Re-claiming
+with **identical** text is not a new version; only changed wording appends.
 
 ## A description is a claim, not a credential
 
@@ -167,8 +159,8 @@ honest:
   *self-described, unconfirmed*, a different state that is never collapsed
   into the same field.
 - **The judge gates nothing automatically.** No ranking, no corroboration
-  weighting, no default filter. Review will *select* on it; nothing *decides*
-  on it.
+  weighting, no default filter. Review *selects* on it; nothing *decides* on
+  it.
 
 ## Approval reaches the user, not the agent
 
@@ -180,14 +172,16 @@ person.
 |---|---|---|
 | the client's elicitation prompt | the client supports elicitation | the user answered through their own UI |
 | `EPIMEMER_APPROVED_AGENTS` | always; read when the backend connects and when the server lands on a graph | the user configured the server before starting it |
-| `epimemer agents confirm <handle>` | **served SurrealDB only** | the user ran a command the agent cannot run |
+| `epimemer agents confirm <handle>` | **a served SurrealDB, a SQLite graph or Postgres** | the user ran a command the agent cannot run |
 
 The CLI's limit is deliberate. Approvals live in per-graph settings inside
 the backend, and an embedded store (`mem://`, `file://`, `surrealkv://`, or
 the in-memory backend) lives inside the server process: a second connection
 to it is a *separate store*, not a second view of one. Writing there would
 report success into a store the running server never reads, so the command
-refuses and names the environment variable instead.
+refuses and names the environment variable instead. A SQLite file and a
+Postgres database are reached by a second process as the server reaches them,
+so the command works there.
 
 `epimemer agents list` shows a graph's approved judges by name, the key each
 was recorded under, any keys consolidated into it, and what each has said
@@ -234,11 +228,6 @@ is refused where the graph requires a judge. Tokens survive a `use_graph` for
 that reason: what a token names is a claim, and which graph will accept that
 claim is decided at the moment of the write.
 
-The prompt the user answers says which of them is asking: it opens with the
-Epimemer version, then names the judge the agent proposes, and where the
-connection already judges as somebody a second line names them, so a subagent's
-claim is told apart from its parent's.
-
 ## A confirmation belongs to a seat
 
 The seat a claim is made from is the conversation it is made in, the client
@@ -250,15 +239,16 @@ beside its approved judges. A claim from the same seat, the same judge, still
 approved and not retired, binds without the picker, even after a `/mcp`
 reconnect or a server restart, and the response says it was *confirmed in this
 seat on <date>, carried over*. A reconnect is a restart nobody asked for, and
-nothing about who is behind the name changed across it; an unattended loop
-calling after one used to wait on the picker until somebody came back.
+nothing about who is behind the name changed across it, so without the
+carry-over an unattended loop calling after one would wait on the picker until
+somebody came back.
 
 A claim that does ask says why, in `asked_because` and in the prompt: the
 client did not say which conversation this is, the model is unknown, this is
 the first claim for this judge in this seat, or which part of the seat changed
 and from what. The model reaches the server only through a client hook
 (`epimemer client-state record`, see INTEGRATION.md); without it every
-reconnect asks, as before.
+reconnect asks.
 
 **A write from a changed seat is refused.** The token and the session binding
 remember the seat their claim was made from, and a write after, say, a model
@@ -279,21 +269,21 @@ thing the decision landed on:
 
 | Decision | Recorded on |
 |---|---|
-| `update`, `supersede_by`, `merge_facts`, `apply_reflection`'s merges, supersessions and archivals | the retired node's lifecycle episode, as `retired_by` |
+| `update`, `supersede_by`, `merge_facts`, `merge_inferences`, `apply_reflection`'s merges, supersessions and archivals | the retired node's lifecycle episode, as `retired_by` |
 | `restore`, `reverse_merge` | the same episode, as `restored_by`: a separate field, because returning is a separate decision |
 | `record_contradiction`, `record_variant`, `link`, `apply_reflection`'s similarity verdicts | the edge, as `judged_by` |
 | `judge_importance` | the value signal, as the latest judge; every entry in the node's reinforcement trail names its own |
-| content written during reflect (synthesised parents, splits, merge survivors) and `update`'s replacement | the new node, as `judged_by`. A topic merge also writes every description it did not lead with into the survivor's `description_history`, each entry naming the merging judge, the way an enrichment does |
+| content written during reflect (synthesised parents, splits, merge survivors) and `update`'s replacement | the new node, as `judged_by`; a topic merge also names the merging judge on each description it kept in the survivor's `description_history` |
 | `segment`, `store_decomposition` | every node and edge the ingest creates, as `judged_by`, including the priors `claim_kind`, `confidence` and `importance`, which nothing downstream re-makes |
-| `link` coining a relation label for the first time | the label's record, as `judged_by`: **the coiner, never the describer**. `describe_relation`, a verdict, or a backfill creates a record carrying no judge at all, since none of them is claiming to have introduced the word |
-| `reassign_metacontext`, `correct_interval`, `describe_relation` | nothing on the node or edge; each journals its own row instead, because the thing being revised was somebody else's judgment and overwriting their name would hide that |
-| `order_timepoints` | the ordering constraint, as `judged_by`, beside the `source_id` of whoever asserted the order. The source says; the judge read the source and decided that it said that, so both are named and they are different people |
+| `link` coining a relation label for the first time | the label's record, as `judged_by`: **the coiner, never the describer** |
+| `reassign_metacontext`, `correct_interval`, `describe_relation` | nothing on the node or edge, since the thing revised was somebody else's judgment; each journals its own row |
+| `order_timepoints` | the ordering constraint, as `judged_by`, beside the `source_id` of whoever asserted the order: the source says, the judge decided that it said that |
 | `resolve_temporal_contradiction` | the resolution appended to the contradiction, as `judged_by`, and where the verdict retired a constraint, that retirement too. Where a split moved a fact's date, the old `timelink` as `retired_by` and the new one as `judged_by` |
 | `merge_timepoints` | the retirement of every constraint it re-pointed, and the old and new `timelink` of every fact it moved, the same way a split does |
 | `add_recurrence`, `end_recurrence`, `record_recurrence_exception` | the rule, the appended bound change, and the exception, each as `judged_by` on the record it wrote |
-| `apply_reflection`'s enrichments | its own journal row; where the enrichment replaced an earlier description, that wording's `description_history` entry too. The node's `judged_by` names whoever wrote its **name**, which an enrichment does not touch, so it stays where it is |
-| `rename_topic` | its own `topic_rename` journal row, and the name it replaced in the node's `previous_names` trail, each entry naming the renaming judge. The node's `judged_by` stays, since a rename changes a label and writes no new claim |
-| `reopen` | the withdrawn `assessed` edge, as `retired_by`, for a pair of nodes, and the `reopened` verdict row, as `judged_by`, for a pair of relation labels. Withdrawing a node's retention or a declined boundary lands in the journal alone, because a keep and a decline are journal rows rather than fields on the node |
+| `apply_reflection`'s enrichments | its own journal row, and the replaced wording's `description_history` entry; the node's `judged_by` names whoever wrote its **name** and stays |
+| `rename_topic` | its own `topic_rename` journal row, and the replaced name's `previous_names` entry; the node's `judged_by` stays |
+| `reopen` | the withdrawn `assessed` edge, as `retired_by`, for a pair of nodes; the `reopened` verdict row, as `judged_by`, for a pair of relation labels; the journal alone for a retention or a declined boundary |
 
 Three things follow that are easy to get wrong:
 
@@ -314,15 +304,10 @@ than a claim about it: *who pasted this text* is a different question from
 from a tag, does not
 restamp it either: mentioning a name again is not introducing it.
 
-Nothing rewrites a relation label, so there is no label rewrite to record.
-Describing a label **is** attributed, under its own `relation_description`
-kind, and so is judging one label against another, `relation_verdict`, whose
-subjects are the two label records: the subject of a decision about
-vocabulary is the vocabulary entry. Accepting a boundary proposal edits an
-existing edge rather than adding one, which is exactly the case the journal
-is for, and both of its subjects are nodes. Declining one writes a
-`boundary_declined` row with the same two subjects, the question it declined
-in `covers` and the reason as `certainty_basis`, and changes nothing else.
+Accepting a boundary proposal edits an existing edge rather than adding one,
+so stamping the edge would take it from whoever ingested it: that gap is
+exactly what the journal is for, and the row's two subjects are the claim and
+the source.
 
 ## The journal: what did this agent judge
 
@@ -335,32 +320,36 @@ A row carries what was decided (`kind`), what it was about (`subject_ids`),
 who decided it, when, and, where an agent supplies one, how certain they
 were.
 
-| Rule | Why |
-|---|---|
-| **Append is the only write.** No update path exists, on either backend or on the protocol | A reversal, a confirmation and an overturn are all new rows. An edit here would make review state mutable in one place and derived in another |
-| **`reviewed` is derived**, from a row whose `reviews` names another | A flag on an append-only row would have to stay in sync with a copy on the node, across two backends |
-| **One judgment, one row** | Forty-four facts out of one document is one reading of one document; an archival sweep is one pass over one nomination list. Reflect's other decisions get a row each, because those are independent verdicts that happen to be batched |
-| **The row is written after the decision lands** | A refused write leaves no row. The other order would have review chasing a decision the graph never made |
+- **Append is the only write.** A reversal, a confirmation and an overturn
+  are all new rows.
+- **`reviewed` is derived**, from a row whose `reviews` names another.
+- **One judgment, one row.** Forty-four facts out of one document is one
+  reading of one document; an archival sweep, a batch of confirmed
+  descriptions and a batch of declined splits are each one pass over one
+  nomination list. Reflect's other decisions get a row each.
+- **The row is written after the decision lands**, so a refused write leaves
+  no row.
 
 Two kinds are worth knowing about by name. A **correction** and a
 **world_change** are separate kinds rather than one supersession with a
 reason attached, because they are opposite claims about what happened and a
-reviewer asking for one does not want the other. And a **reversal**, undoing
-a merge, is the one row that both `reviews` and `supersedes` the record it
-overturns.
+reviewer asking for one does not want the other. And the two undo kinds, a
+**reversal** (undoing a merge) and a **retraction** (withdrawing a `one_claim`
+verdict), are the rows that both `reviews` and `supersedes` the record they
+overturn.
 
-**Six kinds record judgments about time**, one per writer, because review
-selects on kind and a reviewer asking which orders were asserted does not want
+**Judgments about time take one kind per writer**, because review selects on
+kind and a reviewer asking which orders were asserted does not want
 the disputes, the merges or the recurrence rules mixed in:
 
 | Kind | Written by | Records |
 |---|---|---|
-| `temporal_order` | `order_timepoints` | what a source says about the order of points nobody dated. One row per call rather than per pair, on the `ingest` rule: a source that states an order usually states several at once, and one reading of one source is one judgment |
+| `temporal_order` | `order_timepoints` | what a source says about the order of points nobody dated, one row per call |
 | `temporal_verdict` | `resolve_temporal_contradiction` | a disagreement about order settled, held, or answered by splitting a point that turned out to be two events |
-| `timepoint_merge` | `merge_timepoints` | two timepoints judged to be one moment. Not `merge`, whose subjects are nodes and which retires one of them: nothing here touches a node |
+| `timepoint_merge` | `merge_timepoints` | two timepoints judged to be one moment; no node is touched |
 | `recurrence` | `add_recurrence` | a rule a source stated, such as "the second Tuesday of every month" |
-| `recurrence_bound` | `end_recurrence` | a rule's end date moved, appended to its history. Not `correction`, whose subjects are a retired node and its replacement: nothing here is retired, because a rule that was true never stops having been true |
-| `recurrence_exception` | `record_recurrence_exception` | one occurrence cancelled or moved, which is a statement about that occurrence rather than about the rule |
+| `recurrence_bound` | `end_recurrence` | a rule's end date moved, appended to its history; nothing is retired |
+| `recurrence_exception` | `record_recurrence_exception` | one occurrence cancelled or moved |
 
 **Materialising an occurrence writes no row and names no judge.** Turning one
 occurrence of a rule into a real timepoint goes through `add_timepoint`, which
@@ -424,8 +413,7 @@ the decisions switched those graphs itself and never needed telling.
 **It counts wider than it reads, deliberately.** Only the judge, `since` and
 `until` narrow the counts; `mode` and `certainty_ceiling` do not. So a graph
 counted at 12 can list fewer than 12 once you get there, and `counted_with`
-is what tells you that is scope rather than a defect. A count too high costs
-a wasted look; a count too low costs the look entirely.
+is what tells you that is scope rather than a defect.
 
 ### Modes and filters
 
@@ -455,11 +443,9 @@ finding, sets `notify_user` and journals nothing. A row for every warning
 would double the journal on the commonest path there is, which degrades
 exactly the review this mode exists for.
 
-It is deliberately **not** the same question as `unsound_inferences`. That
-list is recomputed from the graph every time and goes correctly silent once
-somebody fixes the wording; this one is a historical fact that stays true.
-Folding them together would make a fixed inference vanish from the audit
-trail, which is the opposite of what an audit trail is for.
+It is a different list from `unsound_inferences`, which is recomputed and
+goes silent once somebody fixes the wording; a `warning` row is a historical
+fact that stays true.
 
 `by_agent`'s `agent_id` is a **handle**: a name, a key, or a key the judge
 used to be recorded under. The response's `judge` block says what it
@@ -543,11 +529,6 @@ become false the day it grew a metacontext field. An interval belongs to a **(no
 source) pair**, so folding it in would grow a `source_id` that applies to one
 field out of five, the sign that two tools are wearing one name.
 
-`rejudge`'s docstring and its "nothing to revise" refusal both name all three
-siblings, because the one real argument for a single tool was that an agent
-looks in the obvious place. So the obvious place points on; otherwise it
-reaches for `supersede_by`, which files a true claim as an error.
-
 ## Withdrawing a metacontext: `reassign_metacontext`
 
 A metacontext that is wrong fails silently in three places: the node becomes
@@ -568,34 +549,15 @@ no scoped search. So a claim goes somewhere or it stays where it is. The
 paradigm case, a real-world fact filed inside a novel's metacontext, is `assign` to
 the metacontext holding real-world claims.
 
-**The withdrawal deletes the edge rather than marking it.** Metacontexts are
-derived by scanning `has_metacontext` edges, so a `withdrawn` marker would
-need every such site to subtract it, and any site missed would fail
-**open**, with the metacontext still applying. Deleting fails closed. The withdrawn
-metacontext survives in the node's `metacontext_reassignments` trail and in the
-journal row, which matters more here than for a rejudgment: every search and corroboration
-answer given while the metacontext was wrong was wrong, and the trail plus the
-row's timestamp is the only thing that bounds which answers those were.
+**The withdrawal deletes the edge rather than marking it.** The withdrawn
+metacontext survives in the node's `metacontext_reassignments` trail and in
+the journal row, whose timestamp bounds which earlier search and
+corroboration answers were given under the wrong metacontext.
 
 ## Correcting a period: `correct_interval`
 
-For an endpoint that is **present and wrong**. `reflect`'s
-`boundary_proposals` fills one that is *open*, where a succession implies it,
-and that is the half that can be automated, because nothing can derive that
-a stated date was misread. Different evidence, different act, two calls.
-
-A wrong interval moves a count as well as a date: corroboration reads
-intervals to decide whether a look-alike witnesses the same period or is the
-neighbouring truth.
-
-**The whole list for that (node, source) pair is replaced**, because an
-interval is a position in a list on one edge and has no id of its own. An
-empty list is allowed, and is the correction for a period that was invented
-outright; refusing it would leave a fabricated period unremovable. `basis`
-stays the caller's to state per interval rather than being forced to
-`inferred` as an accepted boundary is: a correction is often restoring what
-the document actually said. The prior list is kept in the edge's
-`interval_corrections` trail.
+For an endpoint that is **present and wrong**, see
+[VALIDITY.md](VALIDITY.md#71-correcting-a-period-that-is-present-and-wrong).
 
 ## Requiring a judge
 
@@ -612,9 +574,9 @@ With it on, a write from a session that has not claimed an approved identity
 is **refused**, with a message naming `claim_agent` and this graph's approved
 judges. It covers the tools that create, retire or revise epistemic content.
 Metacontexts are scaffolding rather than claims and stay outside it, and so do
-the four timeline tools that only put marks on an axis: `create_timeline`,
-`set_reference_time`, `add_timepoint` and `create_timelink`. The six timeline
-tools that assert something now go through the same gate as any other write:
+the timeline tools that only put marks on an axis: `create_timeline`,
+`set_reference_time`, `add_timepoint` and `create_timelink`. The timeline
+tools that assert something go through the same gate as any other write:
 `order_timepoints`, `resolve_temporal_contradiction`, `merge_timepoints`,
 `add_recurrence`, `end_recurrence` and `record_recurrence_exception`. Each of
 them records what a source said or what a judge decided, which is a claim,
@@ -632,40 +594,16 @@ Three things about it are deliberate:
   command says so at the moment you switch it on rather than letting the
   next write explain it.
 
-The binding and the tokens are held by the server process, which is safe
-because the server speaks stdio, where each client starts its own process. A
-claim therefore reaches every later write on that connection, whatever the
-client's protocol version does with MCP sessions.
-
 **One cost of *blank means unknown*, stated plainly.** On a graph that never
 turns the requirement on, a row written by an agent that did not name itself
-is indistinguishable from any other blank row. The alternative, reading
-blank as *"written before some date"*, would assert something about every
-unattributed row that nobody checked. Turning the requirement on draws the
-line from that moment forward; it cannot draw one backwards.
+is indistinguishable from any other blank row. Turning the requirement on
+draws the line from that moment forward; it cannot draw one backwards.
 
 ## Where it lives
 
-A per-graph `agent` table beside `fact`, `topic` and `inference`, with the
-approved-key list in per-graph settings beside the reflect counter. Agents
-are deliberately **not** graph nodes: as nodes they would surface in `search`
-and be swept by `reflect`, and two agents with similar descriptions are not a
-topic to merge.
-
-The journal is a per-graph `decision` table beside them, indexed on the
-judge's key, the date, the kind, the subjects and what a row reviews: the
-five reads review mode needs. Its rows are not nodes either, for the same
-reason and one more: a judgment about the graph is not a claim the graph
-holds.
-
-**Per graph, and that follows from the ids.** `subject_ids` holds node ids,
-or, for the two kinds that judge the graph's **vocabulary** rather than its
-claims, `relation_label` record ids. Either way an id resolves only in the
-graph that holds it, so a row filed anywhere else would carry ids that
-dereference nowhere. `review` says which of the two answered, in each
-subject's `subject_kind`, and a null there still means *nothing did*. The
-row lives with its subjects, which is also true when a write lands somewhere
-unintended: the material and the record of it stay together. *What did this
-agent decide* is therefore asked once per graph, with `list_graphs` and
-`use_graph` between the asks, and deliberately not by a fan-out: a switch is
-the active state, while a fan-out has to borrow it mid-call and give it back.
+Judges and journal rows are kept per graph and are **not** graph nodes, so
+they never surface in `search` or get swept by `reflect`. A row's
+`subject_ids` holds node ids, or, for the decisions that judge the graph's
+**vocabulary** (`relation_description`, `relation_verdict`, and a `reopened`
+row for a label pair), relation label ids; `review` says which, in each
+subject's `subject_kind`, and a null there means neither resolved.

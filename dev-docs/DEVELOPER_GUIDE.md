@@ -1,153 +1,50 @@
 # Developer guide
 
-## Setup
-
-```bash
-git clone https://github.com/olenive/epimemer.git
-cd epimemer
-uv sync --extra dev
-
-# Verify
-uv run python -m pytest tests/ -q
-```
-
-Petritype comes from PyPI. To work on both at once, install a checkout into
-this venv for the session (`uv pip install -e ../petritype`) and never commit
-a path source: Epimemer depends on released Petritype only, so a change that
-needs new Petritype code is a Petritype release first and a pin bump here.
+A reference for maintainers: debugging each part, and the rules that changes
+to storage and to the tool layer keep.
 
 ## Running tests
 
-```bash
-# All tests
-uv run python -m pytest tests/ -q
+`CONTRIBUTING.md` has the setup, the default suite, the opt-in SurrealDB and
+Postgres targets, and the checks to run before a review. Two additions:
 
-# Specific module
-uv run python -m pytest tests/pipelines/test_segmentation.py -v
-
-# Specific test class
-uv run python -m pytest tests/mcp/test_tools.py::TestIngest -v
-
-# With output (see Petri net token flow)
-uv run python -m pytest tests/pipelines/test_net_execution.py -v -s
-```
-
-### Dependencies: `scripts/audit_dependencies.py`
-
-```bash
-uv run python scripts/audit_dependencies.py
-```
-
-**Dependabot cannot see the Python dependencies here.** Its `pip` ecosystem
-covers pip, pipenv, pip-compile and poetry, and the dependency graph reads
-`requirements.txt` and `pipfile.lock`. Nothing in either list understands
-`uv.lock`, so no alert fires and no pull request is opened whatever is in the
-resolved environment. Measured once, on 2026-09-07: 19 of 132 installed
-packages carried an advisory, one of them critical.
-
-`.github/workflows/audit.yml` runs the same command weekly and files what it
-finds as an issue, refreshing the standing one rather than opening a second and
-closing it once nothing is affected. An issue rather than a failed run because
-a failed scheduled job is an email that ages out of an inbox. The run
-distinguishes three outcomes, which is why the script has three exit codes: a
-clean environment, an affected package, and the check itself failing, and only
-the middle one is a finding.
-
-`.github/dependabot.yml` covers the two ecosystems Dependabot can see, GitHub
-Actions and the frontend's npm tree, grouped and slowed so the routine churn
-arrives monthly in one pull request per ecosystem; security updates are a
-separate feature that bypasses that schedule entirely. Majors are grouped
-separately rather than ignored: the drift this replaced was **entirely**
-majors, every action three or four behind, so ignoring them would have hidden
-the whole gap.
-
-Routine Python updates are deliberate rather than automated: `uv lock
---upgrade`, run the suite, one commit.
-
-### Before asking for a review: `scripts/prose_drift.py`
-
-```bash
-uv run python scripts/prose_drift.py
-```
-
-Finds prose carrying a live count of something the code enumerates: the size
-of `CAPPED_KEYS`, the number of reflect phases, the kinds `apply_reflection`
-accepts. Every one of those is a sentence that was true when written and rots
-the moment somebody adds to the list.
-
-It is not in the suite, and that is the point. A test pinning those numbers
-would detect the drift while institutionalising the duplication that causes
-it: every legitimate change to a list would fail a doc test whose fix is
-bumping a number, which trains the update-without-rereading habit that lets
-the argument around the number go stale while the number stays fresh. The fix
-is to stop writing the counts (name `CAPPED_KEYS` rather than saying how many
-lists it holds), and this only finds the ones already written.
-
-So run it by hand, at the moment the prose and the code are both in your
-head. It covers `docs/`, `dev-docs/`, the top-level pages and the agent
-guidance. A dated measurement is not a live count: *0.0105% of fact pairs
-clear the bar* is evidence, and evidence ages rather than drifting, which is
-what the date is for. It errs at missing things rather than at reporting
-them, because a tool that reports thirty findings with two real ones is one
-nobody runs twice.
-
-### Against a real SurrealDB (opt-in, needs Docker)
-
-The default suite is embedded and sequential. Two properties it cannot reach,
-cross-connection atomicity and surviving a restart, live in opt-in suites that
-skip themselves otherwise. Run both:
-
-```bash
-make test-integration
-
-# Port 8000 taken? The target says so, and names the process. Then:
-make test-integration SURREAL_PORT=8123
-```
-
-Run this when a change touches storage or concurrency. Each suite skips
-only when its variable is unset; with the variable set and the server not
-answering the client, every test fails with the reason, so the target's exit
-code can be trusted. A skip in its output therefore means the variable was
-not set, which under `make test-integration` cannot happen.
-
-For a persistent local server outside the test run, on macOS,
-`scripts/start_local_surrealdb.sh` starts one via Colima on disk and registers
-the MCP server with Claude Code against it.
-
-### Against a real Postgres (opt-in, needs Docker)
-
-The Postgres backend is a fourth parameter on the `storage` and `store`
-fixtures, skipped unless `EPIMEMER_TEST_POSTGRES_DSN` names a database. Run it:
-
-```bash
-make test-postgres
-
-# Port 5433 taken? The target says so, and names the process. Then:
-make test-postgres PG_PORT=5434
-```
-
-The target starts a throwaway `postgres:17-alpine`, runs the whole suite
-selected to the Postgres parameter (`-k postgres`), which takes in
-`tests/storage/test_postgres_storage.py` too, and stops the server on exit.
-Expect two or three minutes, most of it creating and dropping a schema per
-test. A skipped parameter is reported as a pass, so check that the run says
-`passed` with nothing skipped.
-
-Against a server you started yourself, set the DSN and select the same tests:
+Against a Postgres you started yourself, set the DSN and select the Postgres
+tests. `--extra postgres` brings the driver, which `uv sync --extra dev`
+leaves out:
 
 ```bash
 EPIMEMER_TEST_POSTGRES_DSN=postgresql://postgres:epimemer@127.0.0.1:5433/postgres \
-    uv run pytest tests -q -k postgres
+    uv run --extra postgres pytest tests -q -k postgres
 ```
 
-**Point it only at a database you can throw away.** Every test drops every
-graph schema in that database before and after it runs, so that a test sees
-exactly the graphs it made. Schemas that are not graphs are left alone.
+For a persistent local SurrealDB outside the test run, on macOS,
+`scripts/start_local_surrealdb.sh` starts one via Colima on disk and registers
+the MCP server with Claude Code against it.
 
 ## Debugging individual sections
 
-Each pipeline is independently testable. Every pipeline is a Petri net with
-typed places and transitions.
+Each pipeline is independently testable. Segmentation, edge creation and
+retrieval are Petri nets with typed places and transitions; reflection and the
+timeline functions are plain functions.
+
+Rules a fix keeps, whichever part it is in:
+
+- **Repair the class, not today's instances**: a default for the values a
+  mapping does not list, so a value added later cannot fall through wrongly.
+- **A rule stated for one branch of a conditional is not a rule the code
+  applies**: check every branch that carries the same risk.
+- **A transaction taking a domain object decides whether the argument is a
+  request or a snapshot**, and says which.
+- **An enumeration of write paths in a design ages**: the guard is a test that
+  exercises every path.
+- **A guard whose reach is an accident of where the code sat fails open**: a
+  guard that must not miss a site parses the source and compares what it finds
+  against a declared list, in both directions.
+- **Ask what reads this** of any field: a value nothing consumes is a defect.
+- **A suite that always builds a well-formed graph cannot see a defect whose
+  precondition is a graph nobody set up**: run a migration against real data.
+- **A rule stated only in a comment is a rule the code does not have**: make it
+  a structure with a test over it, as `EDGE_SHAPES` is.
 
 ### Core types
 
@@ -199,9 +96,7 @@ async def main():
 Nets are driven by the Petritype `Runner`. `Runner.step(ctx)` fires a single
 transition (returns 0 or 1) for step-through debugging; `Runner.run(ctx)`
 drives to quiescence and returns a summary of what fired. Both mutate
-`ctx.graph` in place. Production runs every net through `_run_net` in
-`mcp/tools.py`: the same runner, with the dashboard's observer attached when
-a dashboard is connected, and no firing budget.
+`ctx.graph` in place.
 
 ```python
 import asyncio
@@ -276,12 +171,8 @@ asyncio.run(main())
 
 ### Reflection
 
-Reflection is not a single net. It is a set of analysis functions in
-`epimemer/pipelines/reflection/` composed by the `reflect` tool: topic
-consolidation, splitting, enrichment and hierarchy; contradiction detection
-and the pair scoring under it; relation consolidation; archival nomination;
-inference soundness; boundary proposals; and the review-loop helpers
-(`review`, and the merge gate in `fact_dedup`). Every one of them reads only.
+Reflection is not a single net: the `reflect` tool composes the analysis
+functions in `epimemer/pipelines/reflection/`, every one of which reads only.
 Results come back as candidates for the agent to act on via
 `apply_reflection` or a resolution tool, and `reflect` itself never changes
 the graph. Debug the whole thing through the tool function:
@@ -323,11 +214,12 @@ ship without noticing:
   way: *accepting* a nomination usually removes its subject from the
   population, so acceptance is self-suppressing and refusal is not. The
   `assessed` edge is the fix for fact pairs, `RelationVerdict` for label
-  pairs, and the `retention` journal row for single nodes: a suppression
+  pairs, the `retention` journal row for single nodes, and the
+  `boundary_declined` journal row for boundary proposals: a suppression
   index the sweep reads, separate from the journal that audits it.
 - **And its dual: a suppression with no way back makes every wrong decline
-  permanent by construction.** `reopen` is the way back for all three
-  indexes: it retires the `assessed` edge the way a moved `TIMELINK` is
+  permanent by construction.** `reopen` is the way back for each of
+  these indexes: it retires the `assessed` edge the way a moved `TIMELINK` is
   retired, so the pair is nominated again and nothing is asserted about the
   answer (`reopening.py`). A new nominator needs its own way back, or it
   inherits the permanence knowingly. The `one_claim` retraction stays
@@ -357,21 +249,6 @@ print(f"Timepoints: {[(tp.label, tp.start) for tp in tl.timepoints]}")
 nearest = find_nearest(tl, datetime(2024, 1, 1, tzinfo=timezone.utc), k=1)
 print(f"Nearest to 2024-01-01: {nearest[0].label}")
 ```
-
-Two more modules sit beside `functions.py`, on the same terms: a pure function
-of a `Timeline` and its inputs, returning a new `Timeline` and a report, so the
-reasoning can be tested without a backend.
-
-- `ordering.py` holds stated order: the ordering graph built from live
-  constraints and edges read off two points' dates, the cycle and crossed-bound
-  checks that run after a write, the bounds a vague point derives from its
-  neighbours, and the verdicts that answer a contradiction, including the split
-  and the merge.
-- `recurrence.py` holds what repeats: the two rule kinds, enumeration into a
-  window and the nearest occurrence to a moment, both entered by arithmetic
-  rather than by walking a rule from its beginning, exceptions for occurrences
-  that were cancelled or moved, and materialising one occurrence into an
-  ordinary timepoint.
 
 ### MCP tools (without server)
 
@@ -442,26 +319,10 @@ graph = paragraph_split_segmentation_net(RawDocument(content="Hello.\n\nWorld.")
 diagram = SimpleGraphvizVisualization.graph(RustworkxGraph.from_executable_graph(graph))
 ```
 
-The running server draws the same nets live: the dashboard's pipeline strip
-takes its events from the engine's own record of each firing, which places it
-consumed and produced and how long the body took, so what the strip shows is
-what happened rather than what the topology predicts.
-
-## Test structure
-
-```
-tests/
-  core/           Type creation, validation, serialisation
-  storage/        InMemoryStorage and SurrealDB (mem://) tests
-  embeddings/     Mock embedding provider tests
-  pipelines/      Petri net pipeline tests (segmentation, graph construction,
-                  query, reflection, timeline)
-  mcp/            MCP tool tests (unit + e2e via FastMCP call_tool)
-  integration/    Full pipeline end-to-end tests
-```
-
-Most storage and MCP tests run against both backends: a `conftest.py` fixture
-parameterises `storage` over `InMemoryStorage` and `SurrealDBStorage("mem://")`.
+The running server draws the same nets live (`VISUALISATION.md`). A
+transition body must not hold the event loop: it delays every event queued
+behind it, which is why the sentence-transformers provider encodes in a worker
+thread.
 
 ## Adding a new pipeline
 
@@ -505,8 +366,11 @@ parameterises `storage` over `InMemoryStorage` and `SurrealDBStorage("mem://")`.
      (`query_documents`, `query_segments`, `query_edges`). Graph bundles are
      built on those four, and `GRAPH_BUNDLES.md` §3 says what verbatim rules
      out
-   - Any schema migration the SurrealDB adapter runs on open
-     (`_migrate_schema`), if the backend persists across releases
+   - If the backend persists, its own versioned schema stepper run on open,
+     and `SchemaTooNew` (`storage/protocol.py`) for a graph stamped newer than
+     the code, raised before anything is written. SQLite and Postgres run
+     none of SurrealDB's migrations: a graph reaches a new backend through a
+     bundle, at the current version
 2. Add tests in `tests/storage/test_your_backend.py`, and add the backend to
    the parity fixtures in `tests/conftest.py` and
    `tests/storage/test_storage_parity.py`
@@ -530,9 +394,10 @@ sees this.
 | The field is… | Compare how | Who guarantees correctness |
 |---|---|---|
 | **not indexed** | through `instant()` in `surrealdb_adapter.py`, which wraps both sides in `type::datetime` | the reader |
-| **indexed** | plainly, because wrapping the field drops the index scan | the **writer**, which must render one canonical shape (`_iso_micros`) |
+| **indexed** | plainly, because wrapping the field drops the index scan | the **writer**, which must render one canonical shape (`iso_micros`) |
 
-The measurements behind the split, on embedded SurrealDB:
+The measurements behind the split, taken on embedded SurrealDB on
+2026-08-23:
 
 - Converting costs about 2.3 µs per row scanned: 1.19× on a realistic
   `query_nodes` window over 10,000 rows, and under 2 ms on the real graphs.
@@ -553,7 +418,7 @@ the comparison must change with it or the index is dead weight.
 The SQLite backend has no `instant()` and takes the writer's half everywhere:
 every timestamp column and every bound it compares goes through `iso_micros`
 in `storage/timestamps.py`, the same function the SurrealDB adapter pads the
-journal with. `SQLITE_BACKEND.md` §5 has the reasoning.
+journal with. `STORAGE_BACKENDS.md` §2 has the reasoning.
 
 The Postgres backend needs neither half: its timestamp columns are
 `timestamptz` and its bounds are passed as datetimes, so the type compares
@@ -597,19 +462,10 @@ hatch.
 ## The active graph holds still
 
 **The active graph is process state, and one logical operation needs it not
-to move.** Both backends resolve it per call: `InMemoryStorage` indexes
-`self._graphs[self._database]`, `SurrealDBStorage` sends `USE ns db` down one
-shared connection. A switch landing between two steps of an operation sends
-the rest of that operation somewhere else. It is not a SurrealDB problem.
-
-Two things move it, and that is the whole list:
-
-| Mover | Why it moves | Who takes the turn |
-|---|---|---|
-| `switch_database` | `use_graph`, permanently | the method itself |
-| `viz_list_*` | borrowing the connection so a dashboard can snapshot a graph this session is not on | the method itself, and `hub_client.py` for the five reads of one snapshot |
-
-`storage/active_graph.py` has the guard. Everything else takes the other side:
+to move.** Every backend resolves it per call, so a switch landing between two
+steps of an operation sends the rest of that operation somewhere else. It is
+not a SurrealDB problem. `storage/active_graph.py` has the guard, and its
+docstring lists what moves the graph. Everything else takes the other side:
 
 ```python
 async with storage.graph_guard.using():  # a tool call, see _run_with_timeout
@@ -625,35 +481,24 @@ dashboard.
 The guard stops the graph moving *underneath* a call. It cannot tell you the
 call started in the right graph: the agent's belief and `current_database` can
 agree while a reconnect has put both somewhere else. That is `expected_graph`,
-required on every tool except the four that are *about* graphs
-(`NAMES_ITS_OWN_GRAPH` in `mcp/server.py`).
+required on every tool except those *about* graphs, which
+`NAMES_ITS_OWN_GRAPH` in `mcp/server.py` names.
 
 Adding a tool means adding the parameter and forwarding it; the oracle in
 `tests/mcp/test_graph_gate.py` walks the live registry and fails otherwise.
-The check itself is one call to `tools.wrong_graph`, made in two places and
-declared in one:
-
-| Where | Why there |
-|---|---|
-| `_run_with_timeout` | the choke point, **inside** the turn: outside it, a `use_graph` landing between check and call would leave a passing call running elsewhere |
-| `_judge_for_write` | it runs in the tool body, and everything it reads is graph state: which graph, before who |
-
-Do not add a third. And do not add a *setting*: a per-graph flag would be read
-from whichever graph the call is actually in, disabling the guard in exactly
-the case it exists for, and a gate that switched on once a second graph
-existed would refuse calls that worked yesterday because of state nobody
-touched.
-
-**A refusal produced outside a tool cannot use that tool's summariser.** The
-gate returns a shape no `output_summary_fn` was written against, and running
-one over it raises inside `_log`. `_wrong_graph_summary` is why the refusal
-survives to the agent.
+The check itself is one call to `tools.wrong_graph`, made inside the turn in
+`_run_with_timeout` and again in `_judge_for_write`. Do not add a third. And do
+not add a *setting*: a per-graph flag would be read from whichever graph the
+call is actually in, disabling the guard in exactly the case it exists for,
+and a gate that switched on once a second graph existed would refuse calls
+that worked yesterday because of state nobody touched.
 
 Three rules for anything new:
 
 - **Take the turn at the logical-operation boundary.** Per query is useless:
   a move only has to land between two of the several storage calls one tool
-  makes. The boundaries are `_run_with_timeout` and the snapshot RPC.
+  makes. The boundaries are `_run_with_timeout` and each RPC
+  `hub_client.py` answers.
 - **A tool that moves the graph goes in `MOVES_THE_GRAPH`** (`mcp/server.py`).
   Taking `moving()` inside `using()` raises rather than hanging, and the
   message says so, but the tool has to be declared, because the default fails
@@ -673,8 +518,10 @@ lose; a test written that way passes with the guard removed. See
 `_suspending` in `tests/mcp/test_graph_turns.py`, and prove any new test
 fails without the fix before trusting it.
 
-**And run it on both backends.** The in-memory store reads another graph with
-a dict lookup and borrows nothing, so a cross-graph test written against it
+**And run it on SurrealDB.** The in-memory store reads another graph with a
+dict lookup and borrows nothing, and SQLite and Postgres read one without
+moving the active graph, so a cross-graph test written against any of them
 alone is green whether or not the mover turn was ever declared: green for the
-wrong reason, in a second costume. `tests/mcp/test_review_locator.py`
-parameterises its end-to-end fixture over both for exactly this.
+wrong reason, in a second costume. SurrealDB is the backend that borrows.
+`tests/mcp/test_review_locator.py` parameterises its end-to-end fixture over
+the in-memory store and SurrealDB for exactly this.

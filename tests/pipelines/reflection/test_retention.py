@@ -2,8 +2,8 @@
 
 Two of `reflect`'s archival reasons nominate a node an agent has already looked
 at and decided to keep, and before this neither could read that decision because
-there was nothing to write. On 2026-08-29 a reflect over this project's own
-`memory` graph nominated six stale-evidence inferences; all six were re-read,
+there was nothing to write. On 2026-08-29 a reflect over this project's
+development graph nominated six stale-evidence inferences; all six were re-read,
 all six still held, and there was nowhere to say so. The same pass judged
 **eight** `never_retrieved` nodes upward purely to stop them being nominated —
 which is the tell: `importance` had come to carry two meanings, *how

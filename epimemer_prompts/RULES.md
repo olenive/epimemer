@@ -16,7 +16,8 @@ hold on every call:
   refusal here goes to the user, never worked around. A write refused because
   the seat changed (a new model, client or conversation) means claim again,
   and the user will be asked.
-- Carry the `judge_token` your claim returns as `judge_token` on every write.
+- Carry the `judge_token` your claim returns as `judge_token` on every write
+  that takes one.
   Several agents can share one connection, a subagent beside the agent that
   spawned it, and each claims its own judge and carries its own token; a write
   without one is credited to the most recent claim on the connection.
@@ -38,4 +39,5 @@ hold on every call:
   a node itself.
 - Ingest after learning something worth keeping; search before answering
   anything prior context could improve; reflect when a response suggests it;
-  call `backup_graph` when a response says `backup_suggested`.
+  when a response says `backup_suggested`, raise it with the user and call
+  `backup_graph` only if they agree.

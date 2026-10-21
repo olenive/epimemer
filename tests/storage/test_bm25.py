@@ -20,7 +20,7 @@ from epimemer.storage.bm25 import analyze, bm25_scores
 
 
 class TestAnalyze:
-    """The tokenizer both backends have to agree on before anything else can."""
+    """The tokenizer every backend has to agree on before anything else can."""
 
     def test_analyze_splits_an_identifier_into_its_rare_token(self):
         """`LEXICAL_SEARCH.md` §2.3, measured against the engine's analyzer.

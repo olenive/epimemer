@@ -1,5 +1,7 @@
 # Review mode: who judged this, and can someone else check it
 
+A design, built: the code is `epimemer/pipelines/review/`, the judge registry and decision journal on every storage backend, and merge reversal in `epimemer/pipelines/graph_construction/versioning.py`.
+
 The motivating case, in the user's words: *"using a different agent to review
 the decisions previously made by the first agent"*. That needs every decision
 to record who made it, a registry that makes "a different agent" provable
@@ -20,19 +22,17 @@ Design it depends on: `REVIEW_EPISTEMIC.md` §3 (the verdict taxonomy),
 ### 1.1 Every verdict has a writer
 
 `reflect` nominates pairs and the agent classifies each one. Every verdict in
-`REVIEW_EPISTEMIC.md` §3 has an action, and the last to get one was
-`compatible`: `apply_reflection(similarities=[…])`. Before it existed, a
-declined pair left no record, so the sweep re-nominated it on every reflect;
-on one real graph thirteen of the first eighteen nominated pairs were
-declined and returned every time.
+`REVIEW_EPISTEMIC.md` §3 has an action, and `compatible` is recorded with
+`apply_reflection(similarities=[…])`. A decline with no record is
+re-nominated on every reflect, to an agent who cannot know it was refused.
 
 ### 1.2 A decline is two populations, not one
 
 A single `similarity` edge for every decline would serve two readers that
-want opposite breadth. The nomination sweep's `already_linked` wants it
-broad: suppress every pair anybody assessed. `corroboration.py` wants it
-narrow: its neighbourhood is restatements of one claim, and a wrong
-`similarity` edge overstates the count. Write one edge for both and *"these
+want opposite breadth. The nomination sweeps want it broad: suppress every
+pair anybody assessed. Corroboration wants it narrow: its neighbourhood
+is restatements of one claim, and a wrong `similarity` edge overstates the
+count. Write one edge for both and *"these
 two are different claims"* starts corroborating, which is manufactured
 support, the worst failure this system can produce: a false merge does not
 lose information, it inverts the quantity corroboration measures.
@@ -47,61 +47,37 @@ The other refusals need no new action: a cross-metacontext pair is
 
 `assessed` is a denormalised suppression index and passes §3.4's rule: it is
 immutable and append-only, so it cannot drift from the journal that also
-records the decision. `already_linked` reads
-`SIMILARITY ∪ CONTRADICTION ∪ VARIANT_OF ∪ ASSESSED`.
+records the decision. Every pair sweep skips a pair carrying any of
+`similarity`, `contradiction`, `variant_of` or `assessed`, through one shared
+reader.
 
 ### 1.3 The action
 
-```python
-similarities = [
-    {
-        "pair": [a_id, b_id],
-        "verdict": "one_claim",
-        "because": "same claim; merge refused, both are events",
-    },  # similarity + assessed
-    {
-        "pair": [c_id, d_id],
-        "verdict": "distinct",
-        "because": "both about validity intervals, different assertions",
-    },  # assessed only
-]
-```
+`docs/REFLECTION.md` §6 has the verdicts and what each writes. The rules whose
+reasons live here:
 
-The agent is already in `apply_reflection` having made every other decision;
-declining becomes an outcome applied in the same batch rather than a
-separate errand. Rules that decide behaviour:
-
-- **Both sides must be in `NOMINATED_STATUSES`** (`ACTIVE`, `HISTORICAL`).
-  An `assessed` edge earns its place by suppressing a nomination, so it
-  belongs exactly where a nomination could have happened; `CORRECTED`,
-  `ARCHIVED` and `MERGED` are refused because a judgment there suppresses
-  nothing and a `similarity` edge would still be counted as support.
-- **`one_claim` is refused across metacontexts.** A `similarity` edge across two
-  of them is a fiction corroborating a fact. `distinct` across metacontexts is accepted,
-  since `assessed` corroborates nothing.
-- **`distinct` over a standing `one_claim` is a retraction.** It writes a
-  `retracted_similarity` edge that disqualifies the standing one, the
-  mechanism corroboration already runs for `contradiction`; the `similarity`
-  edge is not deleted. The other direction is refused: nothing re-asserts
+- **Both sides must be `ACTIVE` or `HISTORICAL`.** An `assessed` edge earns
+  its place by suppressing a nomination, so it belongs exactly where a
+  nomination could have happened; `CORRECTED`, `ARCHIVED` and `MERGED` are
+  refused because a judgment there suppresses nothing and a `similarity` edge
+  would still be counted as support.
+- **`one_claim` is refused across metacontexts.** A `similarity` edge across
+  two of them is a fiction corroborating a fact.
+- **Withdrawal is one-way.** `distinct` over a standing `one_claim` writes a
+  `retracted_similarity` edge that disqualifies it, the mechanism
+  corroboration already runs for `contradiction`. Nothing re-asserts
   `one_claim` over a withdrawal, because withholding support costs a count
-  while inventing it inverts the quantity. `one_claim` after `distinct` on a
-  pair that was never `one_claim` is additive.
-- **Similarities are applied first in `apply_reflection`**, before any
-  argument that can retire a node: a judgment is about the wording it was
-  made against, and a supersession later in the same batch would otherwise
-  turn it into a skip.
+  while inventing it inverts the quantity.
 - **Judgment edges never migrate on retirement.** `similarity`,
-  `contradiction` and `variant_of` are in `JUDGMENT_EDGE_TYPES`, and
-  `migration_disposition` anchors them on every retirement, correction and
-  merge included; `assessed` gets the same anchoring through
-  `REVIEW_EDGE_TYPES`. The replacement starts with no judgments and is
-  correctly re-nominated (`REVIEW_EPISTEMIC.md` §4.2).
+  `contradiction`, `variant_of` and `assessed` stay anchored on every
+  retirement, correction and merge included. The replacement starts with no
+  judgments and is correctly re-nominated (`REVIEW_EPISTEMIC.md` §4.2).
 - **The edges record a judgment.** A sweep that wrote them for every pair
   over the bar would fill the graph with assertions nobody made and suppress
   its own future nominations. Similarity nominates; the agent judges.
-
-The frontend draws `assessed` as the similarity hue drained of saturation:
-same subject, no assertion of support.
+- **A suppression is taken back only by `reopen`**, which asserts nothing
+  about the answer. A standing `one_claim` is withdrawn by `distinct`, never
+  by `reopen`.
 
 ---
 
@@ -112,32 +88,9 @@ same subject, no assertion of support.
 Hashing the self-description into an id fails in both directions: reword the
 description and become a different judge, so one judge's history fragments;
 paste the same description and two genuinely different agents are
-indistinguishable. So identity has three layers:
-
-```python
-class AgentDescription(BaseModel):
-    """One thing an agent said about itself, and when it said it. Append-only."""
-
-    digest: str  # sha256 of `text`, truncated: identifies the *version*
-    text: str
-    recorded_at: datetime
-    # Set only through a channel that terminates at the user (§2.3). `None`
-    # is *self-described, unconfirmed*, a different epistemic object.
-    confirmed_at: datetime | None = None
-
-
-class Agent(BaseModel):
-    """A judge: something that made decisions in this graph. Not a user
-    account and not a credential (§2.4)."""
-
-    id: str  # opaque, never displayed, minted by `new_agent_id()`
-    name: str  # freely renamable, resolved at read time, unique per graph
-    former_ids: list[str]  # keys this judge's rows may already record
-    descriptions: list[AgentDescription]
-    authorised_at: datetime
-    first_seen_at: datetime | None = None
-    last_seen_at: datetime | None = None
-```
+indistinguishable. So identity has three layers: an opaque key the server
+mints and nobody is shown, a name the user can change freely, and an
+append-only list of dated self-descriptions, each pinned by a digest.
 
 A decision records a `JudgeRef`, the pair `(agent_id, digest)`: the id says
 who, the digest pins what the judge claimed to be at the moment it decided,
@@ -149,11 +102,8 @@ when it decided this* wants the claim as it stood.
 `former_ids` is aliasing, migration and repair in one list. Consolidating two
 records that were always one judge rewrites nothing and deletes nothing: the
 survivor takes the other's keys and both description histories, and old
-journal rows keep the key they were written with. An absorbed record stops
-being live, derived by `live_agents` rather than stored as a flag.
-`judge_aliases` is the one place *which judge did the caller mean* is
-answered, and `query_decisions` takes `agent_ids` rather than one id because
-after a consolidation a judge is a set of keys.
+journal rows keep the key they were written with. After a consolidation a
+judge is a set of keys, so every lookup by judge takes the set.
 
 The append-only list of dated descriptions is the same shape
 `LifecycleEpisode` uses: a scalar plus a timestamp cannot express *changed,
@@ -178,34 +128,17 @@ keyed on the identity, because a memo meaning *this session confirmed
 something* would let an agent be approved as one judge and bind silently as
 another. A changed description is still put to the user.
 
-**The prompt says which agent is asking.** Its first line names the judge the
-agent proposes, and where this connection already judges as somebody, a second
-line names them and says whether this is a second agent beside the first or
-that one claiming again. One connection carries several agents, a subagent
-beside the agent that spawned it, and the user answering otherwise had no way
-to tell which of them the question came from. The proposal is shown by name
-even where the agent passed the key a previous claim handed it, resolved the
-way the claim behind the prompt resolves it, and a handle this graph has never
-seen is shown as it came because there is nothing else to show. The
-self-description stays last, because the terminal cuts the end and the name
-being proposed is the part that must survive the cut. Ahead of all of it comes
-the Epimemer version, on every prompt in the claim flow, so that a user placing
-a judge can see which server is asking.
+**The prompt says which agent is asking.** One connection carries several
+agents, a subagent beside the agent that spawned it, so the prompt names the
+judge being proposed and, where this connection already judges as somebody,
+names them too. The self-description comes last, because a terminal cuts the
+end and the proposed name is the part that must survive the cut.
 
-**The proposed name is a choice wherever a picker is drawn**, a line of its
-own rather than a blank field behind *a new judge*. A client is free to draw
-free text as a required field, and Claude Code does, so `Accept to use 'X'`
-named a gesture the client would not let the user make: the one way to take
-the proposed name was to retype it. A picker says the same thing in a gesture
-every client that draws one can make. In a graph with no judges yet the whole
-picker is those two lines, the proposal and a name the user types. In a graph
-that has judges the proposed line sits under the roster, and it is left off
-where the proposal resolves to a judge already on that list, since that judge
-is there to be picked and a second line offering its name as new is how a
-history gets split. The free-text prompt whose Accept means the proposal
-survives only where no picker can be drawn at all, a bare Accept being the one
-gesture such a client has left; where the user has chosen to type a name,
-typing none is a refusal rather than agreement.
+**The proposed name is a line in the picker** rather than a blank field,
+because a client may draw free text as a required field (Claude Code does),
+and then the only way to take the proposal would be to retype it. It is left
+off where it resolves to a judge already listed, since offering a listed
+judge's name as new is how a history gets split.
 
 Two states are distinct: **declined** (the question reached a person and they
 said no) refuses even a pre-approved id; **unavailable** (no elicitation
@@ -216,40 +149,32 @@ user's involvement happening earlier rather than not at all.
 because a handle an agent could rename is a handle an agent could point at
 another judge's history. A name collision is a question, not a refusal: two
 records that should be one is the commonest reason to be renaming, so the
-collision asks whether they are the same judge, and yes consolidates. The CLI
-answers it with `--same-judge`. Typing the name of an existing judge on the
-free-text path joins it rather than minting a second record.
+collision asks whether they are the same judge, and yes consolidates.
 
 **Retiring lives there too, and for the same reason**: a handle an agent could
 retire is a handle an agent could use to take a rival judge off the roster. A
-retired judge leaves the picker's main list and `claim_agent` refuses it, by
-name, key, former key or through the approved list: one gate on the resolved
-record, so no route reaches a binding. Everything else about it is untouched,
-which is what separates retiring from deleting: `live_agents` still holds it,
-`resolve_agent` still finds it, and `review(mode="by_agent")` still answers for
-it, so `serving_agents` rather than `live_agents` is what the picker reads. The
-trail is an append-only list of `RetirementEpisode`, on `LifecycleEpisode`'s
-argument: a scalar plus a timestamp cannot say *was out of use, came back, and
-is out of use again*. Reinstating takes two gestures from the picker, bring it
-back and then choose it, since one keystroke undoing a deliberate removal is the
-mistake retiring exists to prevent.
+retired judge cannot be bound by any route, while its record, history and
+decisions stay readable, which is what separates retiring from deleting. The
+trail is an append-only list of episodes, on `LifecycleEpisode`'s argument.
+Reinstating takes two gestures, because one keystroke undoing a deliberate
+removal is the mistake retiring exists to prevent.
 
-**Deleting is gated on a scan and is CLI-only.** `judge_usage` counts the
-journal rows, nodes, edges and relation records naming any of a judge's keys,
-and the record goes only where every count is zero and it has absorbed nothing.
-Anything else is retired, because `judged_by` holds a key and the key has to
+**Deleting is gated on a scan and is CLI-only.** A record goes only where
+nothing in the graph names any of its keys and it has absorbed nothing;
+anything else is retired, because `judged_by` holds a key and the key has to
 keep resolving to a name for as long as anything carries it. `node_judge_ids`
-is the one enumeration of where a `JudgeRef` sits on a node, and the SurrealDB
-clause `_NODE_NAMES_JUDGE` is its counterpart: a field added to one and missed
-in the other would let the command delete a record something still points at.
+is the one enumeration of where a `JudgeRef` sits on a node, and the SQLite,
+Postgres and SurrealDB clauses named `_NODE_NAMES_JUDGE` are its counterparts:
+a field added to one and missed in another would let the command delete a
+record something still points at.
 
 **The user owns the semantics.** Whether ids track a model, a role or a task
 is the user's scheme. The server can detect a new session or a different
-client (`ctx.session_id`, `ctx.client_id`); it can never detect a different
-model inside one harness, because the model is never on the wire. That
-question is the user's to answer, which is what the flow assumes. A client hook
-can tell the server which model is seated, and §2.6 uses that to decide when
-the question has to be put again; it still never decides the answer.
+client; it can never detect a different model inside one harness, because the
+model is never on the wire. That question is the user's to answer, which is
+what the flow assumes. A client hook can tell the server which model is
+seated, and §2.6 uses that to decide when the question has to be put again;
+it still never decides the answer.
 
 ### 2.3 Confirmation reaches the user, not the agent
 
@@ -257,17 +182,17 @@ the question has to be put again; it still never decides the answer.
 answer comes back from the user through the client's own UI. Where the
 client cannot elicit, `epimemer agents confirm <id>` is a command the agent
 cannot run, and `EPIMEMER_APPROVED_AGENTS` seeds approval at connect for
-embedded stores the CLI cannot reach (§10.3). No path exists by which the
+embedded stores the CLI cannot reach. No path exists by which the
 agent alone sets `confirmed_at`; a `confirm_agent` tool the agent could call
-is refused on principle. `epimemer agents confirm` stamps the current
+is refused on principle, since a tool the agent calls cannot establish that
+the user called it. `epimemer agents confirm` stamps the current
 description too, since the user vouches for the wording in front of them, and
 `agents list` sits beside it because approving an id blind is the same gap in
 miniature.
 
-A tool that waits on a person cannot share the tool timeout: `claim_agent`
-sets `waits_for_user` on `_run_with_timeout`, or *the user was still reading*
-would read as *the client cannot elicit*, the one direction this must not
-fail in.
+A tool that waits on a person cannot share the tool timeout, or *the user was
+still reading* would read as *the client cannot elicit*, the one direction
+this must not fail in.
 
 ### 2.4 Self-description is a claim, not a credential
 
@@ -298,61 +223,40 @@ mode, and handing the agent a list of judges is one step from the filtering
 **The seat** is where a claim is made from: the conversation it is made in,
 the client that carries it, and the model behind it. A judge is confirmed in a
 seat; change any part and it is a different seat, and the user is asked again.
-Concretely it is four fields: `session_id`, the client's conversation
-(`EPIMEMER_CLIENT_SESSION_ID`, else the `CLAUDE_CODE_SESSION_ID` Claude Code
-puts in the server's environment); `client_name` and `client_version`, from the
-MCP initialize handshake; and `model`, from a client hook. A seat is complete
-with the conversation and the model alone: client info is optional in the
-handshake on the current protocol and Claude Code sends none, so the client
-fields count when compared and are never required.
+A seat is complete with the conversation and the model alone: client info is
+optional in the MCP handshake and Claude Code sends none, so the client fields
+count when compared and are never required.
 
-**Why the memo moved from the server process to the seat (decided 28 September
-2026).** Since 25 August the picker goes up on every fresh bind, and an
-in-process memo kept a re-claim of the same judge in the same graph quiet. A
-`/mcp` reconnect in Claude Code restarts the stdio server, so the memo died and
-the next Epimemer call asked again; when that call came from an unattended
-hourly loop, the session waited on the picker until the user came back. A
+**Why a confirmation is kept per seat rather than per server process.** The
+picker goes up on every fresh bind, and an in-process memo keeps a re-claim of
+the same judge in the same graph quiet only while the process lives. A `/mcp`
+reconnect in Claude Code restarts the stdio server, so an in-process memo dies
+and the next Epimemer call asks again; when that call comes from an unattended
+hourly loop, the session waits on the picker until the user comes back. A
 restart is a boundary the person never asked for, nothing about the agent
 changed across it, and nobody may be watching. A new conversation, a new client
 or a new model is where *who is behind the name* can change, so that is where
 the question belongs. A confirmation from a complete seat is therefore
-persisted per graph on the backend, beside the approved-id list
-(`get_judge_confirmations` / `set_judge_confirmations`), and a claim whose seat
-matches one for the resolved judge binds without asking, while that judge is
-still approved and not retired, and says so: `carried_over`, and *confirmed in
-this seat on <date>, carried over* in `message`.
+persisted per graph on the backend, beside the approved-id list, and a claim
+whose seat matches one for the resolved judge binds without asking, while
+that judge is still approved and not retired, and says so.
 
-**A seat that is not fully known asks**, exactly as before, and every claim
-that asks says why, in `asked_because` and in the picker's own text: no client
-session id; the model unknown, with the path of the client-state file it looked
-for; the first claim for this judge in this seat; or which field changed, from
-what to what. The in-process memo remains for the incomplete seat only.
+**A seat that is not fully known asks**, and every claim that asks says why.
+The in-process memo remains for the incomplete seat only.
 
 **The model needs the harness.** The model is never on the MCP wire, so the
-server cannot see it. Claude Code's hooks can: `SessionStart` receives the
-session id and (optionally) the model, and `PostModelSwitch` receives
-`from_model` and `to_model`. `epimemer client-state record --client-pid
-$PPID` runs as both hooks and writes `<EPIMEMER_CLIENT_STATE_DIR>/<session_id>.json`
-and, with the same content, `client-<pid>.json`, atomically and private to the
-user. A hook's shell is a direct child of the Claude Code process, so `$PPID`
-is that process's id, the same for every hook it runs across `/clear`, resume
-in place and model switches. The pid is an opaque key linking one process's
-hook events; nothing uses it to inspect processes. The server knows only the
-conversation it was spawned in: it reads that conversation's file, follows the
-pid it names to the live record, and takes the seat's conversation and model
-from there (`live_client_state`), falling back to the spawn file where there
-is no live record. So a `/clear` changes the seat's conversation, a write after
-it is refused naming that change, and the next claim asks as the first claim
-in a new seat. This happens on every claim and every write, and a missing or
-unreadable file reads as *model unknown*, never as an error. Whether `/fast` or
-spawning a subagent fires `PostModelSwitch` is undocumented; where it does not,
-the files keep the model the conversation started with.
+server cannot see it. Claude Code's hooks can, and `epimemer client-state
+record` runs as those hooks and writes what they report to a file the server
+reads on every claim and every write; `epimemer/client_state.py` describes the
+files. A missing or unreadable file reads as *model unknown*, never as an
+error. Whether `/fast` or spawning a subagent fires `PostModelSwitch` is
+undocumented; where it does not, the files keep the model the conversation
+started with.
 
 **A write from a changed seat is refused.** The judge token and the session
-binding each record the seat their claim was made from, and `_judge_for_write`
-resolves the seat again on every write. Any difference refuses the write and
-names it (*the model was claude-fable-5-1 and is now claude-opus-5-5 since this
-judge was claimed*), known to unknown and unknown to known included, because
+binding each record the seat their claim was made from, and the seat is
+resolved again on every write. Any difference refuses the write and
+names it, known to unknown and unknown to known included, because
 the user vouched for whoever sat in the old seat. Claiming again asks the user
 which judge the new seat is. Reads are not gated.
 
@@ -362,10 +266,9 @@ different model sits in the parent's seat. Tokens still keep the two judges'
 writes apart (§3.2); what the seat cannot do is tell their models apart.
 
 **A bound, not an expiry.** Nothing times out. A graph keeps the newest 500
-confirmations (`JUDGE_CONFIRMATIONS_KEPT`), ordered by the instant rather than
-its text, and a seat that falls off the end simply asks again. The hook prunes
-client-state files, per conversation and per process, not written for 30 days, and a conversation resumed after
-that records itself again on `SessionStart`.
+confirmations, ordered by the instant rather than its text, and a seat that
+falls off the end simply asks again. Client-state files not written for 30
+days are pruned, and a conversation resumed after that records itself again.
 
 ---
 
@@ -376,20 +279,17 @@ that records itself again on `SessionStart`.
 Every write path carries a judge, ingest included. Ingest is where the
 unreviewable judgments live: `claim_kind`, `confidence` and `importance` are
 supplied by the agent that read the material, frozen at that moment, and
-re-examined by nothing.
-
-| Decision | Recorded on |
-|---|---|
-| `claim_kind`, `confidence` and basis at ingest | the node (`judged_by`), `ValueSignal`, `metadata` |
-| similarity, assessed, contradiction, variant, link | `NodeEdge.judged_by`, a field rather than a `metadata` key |
-| retire and restore | `LifecycleEpisode.retired_by` and `restored_by`, two judges because they are two decisions often months and sometimes two agents apart |
-| `judge_importance` | `ValueSignal.importance_judged_by` (the latest) and each `reinforcements` entry (its own), because three judgments by three agents compose into one number and the trail is the only place they stay separable |
-| synthesised topics, splits, enrichments, merge survivors | the node |
+re-examined by nothing. `docs/ATTRIBUTION.md` lists where each decision
+records its judge. Retire and restore name two judges on one episode, because
+they are two decisions often months and sometimes two agents apart; each
+importance reinforcement names its own, because three judgments by three
+agents compose into one number and the trail is the only place they stay
+separable.
 
 A correction does not inherit the previous node's judge: the replacement is
 this agent's wording. Reusing an entity or a topic node created from a tag does
 not restamp it, and
-re-recording a pair that already has its edge returns `created: False` and
+re-recording a pair that already has its edge
 leaves the judge alone: a second agent calling the same tool has confirmed,
 which is a review with a record of its own (§6.4), not an overwrite. The
 document and its segments carry no judge: *who pasted this text* is a
@@ -410,22 +310,20 @@ that names its own token is credited to the judge that claimed it rather than
 to whichever claimed last. A token the session never issued refuses the write,
 since falling back to the binding is the misattribution the token prevents.
 Whether a blank is accepted is the graph's policy, not the signature's (§3.3).
-The binding, the tokens (a dict keyed by token) and the confirmed-judge memo
-live in `connection_state` on the lifespan, created fresh by each server
-process. The server speaks stdio only, so one process serves one client and a
-token means nothing on any other connection. FastMCP session state cannot hold
-them: on the 2026-07-28 protocol era each request arrives on a new connection
-object and FastMCP keys its state store on it, so a token minted by one call
-was unknown to the next. Ingest stamps its edges once,
-after the batch is assembled, rather than at each place it builds them.
+The binding, the tokens and the confirmed-judge memo live on the lifespan,
+created fresh by each server process. The server speaks stdio only, so one
+process serves one client and a token means nothing on any other connection.
+FastMCP session state cannot hold them: on the 2026-07-28 protocol era each
+request arrives on a new connection object and FastMCP keys its state store on
+it, so a token minted by one call was unknown to the next.
 
 ### 3.3 What absence means
 
 **Blank means unknown. That is the whole of it.** It carries no date and
 asserts nothing about why nobody is named. Reading anything more into it
 (*written before attribution existed*, say) would give a blank a meaning
-nobody asserted, which is the mistake this project made with a literal `0.5`
-confidence and stores unrated as absent to avoid.
+nobody asserted, for the same reason an unrated confidence is stored as
+absent rather than as 0.5.
 
 **No backfill, ever.** Stamping a synthetic legacy agent asserts that an
 agent existed and made a judgment. The positive half: a review of an
@@ -441,24 +339,16 @@ only that this graph does not record one, which is true of every node in it.
 
 ### 3.3.1 The setting
 
-`require_judge`, one per-graph setting stored beside the reflect counter and
-the merge overrides:
-
-| | |
-|---|---|
-| **Off (default)** | a write may carry a judge or not; blank is recorded as unknown |
-| **On** | a write without a judge is refused, with prose naming `claim_agent` |
-
+`require_judge` is one per-graph setting, off by default; with it on, a write
+without a judge is refused (`docs/ATTRIBUTION.md`, *Requiring a judge*).
 It is not an MCP tool. `configure_reflection` and `configure_merge` are
 agent-callable because they tune how eagerly the system nominates things;
 this is a gate on the agent itself, and a gate the agent can open is
 decoration. So it takes the same channel as the approved-id list:
-`EPIMEMER_REQUIRE_JUDGE` read at connect, and `epimemer agents require`. The
+configuration read at connect, and `epimemer agents require`. The
 gate is one check at the tool boundary over every write tool that records a
-claim; timelines and metacontexts are scaffolding rather than claims and sit
-outside it. Turning it on affects only writes after that moment; nothing is
-reinterpreted. `epimemer agents require on` warns when no id is approved yet,
-since it is the one setting that can make a working graph refuse everything.
+claim. Turning it on affects only writes after that moment; nothing is
+reinterpreted.
 
 ### 3.4 Immutable facts may be denormalised; mutable state may not
 
@@ -468,7 +358,7 @@ since it is the one setting that can make a working graph refuse everything.
 
 The inline fields are the original judge and nothing else. Nothing on a node
 or an edge ever records that it was reviewed; §4 does, and derives it. Two
-homes for one mutable fact, kept in sync across two backends, is the shape
+homes for one mutable fact, kept in sync across every backend, is the shape
 this repository has hit too often to build again.
 
 ### 3.5 Linkage is inline, not an edge
@@ -490,50 +380,33 @@ edges, lifecycle episodes and value signals that is five scans and a
 reassembly. So every decision is also appended to a journal, and §3.4's
 inline fields are the immutable denormalised copy.
 
-```python
-class DecisionRecord(BaseModel):
-    """One judgment, as an append-only row. Never edited, with no exceptions."""
-
-    id: str
-    kind: DecisionKind
-    subject_ids: list[str]
-    covers: list[str]  # the reasons a retention answers, or the question a boundary decline answers
-    judged_by: JudgeRef | None  # absent means unknown (§3.3)
-    decided_at: datetime
-    certainty: float | None  # §5; bounded 0.0–1.0 because the ordering sorts on it
-    certainty_basis: str | None
-    reviews: str | None  # the record this one is about
-    supersedes: str | None
-    metacontext: str | None
-```
-
-`reviewed` is `EXISTS(record WHERE reviews = this.id)`, and `unreviewed` is
-its complement. A confirmation reviews without superseding, so `reviews` and
-`supersedes` are separate fields; collapsing them breaks a derived-only
-scheme, since a confirmation supersedes nothing. A reversal appends a record
-with both set and deletes nothing.
+A record is reviewed when another record's `reviews` names it, and that is
+derived, never stored. A confirmation reviews without superseding, so
+`reviews` and `supersedes` are separate fields; collapsing them breaks a
+derived-only scheme, since a confirmation supersedes nothing. A reversal
+appends a record with both set and deletes nothing.
 
 **`kind` carries `because`.** A correction and a world-change are opposite
 claims about what happened and a reviewer asking for one does not want the
-other, so they are two kinds, `supersession_kind(status)` being their single
-declaration. **Every member of `DecisionKind` has a writer**, enforced by a
-test that reads the whole package: review selects on kind, so an unwritten
-kind is a filter that silently returns nothing and reads as a clean graph.
+other, so they are two kinds. **Every member of `DecisionKind` has a writer**,
+enforced by a test that reads the whole package: review selects on kind, so an
+unwritten kind is a filter that silently returns nothing and reads as a clean
+graph.
 
-**The journal write never raises**, with one exception. It lands after the
-decision and outside its transaction, which is the safe direction: raising
+**The journal write never raises**, except where the row is the act. It
+lands after the decision and outside its transaction, which is the safe
+direction: raising
 would fail the tool call after the graph write succeeded, and the retry is
 worse than the missing row every time (a retried `merge_facts` refuses
 because its sources are retired, a retried `store_decomposition` ingests the
 document twice). The failure is logged for the operator. The exceptions are
-the `retention` and `boundary_declined` rows, where the row *is* the act rather
-than a note about one (`epimemer/pipelines/reflection/retention.py`,
-`epimemer/pipelines/reflection/boundaries.py`).
+the `retention`, `boundary_declined` and `reopened` rows, where the row *is*
+the act rather than a note about one.
 
-**Timestamps are padded on write.** `decided_at` is the one timestamp with
-an index a range actually uses, and wrapping the field in a conversion costs
-45× at 50,000 rows, so the writer renders one canonical shape
-(`DEVELOPER_GUIDE.md`, *Comparing timestamps*).
+**Timestamps are padded on write**, because `decided_at` is the one timestamp
+whose index a range query actually uses, and wrapping the field in a
+conversion costs 45× at 50,000 rows (`DEVELOPER_GUIDE.md`, *Comparing
+timestamps*).
 
 ### 4.1 Granularity: one judgment, one row
 
@@ -550,12 +423,6 @@ would otherwise mark all forty-four facts reviewed when six were checked, and
 confirmation is what stops the next reviewer looking. The alternative (a
 record stays unreviewed until every subject is confirmed) requires the same
 machinery plus bookkeeping.
-
-Re-recording a pair verdict (`record_contradiction`, `record_variant`, a
-relation verdict) on a pair that already carries the edge writes a
-confirmation row whose `reviews` names the oldest record for that pair.
-Where the verdict predates the journal the pointer is blank, because the
-journal cannot cite a row that does not exist.
 
 ### 4.2 Which record is primary
 
@@ -605,10 +472,6 @@ unnamed constant with no referent in the system, and the above-bar
 distribution is unmeasured (the two above-bar scores on record sat above
 such a band). Measuring it is the precondition for adding one.
 
-The merge subject convention is a trap: `merge_facts` journals `[survivor,
-*sources]`, so *three or more sources* read off `len(subject_ids)` calls
-every two-source merge wide. It has a named function and a test.
-
 ---
 
 ## 6. The modes
@@ -616,27 +479,17 @@ every two-source merge wide. It has a named function and a test.
 `review(...)` is read-only, like `reflect`, and for the same reason: it
 nominates, and every change goes through a writer. Three things are
 separate: *which* decisions you are looking at, *what order* they arrive in,
-and *whether* the list is narrowed further.
+and *whether* the list is narrowed further. `docs/ATTRIBUTION.md` has the
+modes and filters as a caller sees them.
 
 ### 6.1 Modes: which decisions
 
-| Mode | Selects | Answers |
-|---|---|---|
-| `by_agent` | `judged_by` among a judge's keys | *"check everything this judge did"* |
-| `since` | `decided_at` in range | *"review yesterday's session"* |
-| `unreviewed` | no record `reviews` this one | *"what has nobody looked at"* |
-| `warning` | `kind` is `proceeded_despite_warning` | the contested-decisions worklist |
-| `all` | every record | the full audit |
-
 **A mode names the selection; every argument narrows whatever it selected.**
-`agent_id`, `since`, `until` and `certainty_ceiling` work under every mode,
-so `mode="unreviewed", agent_id=…, since=…` is one call. `by_agent` and
-`since` are sugar over a required argument, and the refusal is their whole
-value: `all` with an `agent_id` the caller forgot to pass returns the entire
-journal and reads as an answer. There is no `between` mode, since it is
-`since` with an `until`, and two names for one selection is two shapes for
-one question. `mode` is validated against the modes that exist and refuses
-by name.
+`by_agent` and `since` are sugar over a required argument, and the refusal is
+their whole value: `all` with an `agent_id` the caller forgot to pass returns
+the entire journal and reads as an answer. There is no `between` mode, since
+it is `since` with an `until`, and two names for one selection is two shapes
+for one question.
 
 ### 6.2 Ordering: shakiest first, always
 
@@ -664,27 +517,20 @@ visible, and `since` bounds it.
 
 ### 6.3 Filters: optional narrowing
 
-`certainty_ceiling`, off by default, keeps only decisions whose declared
-certainty is at or below it; unrated decisions are excluded, since blank
-cannot be distinguished from ordinary. Its use is not browsing, which
-ordering covers, but counting: *"is anything below 0.5 still outstanding
-before I stop?"* is a gate, and a gate wants a number. 0.5 is a legitimate
-constant where a similarity band was not: it is a labelled anchor on the
-confidence ladder that tool guidance teaches, so it means something before
-anybody measures anything. Inclusive, because the guidance says to omit at
-0.5 and an agent that typed it anyway was making a point.
-
-The response names the ceiling this call used, never asserting what the
-graph would have done, because a caller can pass their own. Always reported:
-how many decisions were unrated, since three results out of four hundred
-blanks is not the same answer as three out of four.
+`certainty_ceiling` is for counting rather than browsing, which ordering
+covers: *"is anything below 0.5 still outstanding before I stop?"* is a gate,
+and a gate wants a number. 0.5 is a legitimate constant where a similarity
+band was not: it is a labelled anchor on the confidence ladder that tool
+guidance teaches, so it means something before anybody measures anything.
+Inclusive, because the guidance says to omit at 0.5 and an agent that typed
+it anyway was making a point. Unrated decisions are excluded, since blank
+cannot be distinguished from ordinary.
 
 ### 6.4 The response, and the writer
 
-**Every mode is capped and reports `truncated`.** `all` over an append-only
-journal fed by every ingest is precisely the unbounded response the
-nomination cap exists for. When a list is named in `truncated`, act on what
-came back and review again rather than raising the number.
+**Every mode is capped and reports `truncated`**, because `all` over an
+append-only journal fed by every ingest is precisely the unbounded response
+the nomination cap exists for.
 
 **Every mode reports how many rows had no judge**, and only `by_agent`
 excludes them, because it cannot answer without one. A blanket exclusion
@@ -694,18 +540,16 @@ a judge.
 **Confirming costs something, or the treadmill moves up a level.** If agent 2
 reviews a decision and agrees, and nothing records that, agent 3 does the
 same work again. So confirmation writes a `DecisionRecord` with `reviews`
-set, through `apply_review(confirmations=[…], dissents=[…])`, the only
-writer; `review()` stays read-only.
+set, through `apply_review`, the only writer; `review()` stays read-only.
 
 **A dissent records a finding and performs no undo.** Every undo in this
 system already has a tool (`reverse_merge`, `restore`, `apply_reflection`
 with `distinct`, `rejudge`, `reassign_metacontext`, `correct_interval`), each
-with its own refusals and its own row that legitimately sets `supersedes`. A dispatcher
-over them would be a convenience less safe than the sequence it replaces. So
-a dissent sets only `reviews`, and its real use is where the undo was
-refused: a merge whose survivor has since been contradicted cannot be
-reversed (§7), and before the dissent existed there was nowhere to put that
-finding.
+with its own refusals and its own row that legitimately sets `supersedes`. A
+dispatcher over them would be a convenience less safe than the sequence it
+replaces. So a dissent sets only `reviews`, and its real use is where the undo
+was refused: a merge whose survivor has since been contradicted cannot be
+reversed (§7), and the dissent is where that finding goes.
 
 **A retry must not read as a second opinion.** Two confirmations over one
 decision is exactly the evidence a later reviewer weighs, so an identical
@@ -716,32 +560,27 @@ apart, so a retry on a graph that does not require one writes a second row;
 one more thing `require_judge` buys.
 
 `apply_review` is not one transaction: each entry is an independent judgment
-about an unrelated decision, per-entry refusals, and one bad `decision_id`
-does not lose the good ones. The reviewed set covers the whole selection
-rather than the page, or every row past `max_results` would read as
-unreviewed; `unreviewed` filters before ordering, and `unreviewed_count` is
-over what was selected.
+about an unrelated decision, so refusals are per entry and one bad
+`decision_id` does not lose the good ones. The reviewed set covers the whole
+selection rather than the page, or every row past `max_results` would read as
+unreviewed.
 
 ### 6.5 Every verdict needs a writer, including the ones review invents
 
 *"Agent-1 called 44 facts `state`; two look like events"* is what review
-recovers, and nothing could act on it until `rejudge` existed. Supersession
+recovers, and `rejudge` is what acts on it. Supersession
 is not the missing path and must not be pressed into it: a mislabelled
 `claim_kind` is neither *it was wrong* nor *the world changed*, and filing it
 as a correction retires a true node and re-points its edges for a metadata
 mistake.
 
-`rejudge(node_id, because, claim_kind=, confidence=, confidence_basis=,
-certainty=, certainty_basis=)` revises an agent-supplied judgment about a
-node without touching the claim: no status, edge or lineage moves, a
-`DecisionRecord` whose `reviews` points at the record that made the original
-judgment, and the replaced values appended to the node's `rejudgments` as
-`{because, was, now, judged_by}`, because without a trail it would be the one
-call in the system that destroys a judgment rather than superseding it.
-Restating a judgment is a confirmation, not a rejudgment: a call where every
-value supplied is what the node already carries is refused and pointed at
-`apply_review`. The re-judgment is checkable against the material because
-the segments are still stored.
+`rejudge` revises an agent-supplied judgment about a node without touching the
+claim: no status, edge or lineage moves, and the replaced values are kept on
+the node's trail, because without a trail it would be the one call in the
+system that destroys a judgment rather than superseding it. Restating a
+judgment is a confirmation, not a rejudgment, and is pointed at
+`apply_review`. The re-judgment is checkable against the material because the
+segments are still stored.
 
 **Scope, and what is deliberately elsewhere.** `importance` stays with
 `judge_importance`, which already is this tool for one field. Metacontexts and
@@ -751,12 +590,12 @@ validity intervals have their own writers, `reassign_metacontext` and
 revision moves an edge and changes what merges, what corroborates and what a
 scoped search returns, and an interval belongs to a `(node, source)` pair.
 `reassign_metacontext` takes an optional `assign`, so moving a claim from
-metacontext A to metacontext B never passes through the state of holding none;
-withdrawing a node's last metacontext is a
-promotion taken with `to_base_reality=True` as an acknowledgment, because a
-flat refusal would have left the tool unable to fix the case it was built
-for. A refusal that blocks the motivating example is a design error, not a
-safety feature.
+metacontext A to metacontext B never passes through the state of holding
+none. A withdrawal that would leave a node with no metacontext is refused,
+since such a node shares a metacontext with nothing and is never compared,
+merged or returned by a scoped search. The withdrawal deletes the edge rather
+than marking it, because every reader that derives metacontexts would have to
+subtract a marker, and one that missed it would fail open.
 
 ### 6.6 Review is per graph, and says so
 
@@ -773,17 +612,17 @@ from, so silent scoping becomes stated scoping.
 
 **The `elsewhere` locator** is one count per other graph, zeros included, no
 rows and no ids, so *there is more elsewhere* is something the reviewer is
-told rather than has to think of. Reading another graph on SurrealDB means
-borrowing the connection, which takes the graph guard's mover turn, so
-`review` is in `MOVES_THE_GRAPH`: a read that declares itself a mover,
-excludes other tool calls for its duration, and reads a single instant in
-exchange. **A locator may overcount and must never undercount**: only the
-filters `query_decisions` implements are mirrored into the sweep (`agent_id`,
-`since`, `until`), `certainty_ceiling` and `mode="unreviewed"` are not, and
-`elsewhere.counted_with` says which ran. A count too high costs a wasted
-look; a count too low costs the look. The graph is the tag on a count read
-from it, never a field stored on a row, which would be free to disagree with
-where the row actually lives.
+told rather than has to think of. **A locator may overcount and must never
+undercount**: only the judge and time filters are mirrored into the count, and
+the response says which ran. A count too high costs a wasted look; a count too
+low costs the look. The graph is the tag on a count read from it, never a field
+stored on a row, which would be free to disagree with where the row actually
+lives. Reading another graph on SurrealDB means borrowing the connection, so
+`review` is in `MOVES_THE_GRAPH` and takes the graph guard's mover turn on
+every backend: it excludes other tool calls for its duration and reads a
+single instant in exchange. The SQLite, Postgres and in-memory backends read
+another graph's own file, schema or store and borrow nothing, but take the
+turn all the same.
 
 ---
 
@@ -803,14 +642,6 @@ two `sourced_from` edges genuinely collapse into one. `metadata.merged_from`
 names the nodes that merged, not their edges.
 
 ### 7.2 Where merge information lives
-
-| Where | What |
-|---|---|
-| survivor node, `metadata.merged_from` | the ids that merged into this survivor, set once at construction |
-| survivor node, `metadata.merge_undo` | the pre-merge edge partition (§7.3), bounded (§7.4) |
-| each retired source, `lifecycle` | `{because: merged, counterpart: <survivor>, retired_at, restored_at}` |
-| graph edges | `merged_into` (source → survivor), `evidence_merged` (to dependents) |
-| the journal | who merged, when, why, how certain |
 
 What grows is the chain: `A+B→S1`, then `S1+C→S2`, so unwinding `S2` back to
 `A, B, C` needs both partitions. Depth is a property of the lineage, not of
@@ -832,10 +663,8 @@ against the graph's own cleanup.
 
 `merge_undo_depth`, default 10, a per-graph setting (`configure_merge`),
 bounds how far back along the `merged_into` chain partitions are retained.
-On each merge, the chain is walked back from the new survivor and
-`merge_undo` cleared on any ancestor deeper than the limit. Eviction runs
-after the transaction, so a merge that fails evicts nothing, and it is
-idempotent.
+Eviction runs after the merge transaction, so a merge that fails evicts
+nothing, and it is idempotent.
 
 Ten, because the bound targets the single claim that keeps absorbing
 restatements (document 3's phrasing into the survivor, then document 4's,
@@ -869,17 +698,9 @@ configured value raises past this.
 ### 7.6 What a reversal restores
 
 Reversing returns the graph to the state it had before the merge, and
-reversing back and forth N times is indistinguishable from doing it once.
-
-| The merge did | Reversal does |
-|---|---|
-| moved A and B's knowledge edges onto S | replays the captured partition, splitting an edge that collapsed when both cited one document |
-| A, B → `MERGED` | → `ACTIVE` |
-| deleted an edge between A and B outright (a self-loop after migration) | recreates it (`intra_set`) |
-| wrote `merged_into` A→S, B→S and `evidence_merged` on dependents | deletes them |
-| appended a lifecycle episode to A and B | closes it with `restored_at` and `restored_by` |
-| created survivor S | deletes it, and its `EmbeddingRecord` (§7.7) |
-| | appends a reversal `DecisionRecord` with `reviews` and `supersedes` set, carrying `survivor_content` so the withdrawn wording stays quotable |
+reversing back and forth N times is indistinguishable from doing it once. The
+reversal's own journal row carries the survivor's content, so the withdrawn
+wording stays quotable after the node holding it is gone.
 
 No new flag is raised on the dependents: the merge re-pointed each
 dependent's `derived_from` onto S and flagged it `evidence_merged`; reversal
@@ -902,12 +723,12 @@ content is `extraction_method: "agent:merge"`, a synthesis sourced from no
 document, and the merge stays in the journal.
 
 **There is no `delete_node` method.** The deletion lives inside
-`reverse_merge_tx`, on the protocol and both backends, with the never-expose
-note on all three. Atomicity: a standalone delete after the reversal
+`reverse_merge_tx`, on the protocol and every backend, with the never-expose
+note on each. Atomicity: a standalone delete after the reversal
 transaction would put the one irreversible step outside the rollback. And the
 safest way to never expose a hard delete is not to have one: a public method
-guarded by a comment is a capability plus a request not to use it. Both
-backends refuse a survivor that still has edges rather than dropping them, so
+guarded by a comment is a capability plus a request not to use it. Every
+backend refuses a survivor that still has edges rather than dropping them, so
 a guard bug fails loudly inside a transaction that rolls back. The
 `EmbeddingRecord` goes with the node, because the vector is stored per item
 and deleting the node alone would strand an entry the index still returns.
@@ -920,21 +741,12 @@ oscillation nobody wants. The signal already exists: every merge appends a
 `restored_at`, so one completed cycle leaves one closed `merged` episode on
 each source, in a list that is never trimmed.
 
-```python
-def completed_merge_cycles(node: EpistemicNode) -> int:
-    return sum(
-        1
-        for episode in node.lifecycle
-        if episode.because is NodeStatus.MERGED and episode.restored_at is not None
-    )
-```
-
 Counted per node, not per pair, because pair matching would miss `A+B`,
 then `A+C`, then `A+D`. Free at the point of use, since `merge_facts`
 already loads every source. `merge_cycle_limit`, default 2, a per-graph
 setting: one merge-then-reverse is an ordinary correction, two can be two
-judges disagreeing, the third attempt is oscillation and `merge_refusal`
-refuses it, ordered after the permanent refusals (cross-metacontext, event) and
+judges disagreeing, the third attempt is oscillation and is refused,
+ordered after the permanent refusals (cross-metacontext, event) and
 before the similarity bar, since it is fixable by a human decision. The
 refusal says the limit is configurable, so the setting has to be real or a
 legitimate third merge is blocked with no recourse. Refusal rather than a
@@ -943,69 +755,14 @@ Accepted gap: an agent could evade the check by merging a different source
 set; a system that tried to detect deliberate evasion here would be solving a
 problem nobody has.
 
-### 7.9 The mechanics
+### 7.9 The payload
 
-**The payload type.** Edge values, not references, since the original rows
-may no longer exist:
-
-```python
-class MergedEdge(BaseModel):
-    """One edge exactly as it stood before the merge moved it. The whole
-    edge, `edge.model_dump(exclude={"id"})`, never a hand-listed subset."""
-
-    owner_id: str
-    edge: dict
-    intra_set: bool = False
-
-
-class MergeUndo(BaseModel):
-    source_ids: list[str]
-    edges: list[MergedEdge]
-    merged_at: datetime
-    decision_id: str | None = None
-    survivor_content: str = ""
-```
-
-The whole edge, because a hand-listed subset omitted `metadata` and
-`created_at` in a first draft and would have stripped `judged_by` from every
-edge it replayed. A partial copy of a model is a bug with a delay on it.
-
-**Where it lives.** `metadata["merge_undo"]`, parsed through `MergeUndo`.
-`Topic`, `Fact` and `Inference` share no base class, so a typed field would
-be added three times for a payload that only exists on merge survivors, and
-`merge_nodes` is generic over `EpistemicNode`, so merged topics get the same
-treatment.
-
-**Capture point.** `merge_nodes` in `pipelines/graph_construction/versioning.py`
-reads each source's edges before migration (two reads per source,
-pre-transaction), builds `MergeUndo`, and lets `merge_nodes_tx` persist it in
-the same transaction as the merge. Judgment edges are skipped by the
-migration loop before it reaches the self-loop branch and survive intact on
-the sources, so `intra_set` covers the rest: a user `related` edge, a
-`supports` edge between two merging facts.
-
-**The protocol.** `reverse_merge_tx(survivor, source_nodes, restored_edges, *,
-restored_at, delete_edge_ids)` on both backends applies a plan; `reverse_merge`
-in `versioning.py` builds it, runs the guard, replays the payload and
-collects the edges to delete, so the two backends cannot develop different
-opinions about what a reversal means. The refusal for a survivor with no
-`merge_undo` says whether the payload aged past `merge_undo_depth` or the
-node was never a merge survivor, since one is permanent and the other is a
-mistake.
-
-**Tests**, `tests/pipelines/test_merge_reversal.py` and
-`test_merge_undo_capture.py`: merge then reverse restores every source with
-its original edges, including two sources citing one document; two cycles
-leave the active graph identical to one and `lifecycle` two episodes longer;
-the survivor is gone from `get_node` and from search on both backends; each
-guard refuses with a distinguishable reason; an evicted payload refuses
-differently from a node that never had one; the third merge of an
-oscillating pair refuses on `merge_cycle_limit` and raising the setting lets
-it through; an intra-set edge survives the cycle; edge `metadata` and
-`created_at` survive, `judged_by` specifically; reversal refuses when S
-carries a post-merge contradiction, assessed verdict, tag or user edge; the
-survivor's embedding is gone; a partial failure mid-transaction leaves the
-graph as it was.
+Each moved edge is stored whole, as values rather than references, since the
+original rows may no longer exist, and never as a hand-listed subset, which
+drops whatever it forgets to name: leaving out `metadata` would strip
+`judged_by` from every edge a reversal replays. It lives in the survivor's
+`metadata` rather than a typed field, because `Topic`, `Fact` and `Inference`
+share no base class and merge is generic over all three.
 
 ---
 
@@ -1041,126 +798,13 @@ question (`WARNINGS_AND_SETTINGS.md`).
 
 ---
 
-## 10. Where the mechanics live
-
-### 10.1 Merge capture, cycle limit, reversal
-
-§7.9. `merge_nodes` captures; `merge_refusal` in
-`pipelines/reflection/fact_dedup.py` counts cycles; `reverse_merge` and
-`reverse_merge_tx` reverse; `configure_merge` holds `merge_undo_depth` and
-`merge_cycle_limit` as per-graph overrides with injectable defaults
-(`DEFAULT_MERGE_UNDO_DEPTH`, `DEFAULT_MERGE_CYCLE_LIMIT`).
-
-### 10.2 Similarities and the `assessed` edge
-
-`EdgeType.ASSESSED` in `REVIEW_EDGE_TYPES`;
-`pipelines/reflection/similarity_decisions.py`;
-`apply_reflection(similarities=[…])`; `ALREADY_JUDGED_EDGE_TYPES` in
-`contradiction_detection`; `JUDGMENT_EDGE_TYPES` consulted by
-`migration_disposition` before the status branch; `retracted_similarity` in
-`DISQUALIFYING_EDGE_TYPES`, read by corroboration. Corroboration reads
-`SIMILARITY` only, with a test that an `assessed`-only pair does not
-corroborate.
-
-### 10.3 The registry and its approval channels
-
-`Agent`, `AgentDescription`, `RetirementEpisode`, `JudgeRef` in
-`core/types.py`; the `agent` table and the `approved_agent_ids` graph-state
-field on both backends; `claim_agent` over elicitation;
-`EPIMEMER_APPROVED_AGENTS`; the `epimemer` CLI (`agents confirm`, `agents
-list`, `agents rename`, `agents retire`, `agents reinstate`, `agents delete`,
-`agents require`).
-
-**Config seeding runs on every graph the server lands on**, not only at
-connect. Approval is per graph, so connect-time seeding alone would leave
-every other graph unapprovable on an embedded backend, one `use_graph` later.
-Seeding is applied before the judge is re-checked, or configuration would
-clear a judge it was about to admit. `use_graph` re-validates the judge rather
-than failing the switch, because a graph switch must not fail over an identity
-feature the caller never used. A claim binds whether or not the client opened
-an MCP session, since the binding lives on the lifespan rather than in session
-state. *Unreachable by the agent*
-and *unreachable by the user* are different failures, and the CLI's refusal
-against an embedded store is action-specific, since two settings live behind
-that wall with different environment variables.
-
-### 10.4 Threading the judge
-
-`JudgeRef` reaches every write tool that records a claim, the storage
-transactions on both backends, and four carriers: `LifecycleEpisode`,
-`NodeEdge`, `ValueSignal` and the node types (§3.1). One nested pair rather
-than two columns, because an agent id without the description version says
-*who* but not *what they claimed to be at the time*. `tools.archive` needs
-no judge because it only exports; the status flip is
-`apply_reflection(archivals=…)`, which is attributed. `require_judge` is one
-gate at the boundary (§3.3.1).
-
-### 10.5 The journal
-
-The `decision` table on both backends, `record_decision`, `get_decision`,
-`query_decisions` (with `agent_ids`, `kinds`, `subject_id`, `subject_ids`,
-`reviews`, `since`, `until`, `limit`), `reviewed_decision_ids`,
-`count_decisions_by_graph`; a row at every writer (§4).
-
-### 10.6 `review`, `apply_review`, `rejudge`
-
-`review()` in `pipelines/review/modes.py`, read-only, `mode` and
-`max_results` plus the narrowing arguments (§6.1); `apply_review` and
-`rejudge` in `pipelines/review/apply.py`, the only writers of `CONFIRMATION`,
-`DISSENT` and `REJUDGMENT`. `confidence` lives on `ValueSignal`, which every
-node type carries, so a signal reading `node.confidence` would raise on a
-`Topic`; the retrieval-declaration parity suite is what catches that class,
-along with an undeclared `retrieved` on a review response, which would grey
-out a subject the moment somebody clicked the decision naming it.
-
-### 10.7 Cross-cutting
-
-- Every protocol method lands on `memory.py` and `surrealdb_adapter.py` in
-  the same change. No capability flags.
-- Settings follow the reflect-threshold pattern: per-graph override,
-  explicit default, no singleton (`merge_undo_depth`, `merge_cycle_limit`,
-  `require_judge`, approved agent ids).
-- Named constants, one declaration each, with a test that reads every
-  declaration.
-- Reversal is one transaction on both backends, with a test that a mid-way
-  failure leaves the graph unchanged. `apply_review` is deliberately not
-  (§6.4).
-
----
-
 ## 11. Rejected
 
-- **Hashing the description into the id** (§2.1). Reword and fragment; paste
-  and collide.
 - **One user-assigned string as id, name and handle.** A name could never be
   corrected, and one character's difference made a second judge with a
   permanently separate history.
-- **A `confirm_agent` MCP tool** (§2.3). A tool the agent calls cannot
-  establish that the user called it.
 - **Session-per-mint.** Makes self-review impossible by construction, and
   fragments one judge across sessions.
-- **A shared registry, or agents as graph nodes** (§2.5).
-- **An ambient current-agent singleton** (§3.2).
 - **A mandatory judge from a fixed release, with blank meaning legacy**
   (§3.3). It bought one meaning by making the field mandatory for ever, a
   large permanent cost to date-stamp a population that needed no date.
-  Guarding against a scar is not the same as needing a guarantee.
-- **A synthetic legacy judge as backfill** (§3.3).
-- **Review state inline on nodes and edges** (§3.4).
-- **A traversable `judged_by` edge** (§3.5).
-- **One `similarity` edge for every decline** (§1.2).
-- **A write on `merge_facts`' refusal, or a standalone `record_similarity`
-  tool** (§1.3). The first turns a call that answered *no* into a write; the
-  second is `link`, which nobody called.
-- **Unrated confidence as a difficulty signal; a `[0.80, 0.85)` band** (§5).
-- **`uncertain` and `difficult` as modes** (§6.2); **`between` as a mode;
-  `graphs=` on `review()`** (§6.1, §6.6).
-- **`reversals` on `apply_review`** (§6.4). It reversed nothing.
-- **`rejudge` growing metacontext and interval fields** (§6.5).
-- **A global undo ring** (§7.3). It would throw away its tail across a
-  session.
-- **Retiring the survivor on reversal; a public `delete_node`** (§7.7).
-- **An inference-only reversal guard** (§7.5).
-- **A field-listed `MergedEdge`** (§7.9).
-- **A warning instead of a refusal for merge oscillation** (§7.8).
-- **A per-node note list for warnings** (§9).

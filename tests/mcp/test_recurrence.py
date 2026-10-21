@@ -6,7 +6,7 @@ backend is needed for: the record written back, the journal row, materialising
 an occurrence through `add_timepoint`, and what a reader sees on
 `query_timeline`.
 
-Both backends via the `storage` fixture.
+Every backend, through the `storage` fixture.
 """
 
 from datetime import UTC, datetime, timedelta

@@ -314,7 +314,7 @@ async def test_failed_batch_rolls_back_under_concurrency(surreal):
         fresh = Topic(content="fresh-partner", source_id="s1")
         collide = Topic(id=squatter.id, content="dupe", source_id="s1")
         # Blind on purpose: the storage protocol names no exception type, and the
-        # two backends refuse with different ones.
+        # backends refuse with different ones.
         with pytest.raises(Exception):  # noqa: B017
             await bad_store.write_batch_tx(nodes=[fresh, collide])
         return fresh.id
@@ -391,7 +391,7 @@ async def test_archival_flip_rolls_back_over_a_real_connection(surreal):
     missing = Fact(content="never stored", source_id="s1")
 
     # Blind on purpose: the storage protocol names no exception type, and the
-    # two backends refuse with different ones.
+    # backends refuse with different ones.
     with pytest.raises(Exception):  # noqa: B017
         await store.set_node_status_tx(
             [*nodes, missing],

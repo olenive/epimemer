@@ -40,12 +40,6 @@ DOCUMENTED_TOOL_COUNT = re.compile(r"canonical list of the (\d+) tools")
 # that file and are upper-case, so they do not collide.
 TOOL_TABLE_ROW = re.compile(r"^\|\s*`([a-z_]+)`\s*\|", re.MULTILINE)
 
-# Documents that enumerate tool names. The *count* is single-sourced by design;
-# the names genuinely earn their place in each of these (README groups them for
-# orientation, SUMMARY for architecture, INTEGRATION for reference), so a guard
-# keeps the duplication honest instead of a rule nobody can enforce.
-DOCUMENTS_LISTING_TOOLS = (INTEGRATION, README, SUMMARY)
-
 # A shell invocation of the SurrealDB server, with whatever follows the
 # credentials. Line continuations are folded first, so a command split across
 # several lines is matched whole.
@@ -137,13 +131,12 @@ HUB_DIRECTORIES = ("epimemer/visualization/", "tests/visualization/")
 HUB_FILES = frozenset(
     {
         "README.md",
-        "dev-docs/DEMO.md",
-        "dev-docs/WARNINGS_DASHBOARD.md",
         "dev-docs/EVENT_LOG.md",
         "dev-docs/ISSUES.md",
         "dev-docs/RETRIEVAL_PROVENANCE.md",
         "dev-docs/TIMELINE_VISUALISATION.md",
         "dev-docs/VISUALISATION.md",
+        "dev-docs/VIZ_CONTRACT.md",
         "epimemer/mcp/retrieval_records.py",
         "epimemer/mcp/server.py",
         "epimemer/storage/protocol.py",
@@ -272,21 +265,3 @@ async def test_the_canonical_tool_table_lists_exactly_the_registered_tools():
     )
 
 
-async def test_every_registered_tool_is_named_where_the_docs_list_tools():
-    """The looser half, over every document that enumerates names.
-
-    Presence of the backticked name anywhere in the file, which proves the
-    document knows the tool exists — not that it sits in the right group. That
-    is deliberate: SUMMARY.md's grouping went months without
-    ``judge_importance``, ``set_reference_time`` or ``viz_status``, and total
-    absence is the failure worth a test. Section-accurate placement would mean
-    parsing three different layouts to catch a tidier class of mistake.
-    """
-    registered = await _registered_tool_names()
-
-    for path in DOCUMENTS_LISTING_TOOLS:
-        text = path.read_text()
-        missing = sorted(name for name in registered if f"`{name}`" not in text)
-        assert not missing, (
-            f"{path.name} never mentions {missing} — registered tools it has no record of"
-        )

@@ -75,7 +75,7 @@ export const graphSelectorTitle = (state: GraphListState): string => {
     case "unavailable":
       // The hub's own words. On the failure this was written for they were
       // "sent 1011 (internal error) keepalive ping timeout", which is the entire
-      // diagnosis — and it used to reach the console and nowhere else.
+      // diagnosis, so it belongs on screen and not only in the console.
       return `this session could not list its graphs: ${state.reason}`;
     case "loading":
       return "loading graphs...";

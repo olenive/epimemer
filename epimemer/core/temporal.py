@@ -4,8 +4,7 @@ This module is about when a claim was **true**. That is *valid time*, and it is
 a different axis from *transaction time* — `created_at`, `superseded_at` and
 `graph_as_of`, which record what the graph held and when. The two blur silently
 once there is code and are near-impossible to separate afterwards, so the
-validity model
-fixed the vocabulary before the fields existed and this module keeps to it.
+validity model fixes the vocabulary and this module keeps to it.
 
 Everything here is pure: no clock is read, no storage is touched, no network
 call is made, so every answer is a function of the arguments. Where validity
@@ -39,8 +38,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # `unknown` and `unbounded` being different values is the load-bearing part.
 # *"The city is named Placeberg"* has an unknown start — it may or may not
 # always have been so, and assuming either is a fabrication. *"Water is H₂O"*
-# has no start. Collapsing the two was the first draft of this design and it
-# reproduced the empty-set ambiguity one level down. It is also why `Timepoint`
+# has no start. Collapsing the two reproduces the empty-set ambiguity one level
+# down. It is also why `Timepoint`
 # is not reused: its `start: datetime | None` means both, and it models *mention*
 # time (dates named in content), which is a different thing from *true during*.
 # One fact routinely has both — *"the 1991 renaming"* mentions 1991, while *"the

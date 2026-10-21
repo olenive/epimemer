@@ -5,9 +5,10 @@ what it found goes through.
 
 **Confirming costs something, or the treadmill moves up a level.** If agent 2
 checks a decision and agrees, and nothing records that, agent 3 does the same
-work again — the unrecorded-verdict defect one layer higher. So a review is a `DecisionRecord`
-pointing back, and `reviewed` stays derived from a row's existence rather than
-stored as a flag on a row that claims to be append-only (§3.4).
+work again, the unrecorded-verdict defect one layer higher. So a review is a
+`DecisionRecord` pointing back, and `reviewed` stays derived from a row's
+existence rather than stored as a flag on a row that claims to be append-only
+(§3.4).
 
 **Neither writer changes the graph, and that is deliberate for opposite
 reasons.**
@@ -17,12 +18,11 @@ reasons.**
   `reverse_merge`, for an archival `restore`, for a `one_claim` verdict a
   `distinct` through `apply_reflection` — each with its own refusals, its own
   transaction and its own journal row that sets `supersedes` because it really
-  did supersede something. A dispatcher over four such tools is the fan-out scope-blindness
-  refused: *a convenience less safe than the sequence it replaces is not a
-  convenience.* And the reviewer who most needs to record a dissent is the one
-  whose undo was **refused** — a merge whose survivor has since been contradicted
-  cannot be reversed at all (§7), and before this there was nowhere to put the
-  finding.
+  did supersede something. A dispatcher over those tools would be *a
+  convenience less safe than the sequence it replaces*, which is not a
+  convenience. And the reviewer who most needs to record a dissent is the one
+  whose undo was **refused**: a merge whose survivor has since been contradicted
+  cannot be reversed at all (§7), and the dissent is where that finding goes.
 
 So a dissent sets `reviews` and never `supersedes`. A row claiming to supersede
 a decision whose effect still stands would put the journal in disagreement with
@@ -58,7 +58,7 @@ from epimemer.storage.protocol import StorageBackend, judge_aliases
 # The kinds whose row records a decision that *created* a node, and therefore
 # set the priors `rejudge` revises. A rejudgment points its `reviews` at the
 # oldest of these naming the node — the decision itself, not an intervening
-# confirmation of it, which is the rule §10.5 already applies to pair verdicts.
+# confirmation of it, which is the rule §4.1 already applies to pair verdicts.
 ORIGINATING_KINDS: tuple[DecisionKind, ...] = (
     DecisionKind.INGEST,
     DecisionKind.SYNTHESIS,
@@ -361,7 +361,7 @@ async def rejudge_node(
 
     # `reviews` names the decision that made the original judgment, which is the
     # oldest originating row rather than the newest: a rejudgment revises the
-    # decision, not a later confirmation of it (§10.5's rule for pair verdicts).
+    # decision, not a later confirmation of it (§4.1's rule for pair verdicts).
     originating = await storage.query_decisions(subject_id=node_id, kinds=list(ORIGINATING_KINDS))
     reviews = originating[-1].id if originating else None
 

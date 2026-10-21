@@ -610,7 +610,7 @@ class TestVectorSearchStatusFilter:
         assert await store.vector_search([1.0, 0.0, 0.0], "m", k=10, statuses=frozenset()) == []
 
     async def test_k_counts_results_not_rows_examined(self, store):
-        """The filter runs before the truncation, on both backends.
+        """The filter runs before the truncation, on every backend.
 
         A backend that truncated first would return fewer than `k` usable hits
         whenever a retired node ranked above an active one — which is exactly
@@ -1525,6 +1525,100 @@ class TestVizListMetacontexts:
         assert list(await store.viz_list_metacontexts("no-such-graph")) == []
 
 
+class TestVizListEmbeddings:
+    """A viewer that lays nodes out by meaning reads their vectors from a named
+    graph, so the read names its graph and leaves the active connection where
+    it found it, as the other viz reads do."""
+
+    async def _embedded(self, store, *contents: str, model_id: str = "model-a"):
+        facts = [Fact(content=content, source_id="s1") for content in contents]
+        for i, fact in enumerate(facts):
+            await store.store_node(fact)
+            await store.store_embedding(
+                EmbeddingRecord(item_id=fact.id, model_id=model_id, vector=[float(i), 0.5])
+            )
+        return facts
+
+    async def test_no_items_named_means_every_embedding(self, store):
+        facts = await self._embedded(store, "a", "b")
+
+        listed = await store.viz_list_embeddings(store.current_database)
+
+        assert {e.item_id for e in listed} == {f.id for f in facts}
+
+    async def test_named_items_restrict_the_answer(self, store):
+        kept, dropped = await self._embedded(store, "kept", "dropped")
+        bare = Fact(content="unembedded", source_id="s1")
+        await store.store_node(bare)
+
+        listed = await store.viz_list_embeddings(
+            store.current_database, item_ids=[kept.id, kept.id, bare.id, "no-such-item"]
+        )
+
+        assert [e.item_id for e in listed] == [kept.id]
+        assert dropped.id not in {e.item_id for e in listed}
+
+    async def test_the_model_filter_applies_with_and_without_items(self, store):
+        [fact] = await self._embedded(store, "f", model_id="model-a")
+        await store.store_embedding(
+            EmbeddingRecord(item_id=fact.id, model_id="model-b", vector=[9.0, 9.0])
+        )
+        home = store.current_database
+
+        everything = await store.viz_list_embeddings(home, model_id="model-b")
+        by_item = await store.viz_list_embeddings(home, item_ids=[fact.id], model_id="model-b")
+
+        assert [(e.model_id, e.vector) for e in everything] == [("model-b", [9.0, 9.0])]
+        assert [(e.model_id, e.vector) for e in by_item] == [("model-b", [9.0, 9.0])]
+        assert len(await store.viz_list_embeddings(home, item_ids=[fact.id])) == 2
+
+    async def test_an_empty_list_matches_nothing(self, store):
+        await self._embedded(store, "f")
+
+        assert list(await store.viz_list_embeddings(store.current_database, item_ids=[])) == []
+
+    async def test_vectors_come_back_whole(self, store):
+        fact = Fact(content="v", source_id="s1")
+        await store.store_node(fact)
+        await store.store_embedding(
+            EmbeddingRecord(item_id=fact.id, model_id="model-a", vector=[0.1, 0.2, 0.3])
+        )
+
+        [got] = await store.viz_list_embeddings(store.current_database, item_ids=[fact.id])
+
+        assert got.vector == [0.1, 0.2, 0.3]
+        assert got.model_id == "model-a"
+
+    async def test_more_items_than_fit_in_one_statement(self, store):
+        """Past the adapter's chunk size, where a batched fetch loses rows."""
+        facts = await self._embedded(store, *(f"f{i}" for i in range(300)))
+
+        listed = await store.viz_list_embeddings(
+            store.current_database, item_ids=[f.id for f in facts]
+        )
+
+        assert sorted(e.item_id for e in listed) == sorted(f.id for f in facts)
+
+    async def test_reads_another_graph_without_switching_the_active_one(self, store):
+        home = store.current_database
+        await self._embedded(store, "at home")
+        await store.switch_database("other")
+        [elsewhere] = await self._embedded(store, "elsewhere")
+        await store.switch_database(home)
+
+        listed = await store.viz_list_embeddings("other")
+        named = await store.viz_list_embeddings("other", item_ids=[elsewhere.id])
+
+        assert [e.item_id for e in listed] == [elsewhere.id]
+        assert [e.item_id for e in named] == [elsewhere.id]
+        assert store.current_database == home
+        assert len(await store.viz_list_embeddings(home)) == 1
+
+    async def test_unknown_graph_is_empty_not_an_error(self, store):
+        assert list(await store.viz_list_embeddings("no-such-graph")) == []
+        assert list(await store.viz_list_embeddings("no-such-graph", item_ids=["x"])) == []
+
+
 class TestBackendName:
     """Every backend exposes a stable, human-readable `backend_name` label,
     surfaced to the visualization UI so a viewer can tell an in-memory store
@@ -1587,7 +1681,7 @@ def _assert_names_the_server_and_hides_the_password(location: str) -> None:
 
 class TestReflectCounter:
     """The "stores since last reflect" count is graph state, so it must behave
-    identically on both backends: absent reads as zero, bumps accumulate, a
+    identically on every backend: absent reads as zero, bumps accumulate, a
     reset reports what it cleared, and graphs never share a count."""
 
     async def test_unused_graph_reads_zero(self, store):
@@ -1704,11 +1798,10 @@ class TestVectorSearchReturnsOnlyActiveNodes:
     """Retired nodes must never resurface through similarity search.
 
     This is the invariant the status filter exists for, and it is protocol-level:
-    both backends promise it, and each implements it differently — in-memory by
-    filtering candidates before ranking, SurrealDB inside (or alongside) the
-    ranking query. It previously had no parity coverage at all, only
-    near-duplicate single-backend tests, which is how an optimisation to one
-    implementation could quietly weaken it.
+    every backend promises it, and each implements it its own way, the in-memory
+    store by filtering candidates before ranking and SurrealDB inside (or
+    alongside) the ranking query. Single-backend tests alone would let an
+    optimisation to one implementation quietly weaken it.
 
     The last test here is the one with teeth: a backend that filters *after*
     taking the top k satisfies every other assertion while silently returning
@@ -1748,7 +1841,7 @@ class TestVectorSearchReturnsOnlyActiveNodes:
         assert [item_id for item_id, _ in results] == [topic.id]
 
     async def test_the_type_filter_also_excludes_inactive(self, store):
-        """The typed path is a separate query on both backends."""
+        """The typed path is a separate query on every backend."""
         topic = await self._stored(store, Topic(content="ML", source_id="s1"), [1.0, 0.0, 0.0])
         live = await self._stored(store, Topic(content="AI", source_id="s1"), [0.9, 0.1, 0.0])
         await store.set_node_status_tx([topic], status=NodeStatus.SUPERSEDED, at=datetime.now(UTC))
@@ -2159,7 +2252,7 @@ class TestArchivalStatus:
     Everything else that retires a node (supersede, merge) says the node was
     wrong or duplicated. Archival says it was trivial — the hygiene arm of the
     review loop — and it is the first status flip applied to nodes that are
-    otherwise perfectly good, so the exclusion has to hold on both backends
+    otherwise perfectly good, so the exclusion has to hold on every backend
     rather than only where it was implemented.
     """
 
@@ -2200,7 +2293,7 @@ class TestArchivalStatus:
         assert junk.id in active_ids
 
     async def test_lifecycle_episodes_round_trip(self, store):
-        """The episode list is storage state, so both backends must keep it.
+        """The episode list is storage state, so every backend must keep it.
 
         Written as parity rather than as an in-memory test because it is a
         protocol field: a backend that accepts the write and loses the list on
@@ -2295,8 +2388,8 @@ class TestLifecycleComesFromTheStoredRow:
     loaded before an earlier retirement carries a stale `lifecycle`, and
     appending to that silently drops every episode since.
 
-    Parity rather than a SurrealDB test because the two backends answered
-    differently: `InMemoryStorage` always re-read the stored node, so the same
+    Parity rather than a SurrealDB test because SurrealDB and the in-memory store
+    once answered differently: `InMemoryStorage` always re-read the stored node, so the same
     call produced two different histories depending on where it ran. The failure
     is invisible from behaviour — the node ends up with the right status either
     way, and only the record of how it got there is short.

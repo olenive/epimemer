@@ -10,7 +10,7 @@ The verb set stays closed (`EVENT_LOG.md` §11): the act carries
 `DecisionKind.REOPENED`, which is the name the journal already records it
 under, so the live log and the durable history speak one vocabulary.
 
-Both backends, through the `storage` fixture.
+Every backend, through the `storage` fixture.
 """
 
 import pytest
@@ -47,7 +47,7 @@ def acts(bus) -> list[GraphActionRecorded]:
 
 @pytest.fixture
 def watched(storage, bus):
-    """The `storage` fixture's backend, instrumented. Runs on both backends."""
+    """The `storage` fixture's backend, instrumented. Runs on every backend."""
     return instrument_storage(storage, bus)
 
 

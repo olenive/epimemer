@@ -70,8 +70,9 @@ class TestTheNewValueIsWhatAFreshRowCarries:
 
 
 class TestAnOldRowReadsBackAsTheNewKind:
-    """Both backends answer the same question the same way, by different routes:
-    SurrealDB rewrites the string, and the in-memory store normalises on read."""
+    """SurrealDB and the in-memory store answer the same question the same way,
+    by different routes: SurrealDB rewrites the string, and the in-memory store
+    normalises on read."""
 
     @pytest.fixture
     def embedded_url(self):

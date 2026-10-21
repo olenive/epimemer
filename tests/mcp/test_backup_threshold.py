@@ -51,7 +51,7 @@ def _graph_with_the_real() -> InMemoryStorage:
 
 
 class TestTheCounter:
-    """Both backends, per the parity rule."""
+    """Every backend, per the parity rule."""
 
     async def test_absent_reads_as_zero(self, storage):
         assert await storage.get_backup_counter() == 0

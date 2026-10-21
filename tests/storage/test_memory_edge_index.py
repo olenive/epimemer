@@ -1,9 +1,8 @@
 """`InMemoryStorage` answers edge lookups from an index, and it never drifts.
 
 `get_edges_from` / `get_edges_to` used to filter the whole edge set on every
-call, so every operation that walks nodes and asks for their edges cost O(N·E).
-That is why `list_sources` measured *quadratic* in-memory while SurrealDB — which
-answers the same question from an index — measured linear (`dev-docs/BENCHMARKS.md`).
+call, so every operation that walks nodes and asks for their edges cost O(N·E),
+while SurrealDB answered the same question from an index.
 
 An index that silently disagrees with the edges it indexes is worse than no
 index: lookups would start returning wrong answers rather than slow ones. These

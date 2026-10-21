@@ -96,7 +96,7 @@ async def _elsewhere(storage, fact, label):
 class TestThePolicyResolvesWithoutASingleton:
     """Settings are a value passed explicitly, exactly as `ServerConfig` is.
 
-    Tests run two backends and many graphs in one process, so a process-wide
+    Tests run every backend and many graphs in one process, so a process-wide
     mutable instance makes every test that changes a setting order-dependent with
     every test that reads one — and the policy is per graph, so one instance
     could not answer *what is the policy here* after a `use_graph` anyway.

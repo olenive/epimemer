@@ -6,22 +6,20 @@
  * the cytoscape canvas, the timeline SVG, the graphviz DOT — so those read a
  * palette from here instead.
  *
- * Since the token migration the neutrals are not written here twice. The
- * chrome-adjacent fields of `Palette` read the same custom properties the
- * Tailwind classes do (`src/tokens.css`), which is what stops the two drifting:
- * the light-mode darkening pass previously had to fix the timeline axis apart
- * from the header it sits under. Only the genuinely draw-only fields, the
- * graphviz set, still carry literals.
+ * The neutrals are written once. The chrome-adjacent fields of `Palette` read
+ * the same custom properties the Tailwind classes do (`src/tokens.css`), which
+ * is what stops the two drifting: the timeline axis and the header it sits
+ * under take one value. Only the genuinely draw-only fields, the graphviz set,
+ * still carry literals.
  *
  * Two palettes live here. `Palette` is the **neutrals** for the drawn panels.
  * `SemanticPalette` is the hues that say *what kind of thing* something is, and
- * it is shared by every panel that draws one — which it had to become: the
- * graph drew facts green and inferences amber while the timeline drew the same
- * two blue and violet, in one split pane (#56).
+ * it is shared by every panel that draws one, so the graph and the timeline,
+ * side by side in one split pane, cannot draw one kind in two colours.
  *
- * Both vary by theme. The hues used not to, on the reasoning that a saturated
- * colour reads on either background — but that is also what let the two tables
- * drift, since neither had a theme axis forcing anyone to reconcile them.
+ * Both vary by theme. A saturated colour reads on either background, but hues
+ * fixed across themes are what once let two tables drift, since neither had a
+ * theme axis forcing anyone to reconcile them.
  */
 
 export type Theme = "light" | "dark";
@@ -205,8 +203,9 @@ export interface SemanticPalette {
   inference: string;
   segment: string;
   document: string;
-  /** Retired-but-still-true-of-its-period. The timeline desaturates; the graph
-   *  uses opacity instead, so this is currently timeline-only. */
+  /** Retired-but-still-true-of-its-period. No panel draws with it: the graph
+   *  fades a historical node by opacity, and the timeline mutes a historical
+   *  strip by opacity on the strip's own hue. */
   historical: string;
   /** Proposals awaiting review — a reflect-proposed boundary, a soundness flag. */
   pending: string;
@@ -215,9 +214,7 @@ export interface SemanticPalette {
    * the plate behind its chip.
    *
    * A second value rather than the hue at low opacity, because a proposal is
-   * drawn over whatever the panel already has there. The grammar's own table
-   * writes the pair together, "`#9a6b00` on `#f6ecd4`"
-   * (`TIMELINE_VISUALISATION.md` §13.3).
+   * drawn over whatever the panel already has there.
    */
   pendingSurface: string;
   contradiction: string;
@@ -279,7 +276,7 @@ export const semanticPaletteFor = (theme: Theme): SemanticPalette =>
  * Deliberately outside `SemanticPalette`: every strip is direct-labelled with
  * its source, so its hue carries no meaning, and a hue that means nothing must
  * not sit in the table of hues that do, where it would compete with them
- * (TIMELINE_VISUALISATION.md §13.3). The only requirement on the rotation is
+ * (VISUALISATION.md C.6). The only requirement on the rotation is
  * that neighbouring lanes differ, which is why it is short and wraps.
  */
 const STRIP_HUES: Record<Theme, readonly string[]> = {
@@ -302,7 +299,7 @@ export const stripHue = (theme: Theme, lane: number): string => {
  * land at the same appearance as active-and-not.
  *
  * It lives here rather than in a panel because both panels dim, and a second
- * implementation is how they would come to disagree — which is #56, exactly.
+ * implementation is how they would come to disagree.
  */
 export const desaturate = (hex: string, amount = 0.85): string => {
   const channels = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));

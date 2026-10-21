@@ -12,24 +12,24 @@ below it carries. **Tier 1 comes first, and that is itself a rule**: absence is
 not a claim of doubt, so an unrated decision never sorts above one an
 agent actually flagged.
 
-**The whole existing corpus is tier 2**, which is why this earns its place at
-all: nothing supplies a `certainty` yet, so on today's graph the order is
-entirely derived — and it still works. As certainties accumulate tier 1 fills
+**Most decisions are tier 2**, which is why this earns its place at all: only
+the review writers (`apply_review`, `rejudge`) take a `certainty`, so the order
+is mostly derived, and it still works. As certainties accumulate tier 1 fills
 from the top and the order improves with nothing else changing.
 
-**Unrated confidence is not a signal**, and the first draft of §5 said it was.
-The confidence ladder defines absence as *the ordinary case* — "stated plainly, no
-specific reason to doubt → omit the field" — and it is the majority state (125
-unrated on `memory`). Reading absence as thinness floods the list with ordinary
-decisions and re-commits exactly the sin that ladder fixed.
+**Unrated confidence is not a signal.** The confidence ladder defines absence as
+*the ordinary case* ("stated plainly, no specific reason to doubt → omit the
+field"), and it is the majority state (125 unrated on the development graph).
+Reading absence as thinness floods the list with ordinary decisions and
+re-commits exactly the sin that ladder fixed.
 
 One population these are blind to, recorded rather than papered over: rows
 written before 2026-08-19 carry a literal `0.5` confidence and are *genuinely*
 unrated, so they pass the thin-source test as rated-ordinary. Nothing can
 separate them now.
 
-**There is no similarity band.** §5 cut the first draft's `[0.80, 0.85)` — the
-number was invented, and the only two above-bar scores on record sit above it,
+**There is no similarity band.** §5 cut a `[0.80, 0.85)` band: the number was
+invented, and the only two above-bar scores on record sit above it,
 so it would have selected neither. Measuring the above-bar distribution is the
 precondition for adding it back.
 """
@@ -99,7 +99,7 @@ def merge_source_count(record: DecisionRecord) -> int:
     `merge_facts` journals `[survivor, *sources]` — the survivor first, so a
     reversal looking for *the merge that made this node* finds it by the id it
     holds. So the source count is one less than the subject count, and reading
-    it as the subject count would call every three-source merge wide.
+    it as the subject count would call every two-source merge wide.
     """
     return max(len(record.subject_ids) - 1, 0)
 

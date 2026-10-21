@@ -7,32 +7,10 @@ The behaviour a caller sees is specified in `docs/`; measurements are in
 
 ## Core Concept
 
-A semantic memory system with a dual-space design: vector embeddings are the
-primary representation, and a typed graph is derived on top. Rather than
-holding static triples, the system reorganises itself over time, merging,
-splitting and re-judging its own content under agent review.
-
-## Architecture Overview
-
-```
-[ Incoming Data ]
-        ↓
-[ Ingestion Layer ]          append-only, minimal logic
-        ↓
-[ Semantic Segmentation ]    topic-aware, non-overlapping segments
-        ↓
-[ Decomposition ]            extract typed nodes (topics, facts, inferences)
-        ↓
-[ Representation ]           embed via pluggable embedding providers
-        ↓
-[ Graph Construction ]       link nodes by typed relationships
-        ↓
-[ Storage Layer ]            in-memory, or SurrealDB (embedded or served)
-        ↓
-[ Query Layer ]              semantic + lexical + structural, rank-fused
-        ↓
-[ Reflection ]               deliberate consolidation (cluster, merge, prune)
-```
+A semantic memory system: a typed graph of topics, facts and inferences, each
+carrying its provenance, with an embedding index over it for retrieval. The
+graph is reorganised over time, merged, split and re-judged, under agent
+review.
 
 ## Node Types
 
@@ -52,7 +30,7 @@ characters and two dated tags then look like duplicates.
 ### Facts
 Atomic, verifiable, grounded statements tied to source material. Each fact
 tracks its provenance and may carry a confidence prior: the ingesting agent's
-reading of how well the record backs the claim, supplied once and never
+reading of how well the record backs the claim, supplied by a judge and never
 computed. A fact also carries a **claim kind**, `state` (a condition holding
 over a period) or `event` (an occurrence), judged at ingest and read by
 deduplication, which merges states and never events. It is nullable: an
@@ -64,55 +42,44 @@ provisional and revisable. Several competing inferences from the same
 evidence may coexist. They are kept distinct from facts so that a reader
 always knows which is which.
 
-## Dual-Space Design
+## Embeddings and the graph
 
-### Vector space (semantic)
-- Embeddings are the primary representation, not the graph.
-- Several embedding models can cover one item, partitioned by `model_id`.
-  Embeddings are appended, never overwritten, so a new model can be indexed
-  in the background with no downtime.
-- Embeddings are treated as indexed views over the data, not the data itself.
+The graph is the record: nodes, their provenance and every judgment made
+about them. Embeddings are an index over it, used to retrieve and to nominate
+candidates for review.
 
-### Graph space (structural)
-- Derived from, but not dependent on, a specific embedding model.
-- Relationships are typed: `about`, `contains`, `implies`, `supports`,
-  `extracted_under_topic`, `derived_from`, `similarity`, `contradiction`, and
-  so on.
-- Edges carry a `weight` and a free-form `metadata` dict.
-- Structure is contextual and interpretive, not ground truth.
+- Each vector is a record of its own, tagged with the `model_id` that made it,
+  and search reads only the configured model's. A topic node whose name or
+  description changes is re-embedded in place, so a stale vector never ranks
+  beside the new one.
+- A bundle leaves the embeddings out, and import recomputes them with the
+  importing server's model, which is how a graph moves to a new model.
+- Edges are typed (`about`, `contains`, `supports`, `similarity`,
+  `contradiction` and so on) and carry a `weight` and a free-form `metadata`
+  dict. Ingest writes the structural ones from each passage; `similarity` and
+  `contradiction` edges are written by an agent's verdict.
 
 ## Segmentation and Topic Assignment
 
-Text is broken into non-overlapping, variable-length segments aligned to
-semantic boundaries. Two strategies exist: **paragraph split** (the default)
-and **semantic similarity drop** (TextTiling-style: embed each sentence, cut
-where similarity between neighbours drops sharply; cheap, no LLM needed).
-The server reports `doubts` about its own cut, and where a rule cannot see the
-shape of a document (speaker turns, numbered clauses, a change of subject
-inside a paragraph) the **calling agent** states the cut itself, as anchors:
-the text each passage begins with. It does so on `segment`, or with
-`resegment` before any claim cites a passage; the server checks the anchors
-against the text and makes no model call of its own
-([docs/INGEST.md](docs/INGEST.md), `dev-docs/SEGMENTATION.md`).
+The server cuts text into non-overlapping passages, by paragraph (the default)
+or where similarity between neighbouring sentences drops, reports `doubts`
+about its own cut, and accepts the calling agent's own cut stated as anchors
+([docs/INGEST.md](docs/INGEST.md)).
 
 The segment-to-topic relationship is **many-to-many**: a segment can be
 `about` several topics and a topic can span several segments, represented by
-edges rather than duplicated text.
-
-**At ingestion** (write fast): the calling agent extracts one or more topic
-descriptions per segment and passes them to `store_decomposition`. Each
-becomes a new topic node, with no deduplication at this stage.
-
-**At reflect** (organize slow): topic descriptions are embedded and clustered,
-and similar topics are merged into unified nodes. The originals are kept,
-linked to the survivor by `merged_into` edges.
+edges rather than duplicated text. At ingestion each topic description the
+agent extracts becomes a new topic node, with no deduplication. At reflect,
+`reflect` nominates similar topics, and the merges an agent approves through
+`apply_reflection` collapse them, linked to the survivor by `merged_into`
+edges.
 
 ## Key Design Principles
 
 ### "Write fast, organize slow"
 Ingestion is append-only with minimal processing. Expensive restructuring
-(clustering, merging, pruning) happens later, through the deliberate
-`reflect` operation. This avoids latency spikes and premature structural
+(clustering, merging, pruning) happens later: `reflect` nominates it and the
+agent's verdicts apply it. This avoids latency spikes and premature structural
 commitment.
 
 ### Source nodes, topic nodes, and relations are nodes and edges
@@ -127,18 +94,17 @@ its own facts, relate to siblings, and sit in a metacontext:
   resolves, by exact name, to a Topic, the topic node created from that tag,
   and a `tagged_with_topic` edge links the node to it. That topic node joins
   the ingest's metacontext, so a name stands in every metacontext it is used
-  from. Consolidating tags *is* topic merge. That edge is a retrieval index and carries no evidential
-  weight: `supports` is the edge corroboration reads, and nothing weighs this
-  one.
+  from. Consolidating tags *is* topic merge. That edge is a retrieval index and
+  carries no evidential weight: `supports` is the edge corroboration reads, and
+  nothing weighs this one.
 - **Relations are open vocabulary**: engine edges are a typed enum; user
   relations use one `RELATED` sentinel with a free `label` and a `kind`
   (`relationship`, followed in retrieval, or `attribution`, not followed).
   Behaviour is finite and hardcoded; the vocabulary is open. A label also has
-  a **record**: an id, a description, and something a decision about it can
-  name, so `reflect` can nominate likely synonyms and
-  `apply_reflection(relation_verdicts=…)` can record what was decided about a
-  pair. **Nothing rewrites a label**: edges are not versioned, so a bulk
-  relabel would be the one irreversible operation in the system.
+  a **record**, so `reflect` can nominate likely synonyms and a verdict about
+  a pair can be recorded. **Nothing rewrites a label**: edges are not
+  versioned, so a bulk relabel would be the one irreversible operation in the
+  system.
 
 These are separate from metacontexts. A metacontext changes retrieval scope;
 source nodes, topic nodes and relations are structure, and
@@ -159,12 +125,6 @@ there and nowhere afterwards. They are supplied per node, land on the
 knows from world knowledge, which the document does not give, is neither, and
 must not be supplied at all.
 
-### Test-driven development, with analysis and benchmarking
-The memory system's correctness is hard to assess during normal use, so
-development is test-first, with a mock embedding provider so no model is
-downloaded, a dashboard that shows each pipeline as it runs, and
-benchmarks that measure rather than estimate (`dev-docs/BENCHMARKS.md`).
-
 ## Node Value Signals
 
 Every node carries a `ValueSignal`. One member is a score, one is a judgment,
@@ -173,15 +133,14 @@ judgment cannot, and use is an event rather than either.
 
 - **Confidence** (0.0–1.0, nullable): how well the record would back the
   claim if challenged. A **caller-supplied prior**, never computed, given at
-  `store_decomposition` on a four-value ladder (0.3 hedged or partisan; 0.5
-  ordinary, so omit it; 0.7 established; 0.9 primary or authoritative), with
-  an optional one-line `confidence_basis` saying why. **Omitting it stores
-  absence, not 0.5**: "nobody assessed this" and "assessed, and ordinary" are
-  different states. Ranking code reads absence as 0.5 via `rated_confidence`;
-  display code passes the absence through. The scale is the same in every
-  metacontext, measured against that metacontext's own record: a fictional fact can
-  honestly score 0.9 if the fiction's material backs it, because confidence
-  answers "does the metacontext's record support this claim", not "is this real".
+  `store_decomposition` with an optional one-line `confidence_basis` saying
+  why. **Omitting it stores absence, not 0.5**: "nobody assessed this" and
+  "assessed, and ordinary" are different states. Ranking reads absence as 0.5;
+  display passes the absence through. The scale is the same in every
+  metacontext, measured against that metacontext's own record: a fictional
+  fact can honestly score 0.9 if the fiction's material backs it, because
+  confidence answers "does the metacontext's record support this claim", not
+  "is this real".
 - **Importance** (0.0–1.0): does this matter? Moved only by the
   `judge_importance` tool, in either direction, asymptotically toward its
   bound, and every move records a reason. Nothing automatic touches it: a
@@ -195,13 +154,9 @@ judgment cannot, and use is an event rather than either.
 Both clocks are nullable because "never" and "long ago" are different states,
 and only a nullable timestamp can tell them apart.
 
-A merge collapses several nodes into a fresh one, so its signal is rebuilt by
-one shared function, `merged_value_signal`: max importance and confidence,
-the later of each clock, and null losing to any real value. One shared
-function, because a field-by-field rebuild silently resets whatever it
-forgets to name. The `confidence_basis` of whichever source supplied the kept
-confidence travels into the survivor's metadata, so the prior keeps its
-reason.
+A merge rebuilds the survivor's signal from its sources: the highest
+importance and confidence, the later of each clock, and null losing to any real
+value. The `confidence_basis` behind the kept confidence travels with it.
 
 `reflect` reads these signals to nominate candidates and never writes them.
 Never retrieved, not judged important, nothing depending on it: an archival
@@ -212,83 +167,25 @@ review.
 
 Timelines represent when things happened in the world, as opposed to
 `created_at` and `superseded_at`, which track when the *system* learned
-something.
+something. Full detail: [docs/TIMELINES.md](docs/TIMELINES.md).
 
-A `Timeline` is a node type acting as an ordered container of embedded
-`Timepoint`s. Each timepoint has:
-
-- **A stable UUID**, unaffected by reordering, insertion, or value refinement.
-- **A temporal value**: a concrete datetime or interval (optional
-  `start`/`end`), a free-text label ("during the Renaissance"), or both.
-- **A position**, managed by the timeline's ordering, not by the timepoint.
-
-Other nodes link to specific timepoints via `TIMELINK` edges: the edge points
-at the timeline and names the timepoint in its metadata, so it says which
-moment on which timeline in one hop. A node can have several. An edge naming a
-`recurrence_id` in place of a timepoint attaches the node to a rule, where the
-claim holds at every occurrence.
-
-A timeline also carries an optional **`reference_time`**: that clock's own
-*now*, set via `set_reference_time`. It is what makes "current" answerable on
-a timeline that is not wall-clock: a fictional claim is current when its
-interval contains *that timeline's* reference time, so any code asking
-whether a claim holds now must ask the relevant clock rather than
-`datetime.now()`.
-
-Properties worth knowing:
-
-- **Shared timepoints**: two events at the same moment link to the same
-  timepoint; different granularity ("May 5th" against "3pm on May 5th") makes
-  separate ones.
-- **Stability**: adding, reordering or refining timepoints never disturbs
-  existing links, because links reference the UUID. Removing one orphans its
-  links, which is detected and flagged.
-
-### Stated order
-
-A timeline also holds what sources say about the **order** of its points, which
-is how a point nobody dated gets a place in time. An `OrderingConstraint` is one
-source asserting that one point came before another, with the source named and a
-`basis` saying whether the source stated the order in words or a judge read it
-off tense and context. The ordering a query walks is those constraints plus the
-edges two dated points settle between themselves, so "the fire came before the
-flood" from an undated account still puts the fire between what the flood comes
-after and what it comes before: the answer comes back as `earliest` and `latest`
-on the point, derived on read and never written onto the record.
-
-Where the assertions cannot all hold, the timeline records a
-`TemporalContradiction` rather than refusing the write, in the same spirit as a
-contradiction between claims. Two shapes count: a loop in the order, and a point
-squeezed until everything that must precede it ends after everything that must
-follow it begins. The constraints involved stop counting toward the order, the
-points are reported as contested, and `reflect` nominates the dispute until a
-judge answers it, by retiring one constraint, by deciding the point was really
-two events, or by holding it for want of evidence. Two points that turn out to
-be one event are folded together by `merge_timepoints`. Every one of these is
-append-only: a constraint that moves is retired and a fresh one written beside
-it, and a `TIMELINK` a verdict moves is kept with the link that replaced it.
-
-### Recurrence
-
-A timeline also holds **recurrence rules**: a rule stored once, with its
-occurrences computed when someone asks. A rule repeats either by arithmetic (an
-anchor and a period, which needs no calendar and so works on an invented
-timeline) or by the calendar (an RFC 5545 `rrule`, for "the second Tuesday of
-every month"). An occurrence is named by the start the rule gives it, which is
-unique within one rule, so nothing counts occurrences: a number would need a
-walk from the rule's beginning, and a walk that had to be capped would be
-missing exactly where most queries land.
-
-Occurrences are never stored, because a stored expansion is a second thing that
-can disagree with the rule that made it. What can be stored is one occurrence
-turned into an ordinary timepoint, which `add_timepoint` does on demand and
-idempotently, so that a fact about one occurrence has something to attach to. A
-fact attaches at one of two levels and they mean different things: linked to the
-rule it holds at every occurrence, linked to one occurrence it is about that
-one. Occurrences that broke the pattern are recorded as exceptions, cancelled or
-moved, and a moved one keeps the start the rule gave it as its identity. A rule
-that stops applying gets an appended bound change rather than a retirement,
-because a rule that was true never stops having been true.
+- **One record per timeline** holds its timepoints, the order sources have
+  stated between them, the contradictions in that order, and its recurrence
+  rules. A timepoint has a stable id, so adding, reordering or refining points
+  never disturbs the `TIMELINK` edges that name it.
+- **A timeline has its own *now***, `reference_time`, so "current" is
+  answerable on a clock that is not the wall clock: code asking whether a claim
+  holds now asks the relevant timeline rather than `datetime.now()`.
+- **Stated order places undated points.** A source can say one point came
+  before another, and a point nobody dated gets `earliest` and `latest`
+  bounds, derived on read and never written.
+- **Order that cannot all hold is recorded rather than refused**, as a
+  `TemporalContradiction` that `reflect` nominates until a judge retires a
+  constraint, splits the point, or holds it. Every verdict is append-only.
+- **A recurrence rule is stored once and its occurrences computed per query**,
+  because a stored expansion is a second thing that can disagree with the rule.
+  An occurrence is named by the start the rule gives it, and becomes a
+  timepoint only when a fact needs one to attach to.
 
 ## Metacontext
 
@@ -300,8 +197,8 @@ information. It answers: *in what context is this true?*
 A `Metacontext` is a node in the graph, like a high-level Topic but for
 disambiguation rather than categorisation. Examples: "Real historical
 events", a fictional universe, a party line, "Reporting by the BBC". Because
-metacontexts are nodes, they can relate to each other via ordinary edges and
-take part in search like other nodes.
+metacontexts are nodes, they can relate to each other via ordinary edges, such
+as `based_on` for one metacontext that builds on another.
 
 ### Association
 
@@ -311,49 +208,43 @@ take part in search like other nodes.
   inherits from another; a reader who wants two names two.
 - **Several metacontexts per node**: something can be "propaganda" and also
   "true as far as we know"; those are different axes.
-- **No predefined axes**: metacontexts are created, split, and merged
-  dynamically, the same way Topics are managed.
-- **Absence names no metacontext**: a node with no `has_metacontext` edge is a node
-  nobody said anything about, which is what absence means everywhere here (an
-  omitted `confidence` is unrated, an absent `judged_by` is unknown). Nothing
-  is inferred from silence. So a node without a metacontext is never compared,
-  never merged, and returned by no scoped search.
-  `graph_stats.nodes_without_metacontext` counts them and
-  `epimemer metacontexts declare` assigns them a metacontext in bulk.
+- **No predefined axes**: a graph creates whatever metacontexts its material
+  needs, with `create_metacontext`.
+- **Absence names no metacontext**: a node with no `has_metacontext` edge is
+  a node nobody said anything about, which is what absence means everywhere
+  here (an omitted `confidence` is unrated, an absent `judged_by` is unknown).
+  Nothing is inferred from silence. So a node without a metacontext is never
+  compared, never merged, and returned by no scoped search.
 - **`the-real` is a convention, not a mechanism**: the id every graph should
-  use for the metacontext holding real-world claims, so two graphs do not end up
-  with one metacontext under two strings. Nothing reads it specially, and it must
-  exist like any other metacontext; `create_metacontext` takes a chosen id for
-  exactly this.
+  use for the metacontext holding real-world claims, so two graphs do not end
+  up with one metacontext under two strings. Nothing reads it specially, and it
+  must exist like any other metacontext; `create_metacontext` takes a chosen id
+  for exactly this.
 - **The metacontext is required at ingest**: `store_decomposition` takes
-  `metacontext_id` as a required argument. It cannot prevent a wrong metacontext,
-  but it makes the error recoverable: the metacontext is an edge carrying the judge
-  who wrote it and a journal row naming it, so `review` finds it and
-  `reassign_metacontext` fixes it. One metacontext per call, so a mixed document is two calls.
+  `metacontext_id` as a required argument. It cannot prevent a wrong
+  metacontext, but it makes the error recoverable: the metacontext is an edge
+  carrying the judge who wrote it and a journal row naming it, so `review`
+  finds it and `reassign_metacontext` fixes it. One metacontext per call, so a
+  mixed document is two calls.
 - **A read names the metacontexts it wants, as a list**: `search`,
   `find_nodes`, `query_graph` and `topic_tree` each take `metacontexts`, and
   results are nodes standing in **any** of them. Omitting the list reads every
   metacontext, which is a coherent question; that is why the read side is
-  optional where ingest is not. A scoped read scopes the whole response, edges
-  and matched passages included, because a topic node created from a tag
-  stands in every metacontext it is used from and bridges each of them.
+  optional where ingest is not ([docs/RETRIEVAL.md](docs/RETRIEVAL.md)).
 - **Nothing invents a metacontext on a node's behalf**: splits inherit what the
   parent states; a synthesised parent inherits the one set its children all
   stand in and is refused when they differ; a merge re-states the survivor's
-  metacontext under the merging agent's judge, because the survivor's content is
-  synthesised and no source's framing was made about that wording. Union is
+  metacontext under the merging agent's judge, because the survivor's content
+  is synthesised and no source's framing was made about that wording. Union is
   never the answer for a claim: one node asserted in two worlds is the worst
   outcome available. A name is the exception, and the only one: a topic node
   created from a tag stands in the union of the metacontexts it is used from,
   because it asserts nothing in any of them.
-- **A stated metacontext must exist in the graph you are in**: ids are per
-  graph, and `store_decomposition` and `search` both refuse one that resolves
-  nowhere, every id in a search's list included.
 
 ### Why this matters
 
-The "Fall of Carthage" means different things in a historical metacontext and in a
-fictional universe. AI capabilities described in a novel are not real-world
+The "Fall of Carthage" means different things in a historical metacontext
+and in a fictional universe. AI capabilities described in a novel are not real-world
 research. Political events described by opposing parties carry different
 framing. Without metacontext the memory would conflate these and silently
 corrupt retrieval, so search results always carry their metacontext labels,
@@ -365,135 +256,16 @@ and fiction is never mixed with fact without the distinction showing.
 [docs/RETRIEVAL.md](docs/RETRIEVAL.md).
 
 - **Two arms, because they fail in opposite directions.** Embedding
-  similarity has no notion of term rarity: an identifier like `JIRA-4417`
-  embeds to roughly "short alphanumeric string", close to every other ticket
-  id. So a keyword arm (BM25) runs alongside the vector arm, over two
-  corpora: node content, and the raw **segments** the text was extracted
-  from. Nodes answer *what do I believe?*; segments answer *where did I read
-  that?*, which matters when the agent paraphrased an identifier away.
-  Callers declare the exact strings that matter as `terms`; each declared
-  term's best hit survives to the final result.
-- **Fusion is by rank, never by score.** Cosine and BM25 are on incomparable
-  scales, so results merge by Reciprocal Rank Fusion, and ranks are the only
-  quantity that crosses a corpus boundary.
-- **Every result says how it was reached**: `provenance` is `lexical`,
-  `segment`, `vector`, `expanded` (reached by an edge), or `direct`.
-- **History returns by default, folded.** Claims retired because the world
-  moved on (`historical`) come back and say so; claims retired as wrong
-  (`corrected`) are off by default. A claim's earlier versions attach to its
-  replacement rather than each taking a result slot.
-- **Valid time answers in groups, never as a filter.** `valid_as_of` returns
-  `valid` and `unknown` buckets and excludes nothing, because a filter would
+  similarity has no notion of term rarity, so an identifier like `JIRA-4417`
+  embeds close to every other ticket id. A keyword arm (BM25) runs beside the
+  vector arm, over node content and over the raw segments the text came from.
+- **Fusion is by rank, never by score**, because cosine and BM25 are on
+  incomparable scales.
+- **Valid time answers in groups, never as a filter**, because a filter would
   turn missing metadata into a silent false negative.
-- **Corroboration is asked for, not assumed.** `include_corroboration=True`
-  adds how many independent publishers back each result, derived at read
-  time from `similarity` edges recorded by agent verdicts, never stored. It
-  counts independence, not strength, and a claim whose dates put it in a
-  different period is reported separately under `adjacent_periods` rather
-  than counted, as an inference judged to agree with this one is under
-  `agreeing_inferences`. It is off by default because it is the most expensive
-  annotation on the retrieval path.
-
-## Data Model (Minimal)
-
-Fields are either *content* (immutable: corrections create new nodes) or
-*metadata* (mutated in place; marked below). See **Node History**.
-
-```
-nodes (
-  id, type, content, source_id, embedding_id, metadata,   -- content (immutable)
-  extraction_method, created_at,                           -- content (immutable)
-  claim_kind,      -- facts only: "state" | "event" | null (content, immutable)
-                   -- judged at ingest; null is unjudged, and never merges
-  status,          -- "active" | "corrected" | "historical" |
-                   -- "merged" | "archived"                 (mutated in place)
-                   -- ("superseded" is still accepted on read: retired by
-                   --  supersession with the reason unrecorded. Nothing
-                   --  writes it now.)
-  superseded_at,   -- timestamp, nullable                  (mutated in place)
-  lifecycle,       -- append-only list of episodes: retired_at, because,
-                   -- counterpart, restored_at. A node can leave the active set
-                   -- more than once (recurrence), and the (status,
-                   -- superseded_at) pair is a single slot that cannot say
-                   -- "retired, then came back". query_changes reads this
-  confidence,      -- 0.0–1.0, nullable; supplied at ingest,   (mutated in place)
-                   -- absent when unrated, read as 0.5
-  importance,      -- 0.0–1.0, moved only by judgment      (mutated in place)
-  retrieved_at          -- timestamp, null until first retrieval
-  importance_judged_at  -- timestamp, null until an agent judges it
-  -- source_id is the Segment for text-derived nodes; entity and tag-named
-  -- Topics have none. Source and topic nodes are NOT fields: they are
-  -- Topics/RawDocuments reached by edges.
-)
-
-documents (
-  id, content, source, source_type, metadata, created_at,
-  published_at   -- imprecise instant, nullable. When the document was
-                 -- published, as against created_at, which is when it was
-                 -- ingested. Never falls back to created_at
-)
-
-edges (
-  src_id, dst_id, type, label, kind, weight, metadata,
-  validity       -- list of intervals, `sourced_from` edges only. When *this
-                 -- source* asserts the claim held: per source, never unioned
-                 -- onto the node, so one careful source and one sloppy one
-                 -- cannot produce a period neither claims
-  retired_at,    -- when a judge decided this edge should stop counting, and
-  retired_by     -- who decided it. Edges are never deleted, so this is how one
-                 -- stops being followed while the record still says it was
-                 -- once asserted. Written today on a `timelink` that a
-                 -- timepoint split or merge moved, and on an `assessed` edge
-                 -- that `reopen` withdrew
-  superseded_by  -- the edge written in its place, where the retirement moved
-                 -- the edge rather than withdrawing it. Why is in the journal
-                 -- row the verdict wrote
-  -- engine types: about, contains, implies, supports, extracted_under_topic,
-  --   abstracts, derived_from,
-  --   similarity, contradiction, subtopic_of, superseded_by,
-  --   temporally_followed_by, merged_into,
-  --   timelink, has_metacontext, tagged_with_topic, sourced_from
-  -- user relations: type = related, with a free `label` and a `kind`
-  --   (relationship | attribution)
-)
-
-segments (
-  id, source_id, text, span_start, span_end
-)
-
-embeddings (
-  id, item_id, model_id, vector, created_at
-)
-
-timelines (
-  id, name, description, metadata, created_at,
-  reference_time,  -- this timeline's "now". Null means follow the wall clock;
-                   -- a fictional timeline's present is a fact about that world
-  timepoints: [
-    { id, start, end, label, metadata,   -- start/end optional (vague points).
-      split_from,                        -- `kind` is derived from the dates and
-      recurrence_id, occurrence_start,   -- never stored
-      merged_into }
-  ],
-  constraints: [    -- one source asserting that one point came before another
-    { id, earlier_id, later_id, source_id, basis, because,
-      judged_by, asserted_at, retired }
-  ],
-  temporal_contradictions: [  -- constraints that cannot all hold
-    { id, kind, edges, point_id, constraint_ids, sources,
-      found_at, resolutions, held }
-  ],
-  recurrences: [    -- a rule stored once, occurrences computed per query
-    { id, label, rule, duration, bounds, bound_changes, exceptions,
-      source_id, judged_by, asserted_at }
-  ]
-)
-
-metacontexts (
-  id, content, description, metadata
-  -- a node type; linked to other nodes via has_metacontext edges
-)
-```
+- **Corroboration is asked for, not assumed**: how many independent
+  publishers back a result, derived at read time from `similarity` edges
+  recorded by agent verdicts and never stored.
 
 ## Node History
 
@@ -506,46 +278,26 @@ consolidation creates a new node linked to its predecessor via typed edges:
   `node_v1.status` records the same *why*: `corrected` (it was wrong) or
   `historical` (it was right, and remains right of its period). The caller
   must say which; there is no default, because filing a change in the world
-  as an error is how a graph forgets its own history.
-  - The status also decides **which edges follow the replacement**. A
-    correction hands over everything but history and review edges; a
-    world-change hands over the metacontext and the topic-node edges only, because the
-    historical node is still true of its period and its own sources are what
-    say so. Judgment edges (`similarity`, `contradiction`, `variant_of`) stay
-    on the node they were made about under every retirement: the claim may
-    survive a correction, but the wording the judgment was made against does
-    not. `migration_disposition(edge_type, status)` is the whole rule.
-  - **The lineage edge splits the same way.** A correction writes
-    `superseded_by` and is terminal; a world-change writes
-    `temporally_followed_by`, which states order rather than replacement and
-    so survives a claim becoming true again. `lineage_edge_type_for(status)`
-    pairs with `superseded_status_for(because)` so the node and the edge
-    cannot disagree. The edge never claims adjacency: Saint Petersburg to
-    Petrograd to Leningrad to Saint Petersburg is three separately observed
-    transitions, so cycles and parallel same-direction edges are legal, and
-    nothing may dedup them by `(src, dst, type)`.
-  - **Recurrence**: `historical` is restorable and `corrected` is not, and
-    similarity nomination sees historical candidates, which is what makes the
-    `recurs` verdict reachable. `check_conflicts` returns each candidate's
-    status, `reflect` reports mixed pairs under `recurrences`, and `restore`
-    reactivates a named node and writes the new source's `sourced_from` edge
-    in one transaction, refusing without one: a claim back to active with no
-    edge saying who asserts it is one the graph states and cannot attribute.
+  as an error is how a graph forgets its own history. The status also decides
+  which edges follow the replacement, and whether the node can be restored
+  when its claim becomes true again ([docs/VALIDITY.md](docs/VALIDITY.md)).
 - **Merge**: `node_a --merged_into--> node_c`,
   `node_b --merged_into--> node_c`.
 
 History is part of the graph itself rather than a separate versioning system;
-traversing it is following edges backwards.
+traversing it is following edges backwards. An edge a judge decides should
+stop counting is retired rather than deleted, so the record still says it was
+once asserted.
 
 ### What is immutable and what is mutated in place
 
-A node also carries lifecycle and label metadata that *is* mutated in place,
+A node also carries lifecycle and judgment metadata that *is* mutated in place,
 because it is not the knowledge claim and editing it rewrites no history:
 
 | Mutated in place | Set by | Why it is not a version |
 |---|---|---|
 | `status`, `superseded_at` | supersede / merge | this is how a node is retired, and how "what the graph held at time T" is reconstructed: transaction time, never validity |
-| `value.confidence` | the ingesting agent's prior at `store_decomposition`, or absent; merges combine it via `merged_value_signal` | supplied once at creation and never re-set; a correction mints a new node rather than rewriting this one |
+| `value.confidence`, `claim_kind` | the ingesting agent at `store_decomposition`, or absent; `rejudge` revises them and keeps the replaced value on the node | a judgment about the claim rather than the claim; a correction mints a new node instead |
 | `importance`, `importance_judged_at` | `judge_importance` | a recorded assessment of the same claim, with its own reason trail |
 | `retrieved_at` | `search` | a record that the node was read, not a change to what it says |
 
@@ -558,13 +310,10 @@ mutated".
 
 ### Archival
 
-Retired and merged nodes accumulate, and archival is an **export**: eligible
-non-active nodes older than a cutoff, with their history edges, are exported
-to cold storage and flipped to `archived`, leaving every active query
-unaffected. **`historical` nodes are excluded**: they were retired because
-the world changed, not because they were wrong, so age alone is not grounds
-to discard them. Nothing is deleted, and `restore` reverses it. Embeddings
-are archived only when no active node's edges were derived using them.
+Archival is an **export**, never a delete, and **`historical` nodes are
+excluded** from it: they were retired because the world changed, not because
+they were wrong, so age alone is not grounds to discard them
+([docs/REFLECTION.md](docs/REFLECTION.md)).
 
 ## Valid Time: when a claim was true
 
@@ -578,35 +327,18 @@ can record such a pair only as a contradiction or a correction files
 historical truth as error and lets an inference combine claims that were
 never simultaneously true, with nothing to detect it.
 
-The model, briefly:
-
-- **Validity lives on the `sourced_from` edge, per source**, never on the
-  node and never collapsed at read time. A claim with two sources has two
-  periods; union and intersection both lie undetectably.
-- **An interval carries endpoints, a timeline, a witness point, and a
-  `basis`.** Endpoints distinguish `precise`, `named`, `unknown` and
-  `unbounded`: "we don't know when it started" and "it had no start" are
-  different claims. Intervals are measured against a named timeline, and
-  periods on different clocks are simply not comparable. `basis` is `stated`
-  or `inferred`; a date from the agent's own world knowledge is neither and
-  must not be supplied.
-- **Comparison answers four values**: `before`, `after`, `overlap`,
-  `unknown`. Every consumer must treat `unknown` as *we cannot tell* rather
-  than folding it into false.
-- **The soundness check** flags an active inference whose premises no source
-  puts in the same period, reporting the offending pairs with their dates.
-  It is silent whenever a pair cannot be placed: a check on evidence, never
-  on ignorance.
-- **Boundary proposals** are the other half of "ingest extracts, reflect
-  proposes": a document cannot know its claim will ever stop being true, so
-  only something seeing the *next* document can close the first period.
-  Publication dates are never used, because they bound when a claim was
-  asserted, not when it held.
+So validity lives on the `sourced_from` edge, **per source**, and is never
+collapsed onto the node: a claim with two sources has two periods, and union
+and intersection both lie undetectably. Comparison answers `before`, `after`,
+`overlap` or `unknown`, and every consumer treats `unknown` as *we cannot
+tell*. Ingest supplies the intervals, and reflect proposes where a period
+ends, because only something that sees the next document can close the first.
 
 ## Reflection
 
-`reflect` **reads and never writes**. It scans the graph, nominates
-candidates, and hands them back. Every change goes through
+`reflect` **changes nothing in the graph**: it scans it, nominates
+candidates, and hands them back, and the only thing it resets is the count of
+stores since the last reflect. Every change goes through
 `apply_reflection`, and the judgment in between belongs to the agent, or, for
 the consequential calls, to a human. Full detail:
 [docs/REFLECTION.md](docs/REFLECTION.md).
@@ -616,94 +348,36 @@ generator and a poor judge.** Similarity nominates *these two facts are about
 the same thing*; only an agent can answer *do they contradict, supersede, or
 coexist?* So `reflect` returns pairs with their scores rather than verdicts.
 
-One phase per worklist, and `REFLECT_PHASES` in `mcp/tools.py` names them in
-execution order. Every nomination has a recordable answer, including the
-negative one (a pair judged distinct, a description confirmed, a split
-declined, a node retained), and a recorded answer is not asked for again until
-something under it changes. A suppression that turns out to be wrong is
-withdrawn by `reopen`, which puts the question back on the worklist without
-asserting anything about the answer. Two separations in that list matter: recurrences are
-reported apart from contradictions, because a claim standing beside its own
-successor is not in conflict with it; and cross-metacontext pairs are dropped
-rather than reported, because high similarity across disjoint metacontexts is
-coexistence.
+Every nomination has a recordable answer, including the negative one, and a
+recorded answer is not asked for again until something under it changes;
+`reopen` puts a question back without asserting anything about the answer.
+Cross-metacontext pairs are dropped rather than reported, because high
+similarity across disjoint metacontexts is coexistence.
 
-`apply_reflection` writes every kind of reflect decision. Its `merges` are
-**Topics only**: facts collapse through `merge_facts` and inferences through
-`merge_inferences`, both resolution actions on the review-loop path, because
-`redundant` is judged when a document arrives and not when the graph is next
-swept. A topic merge applies only when every pair of sources clears a fixed
-bar. The bar is not a parameter of the call, because a caller must not choose
-the bar its own merge is checked against.
+A topic merge applies only when every pair of sources clears a fixed bar. The
+bar is not a parameter of the call, because a caller must not choose the bar
+its own merge is checked against.
 
-**A merge is reversible, and it is the one operation in the system that
-destroys anything.** The information a reversal needs, which source held
-which edge, exists only while the merge is being made, so `merge_nodes`
-captures it on the survivor at merge time. `reverse_merge` restores the
-sources, replays their edges and deletes the survivor, refusing whenever
-anything has accrued to it since. Repeated merge and reverse cycles on one
-fact are refused by `merge_cycle_limit`.
+**A merge is reversible.** The information a reversal needs, which source held
+which edge, exists only while the merge is being made, so it is captured on the
+survivor then. `reverse_merge` restores the sources, replays their edges and
+deletes the survivor, refusing whenever anything has accrued to it since.
 
 ## Agent Interface (MCP)
 
-Memory is exposed as tools, not as a raw database. Claude Code prefixes them
-as `mcp__epimemer__<name>`.
-
-Ingestion is a two-step process: `segment` breaks text into passages, then the
-agent extracts topics, facts and inferences and passes them to
-`store_decomposition`. Epimemer does not decompose text itself. Where the
-server's cut is wrong, the agent states its own with `resegment` before it
-decomposes, or passes `cuts` to `segment` for a document it already knows the
-rules will cut badly.
-
-The tools group into: **core memory** (`segment`, `resegment`,
-`store_decomposition`, `search`, `link`, `update`, `rename_topic`,
-`supersede_by`, `judge_importance`); **discovery
-& stats** (`query_graph`, `topic_tree`, `find_nodes`, `list_sources`,
-`list_relations`, `describe_relation`, `graph_stats`); **conflict handling**
-(`check_conflicts`, `record_contradiction`, `record_variant`, `merge_facts`,
-`merge_inferences`, `reverse_merge`, `configure_merge`,
-`configure_warnings`); **reflection** (`reflect`, `configure_reflection`,
-`apply_reflection`, `reopen`); **temporal access** (`graph_as_of`, `query_changes`);
-**archival** (`archive`, `restore`); **timelines** (`create_timeline`,
-`set_reference_time`, `add_timepoint`, `order_timepoints`,
-`resolve_temporal_contradiction`, `merge_timepoints`, `add_recurrence`,
-`end_recurrence`, `record_recurrence_exception`, `query_timeline`,
-`create_timelink`);
-**metacontexts** (`create_metacontext`, `get_metacontexts`, `reassign_metacontext`);
-**graph management** (`list_graphs`, `use_graph`, `delete_graph`,
-`backup_graph`, `configure_backup`);
-**agents** (`claim_agent`); **review** (`review`, `apply_review`, `rejudge`,
-`correct_interval`); and **visualization** (`viz_status`).
-
-See [INTEGRATION.md](INTEGRATION.md#available-tools) for the canonical table
-with one-line descriptions and the authoritative tool count. This document
-does not restate the count, so it can only drift in one place.
+Memory is exposed as tools, not as a raw database. See
+[INTEGRATION.md](INTEGRATION.md#available-tools) for every tool, grouped by
+purpose, with a one-line description of each.
 
 ### Who is judging
 
-An agent can be given an identity: `claim_agent` proposes a **name** and a
-self-description, and the **user** picks which judge it is. A judge nobody
-approved is refused, because an agent that could admit its own identity could
-not then establish that a *different* agent reviewed anything.
-
-Three layers with different rules. The **key** is opaque, frozen into every
-decision and shown to nobody. The **name** is the handle, freely renamable by
-the user and resolved at read time, so a rename carries every old decision
-with it. **Descriptions** append and are never edited, pinned per decision by
-digest, because a decision made last week was made by whatever the agent
-claimed to be last week. Renaming onto a name another judge holds asks
-whether they are the same judge, and yes consolidates them. Approval is per
-graph, so `use_graph` can unbind a judge.
-
-Every decision names its judge, ingest included, since ingest is where the
-judgments nothing re-makes are supplied. Each decision is also appended to a
-**journal**, an append-only table with no update path, so *what did this
-agent judge* is one query. A blank judge means unknown and nothing more; a
-graph can be set to require one. `review()` reads the journal back least
-certain first, `apply_review` records that somebody checked a decision, and
-`rejudge` revises a judgment made at ingest without touching the claim. See
-[docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
+The **user** picks which judge an agent is: `claim_agent` proposes a name and
+a self-description, and a judge nobody approved is refused, because an agent
+that could admit its own identity could not then establish that a
+*different* agent reviewed anything. Every decision names its judge, ingest
+included, and is appended to a **journal** with no update path, so *what did
+this agent judge* is one query; `review` reads it back least certain first.
+See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
 
 Historical graph state is read with `graph_as_of` (a lifecycle snapshot at a
 past instant) and `query_changes` (births and retirements across a window),
@@ -713,104 +387,64 @@ both sides so neither inherits the wrong default reading.
 
 ## Storage
 
-Two backends implement one `StorageBackend` protocol, in full, with no
-capability flags: **in-memory** (fast, ephemeral, used by most tests) and
-**SurrealDB** (persistent; served over `ws://`, or embedded via `mem://`,
-`file://` or `surrealkv://`). Callers invoke the protocol unconditionally,
-and guard tests compare signatures.
+Four backends implement one `StorageBackend` protocol, in full, with no
+capability flags: **in-memory** (fast, ephemeral, used by most tests),
+**SQLite** (persistent, a file per graph and nothing to run), **SurrealDB**
+(persistent; served over `ws://`, or embedded via `mem://`, `file://` or
+`surrealkv://`) and **Postgres** (persistent, for a graph several servers
+share). Callers invoke the protocol unconditionally, and guard tests compare
+signatures.
 
 ### Multi-graph support
 
-Both backends support multiple named graphs: SurrealDB as separate databases
-within a namespace, in-memory as a dict of graphs. Agents manage them with
+Every backend holds multiple named graphs, and agents manage them with
 `list_graphs`, `use_graph`, and `delete_graph`.
 
 **The active graph is process state, so every other tool must name the graph
-it means.** A `use_graph` lasts only as long as the process, and a client
-reconnect silently lands back on whatever the configuration resolves to.
-Every tool therefore requires an `expected_graph`, reads as much as writes,
-and refuses rather than run when it is missing or names a graph the server
-is not on. There is no setting to relax it: a per-graph flag would be read
-from whichever graph the call is *actually* in, which would disable the guard
-in exactly the case it exists for. A wrong-graph **read** is the worse half:
-it returns a plausible answer the agent then reasons from, leaving no trace,
-where a misfiled write at least sits beside its own journal row.
+it means**: each requires an `expected_graph`, reads as much as writes, and
+refuses when it is missing or wrong
+([INTEGRATION.md](INTEGRATION.md#which-graph-a-server-opens)). There is no
+setting to relax it: a per-graph flag would be read from whichever graph the
+call is *actually* in, which would disable the guard in exactly the case it
+exists for.
 
 ### Scaling limits
 
 The limits are **measured**, not estimated; `dev-docs/BENCHMARKS.md` has the
-data. Against the 30 s default tool timeout, `search` fails at roughly 1.5M
-nodes in-memory and 2.9M on SurrealDB; `reflect` at about 320,000 and
-26,000. `reflect` is the limiting operation on both backends, its candidate
-pair lists are the one quadratic cost, and its response is capped
-(`max_nominations` per list, cut lists named in `truncated`). Ingest is flat.
-Do not point a large persistent graph at this unwarned.
+data. `reflect` is the limiting operation, its candidate pair lists are the one
+quadratic cost, and its response is capped (`max_nominations` per list, cut
+lists named in `truncated`). Ingest is flat. SQLite and Postgres have not been
+measured. Do not point a large persistent graph at this unwarned.
 
 ## Implementation Approach: Petri Nets via Petritype
 
 The system must not be a black box: a newcomer should be able to look at a
 processing stage and see what is happening, what state data is in, and how it
-flows. The stages that move data through steps are executable, typed Petri
-nets, via [Petritype](https://github.com/olenive/petritype):
-
-- **Places** are typed containers; each declares a Python type and only holds
-  matching tokens (enforced at runtime).
-- **Transitions** are real Python functions, async supported.
-- **Tokens** are actual data: Pydantic models flowing through the net.
-- **Visualization** comes with the net. The dashboard's pipeline strip draws
-  each net's topology and lights it as it fires, from the engine's own record
-  of what every firing consumed and produced.
+flows. So the stages that move data through steps are executable, typed Petri
+nets, via [Petritype](https://github.com/olenive/petritype), and the
+dashboard's pipeline strip draws each net and lights it as it fires.
 
 Four nets exist: the two segmentation strategies, edge creation at ingest, and
 hybrid retrieval, whose two arms fork from one request and join at fusion, the
-one shape where the net says something a function body would hide. Each is an
-`ExecutableGraph` built by a factory marked `@petri_net`, driven by the
-Petritype runner to quiescence with no firing budget, and declared acyclic at
-construction, so termination is checked when the net is built rather than
-hoped for at run time.
+one shape where the net says something a function body would hide. Each is
+declared acyclic at construction, so termination is checked when the net is
+built rather than hoped for at run time.
 
 Everything else, reflection, review, timelines, metacontexts and transfer, is
 plain functions over the storage protocol. A net is used where a stage has
 steps worth watching; a reduction over a similarity matrix or a transaction
 over the journal does not get one. The Pydantic data-model types serve double
-duty as storage schema and token types, keeping the pipeline and persistence
-layers in sync.
+duty as storage schema and token types.
 
 ## Observability
 
-The black-box principle has a running answer: a live dashboard. Setup and
-panels are in [README.md](README.md#visualization); what matters here is
-what it makes visible and why:
+The black-box principle has a running answer: a live dashboard, described in
+[README.md](README.md#visualization). Two of its choices are architectural:
 
 - **A standalone hub, not a server per MCP process.** Sessions dial out and
   register; the browser picks one. So several agents can be watched from one
   page, and no MCP process has to own a port.
-- **The graph and the pipelines**, the latter being the Petri nets executing.
-- **A timeline in two modes**, *record time* (when the graph learned each
-  node) and *content time* (when the described events happened): the same
-  distinction the model draws between transaction and valid time. Vague
-  timepoints get an undated tray rather than an invented date. A point only the
-  stated order places is drawn as a band across the bounds it has, a disputed
-  order is marked beside the point it is about, and a recurrence rule's
-  occurrences are computed into a lane of their own.
-- **An activity log, one entry per transaction**: what the agent stored,
-  corrected, world-changed, merged, archived or restored, with a timeline
-  decision and a `reopen` each under the verb the journal files them by.
-- **Warnings beside the act they accompanied**: every warning a tool computed
-  is a `warned` row in the same log, a muted one included, shown dimmed and
-  labelled *not shown to the agent*, because the dashboard is where a person
-  finds out what the agent was not told. A read-only panel says what this graph
-  does about each kind; `configure_warnings` is what changes it, so the change
-  is recorded against a session and a judge.
-- **Retrieval focus**: pick a recent tool call and everything it did *not*
-  return is dimmed, with dimmed nodes still clickable, because the
-  interesting click is on a node that did not come back. The response panel
-  is labelled "Response", not "Context": what lands in the model's context is
-  the client's rendering of what was returned, and a panel captioned "what
-  the agent saw" would claim something the system cannot verify.
-
-**`EPIMEMER_VIZ_HOST` is a privacy setting as well as a network one.** On the
-default loopback bind the hub keeps whole retrieval records so they survive
-the MCP process exiting. Pointed at a non-loopback address, sessions mirror
-structural metadata only, and payloads stay in the process that produced
-them.
+- **The panel showing what a call returned is labelled "Response", not
+  "Context"**: what lands in the model's context is the client's rendering of
+  what was returned, and a panel captioned "what the agent saw" would claim
+  something the system cannot verify.

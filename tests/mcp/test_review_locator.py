@@ -77,7 +77,7 @@ class TestItCountsWhereElseToLook:
 
         result, _ = await tools.review(storage)
 
-        # Not "default": the two backends start on different names, and a test
+        # Not "default": the backends do not all start on one name, and a test
         # that hard-codes one of them is asserting a fixture rather than the
         # behaviour.
         assert result["graph"] == storage.current_database
@@ -188,8 +188,8 @@ class TestWhatItDeliberatelyDoesNotNarrowBy:
 
     `certainty_ceiling` and `mode="unreviewed"` are narrowings a reviewer
     applies while *browsing*. Mirroring them would put review semantics into a
-    second implementation on two backends, and every such mirror is a place the
-    two can disagree. Overcounting costs a wasted look; undercounting costs the
+    second implementation on every backend, and every such mirror is a place
+    they can disagree. Overcounting costs a wasted look; undercounting costs the
     look entirely.
     """
 

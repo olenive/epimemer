@@ -11,16 +11,16 @@ under it was created, archived or superseded after that moment: the question is
 itself*, and `changed_since` answers it. A topic nobody has ever reviewed has no
 moment to measure from, so it keeps the length ratio in `_should_enrich`, which
 asks the first-time question, *is this topic thin beside its material*. The
-ratio answered identically on every run, which is why a good description over
-forty facts used to be nominated for ever. `dev-docs/DESCRIPTION_REVIEW.md`
+ratio answers identically on every run, so on its own it would nominate a good
+description over forty facts for ever. `dev-docs/TOPIC_DESCRIPTIONS.md`
 carries the case.
 
 **Enrichment writes `description` and never `content`.** The name is the join
 key: `_tag_topic` resolves a tag to a topic node by it at ingest, and
-`_resolve_node_reference` resolves the same name for `find_nodes`. Enrichment
-used to replace it and retire the old node `CORRECTED`, which split a tag in
-two: later documents minted a second topic node, earlier ones stayed on the
-first, and neither knew about the other. Writing beside the name instead means
+`_resolve_node_reference` resolves the same name for `find_nodes`. Replacing
+it and retiring the old node `CORRECTED` would split a tag in two: later
+documents would mint a second topic node, earlier ones would stay on the first,
+and neither would know about the other. Writing beside the name instead means
 the node keeps its id, its status and every edge it holds, and there is nothing
 for a guard to refuse. `dev-docs/TOPIC_DESCRIPTIONS.md` carries the case.
 """
@@ -130,7 +130,7 @@ def material_contents(material: Sequence[EpistemicNode]) -> list[str]:
 def changed_since(material: Sequence[EpistemicNode], since: datetime) -> list[MaterialChange]:
     """The nodes under a topic that arrived or were retired after `since`, newest first.
 
-    Pure. Three kinds of change count, on `DESCRIPTION_REVIEW.md` §2.2's
+    Pure. Three kinds of change count, on `TOPIC_DESCRIPTIONS.md` §4.2's
     reading: a description written over material that has since been retired is
     as stale as one written before half the material arrived.
 

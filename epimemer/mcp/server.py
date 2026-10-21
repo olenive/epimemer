@@ -1,7 +1,8 @@
 """FastMCP server for the Epimemer memory system.
 
-Exposes memory tools (ingest, search, link, update, reflect,
-query_graph, archive, restore) via the Model Context Protocol.
+Registers every tool and the `guide` prompt over the Model Context Protocol,
+and wraps each tool call: the timeout, the graph guard's turn, the response
+envelope and the retrieval record. The tools' bodies are in `tools.py`.
 """
 
 import asyncio
@@ -147,9 +148,9 @@ def new_connection_state() -> dict:
     FastMCP session state cannot hold it: on the 2026-07-28 protocol era the mcp
     SDK serves every request on a new connection object, and FastMCP keys its
     state store on that object, so a value written on one call is gone on the
-    next. That is how Claude Code 2.1.287 came, on 2 October 2026, to have every
-    write refused as carrying a token this session never issued, one call after
-    `claim_agent` handed it out.
+    next. That is how Claude Code 2.1.287 came to have every write refused as
+    carrying a token this session never issued, one call after `claim_agent`
+    handed it out.
 
     A transport that serves several clients from one process must bring a
     per-client store and plug it in here before it is added; until then, two
@@ -181,7 +182,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         # Every backend implements connect (no-op where there's nothing to open).
         await storage.connect()
 
-        # Ids the user admitted before this process started (REVIEW_MODE.md §10.3).
+        # Ids the user admitted before this process started (REVIEW_MODE.md §2.3).
         # Seeded here rather than read at every check so that one channel writes the
         # approved list and everything else reads it, and because on an embedded
         # backend this is the *only* channel that reaches the running server, the
@@ -2103,9 +2104,8 @@ async def memory_apply_reflection(
     Args:
         similarities: What you decided about a pair reflect nominated
             (similar_pairs, contradictions, similar_inferences and the like)
-            that you are **not** otherwise acting on — the verdict
-            that previously had no writer, which is why the same pairs kept
-            coming back. Each: {pair: [a_id, b_id], verdict: "one_claim" |
+            that you are **not** otherwise acting on; without a verdict the
+            same pairs keep coming back. Each: {pair: [a_id, b_id], verdict: "one_claim" |
             "distinct", because: str}.
             Use "one_claim" when the two really do say the same thing and
             something blocked the merge — an event, or an unjudged claim_kind;
@@ -2168,9 +2168,9 @@ async def memory_apply_reflection(
             merge_similarity_threshold similar, else it is rejected — use this
             only for true duplicates, and `parents` for merely related topics.
             Sources standing in different metacontexts are refused into
-            `topic_merges_refused`: the survivor inherits every source's edges,
-            metacontexts included, so a cross-metacontext merge asserts in one world what
-            was only ever claimed in another.
+            `topic_merges_refused`: the survivor stands in every metacontext its
+            sources stood in, so a cross-metacontext merge asserts in one world
+            what was only ever claimed in another.
         supersessions: Resolve flagged/contested nodes from reflect's
             pending_review by superseding the losing node with an existing one.
             Each: {old_id: str, by_id: str, because: str}, where `because` is
@@ -2236,11 +2236,12 @@ async def memory_apply_reflection(
             say in each label's own description that the other is the same
             relationship; a described vocabulary is what stops the third and
             fourth synonym being coined.
-            **Either way the pair is never nominated again, and that is
-            permanent**: there is no undo, so judge it rather than clearing the
-            list. `because` is required. Entries that could not be recorded come
-            back in `relation_verdicts_refused` with a reason — a pair you have
-            already judged the same way is one of them.
+            **Either way the pair is not nominated again** unless
+            `reopen(relation_labels=[a, b], reason=...)` puts it back, so judge
+            it rather than clearing the list. `because` is required. Entries
+            that could not be recorded come back in `relation_verdicts_refused`
+            with a reason — a pair you have already judged the same way is one
+            of them.
         boundaries: Accept boundary proposals from reflect's
             `boundary_proposals` — where one claim's period ends and the next
             begins. Each: {node_id, source_id, endpoint: "start"|"end", at: ISO
@@ -2710,11 +2711,12 @@ async def memory_reassign_metacontext(
 ) -> str:
     """Withdraw a metacontext from a node, optionally putting another in its place.
 
-    A metacontext assignment used to be one-way, so a fact wrongly assigned to
-    a fiction metacontext stayed there for ever. That is not cosmetic: it
-    becomes permanently unmergeable with its own twin, it stops corroborating
-    the real copy, and a metacontext-scoped search misses it where it belongs
-    while returning it where it does not. All three fail silently.
+    Without this, a metacontext assignment would be one-way, and a fact wrongly
+    assigned to a fiction metacontext would stay there for ever. That is not
+    cosmetic: it would be permanently unmergeable with its own twin, it would
+    stop corroborating the real copy, and a metacontext-scoped search would miss
+    it where it belongs while returning it where it does not. All three fail
+    silently.
 
     Not a supersession: the claim is unchanged and the world has not moved, so
     nothing is retired. Use `update` when the claim itself was wrong.
@@ -4451,7 +4453,7 @@ async def _approved_judge(ctx: Context, stored: object) -> JudgeRef | None:
     """A stored judge, re-checked against the graph this write lands in.
 
     **Approval is re-checked here, on every write.** `use_graph` checks too, and
-    this is what keeps that from being a single point of failure (§10.3): a
+    this is what keeps that from being a single point of failure: a
     revoked id, or a graph reached by any route that check missed, must not go
     on stamping decisions. A judge the active graph does not approve reads as
     *unknown* rather than raising — recording the name would assert an approval
@@ -4852,10 +4854,9 @@ async def _elicit_typed_judge_name(
     roster. Answering nothing is a refusal to name anything, and binding the
     proposal on it would bind the name they had just declined.
 
-    The prompt asks for a name and promises nothing about Accept, which is
-    where the old wording went wrong here: Claude Code draws a bare string as a
-    required field, so `Accept to use 'X'` named a gesture the client would not
-    let the user make.
+    The prompt asks for a name and promises nothing about Accept, because
+    Claude Code draws a bare string as a required field, so `Accept to use 'X'`
+    would name a gesture the client does not let the user make.
     """
     return await _elicit_judge_name(
         ctx,
@@ -4922,8 +4923,8 @@ async def _elicit_first_judge(
 async def _elicit_rename(ctx: Context, roster: list[tools.JudgeChoice]) -> str | None:
     """Rename a judge, from inside the picker. Returns a note for the log, or None.
 
-    **The one channel that can rename**, alongside the CLI, and for the same
-    reason approval has only those two: a handle an agent could rename is a
+    **The one channel that can rename**, alongside the CLI, for the reason
+    approval is kept off every tool: a handle an agent could rename is a
     handle an agent could point at another judge's history (§2.2). It lives here
     rather than only in the CLI because the CLI cannot reach an in-memory or
     embedded store at all, and the picker is where a user *sees* the wrong name.
@@ -5043,11 +5044,11 @@ async def _elicit_agent_id(
 
     **A picker over the judges this graph already knows**, then the name the
     agent proposed where the graph has never seen it, then a new judge the user
-    names, then renaming and any retired judge. It used to be a free-text box
-    naming only the proposed id, so the one place a human chooses an identity
-    was the one place the existing identities were invisible, and what the user
-    typed had to match an existing judge character for character or it silently
-    became a second one with a permanently separate history.
+    names, then renaming and any retired judge. A free-text box naming only the
+    proposed id would make the one place a human chooses an identity the one
+    place the existing identities are invisible, and what the user typed would
+    have to match an existing judge character for character or silently become
+    a second one with a permanently separate history.
     That is how `Opus 5 Judge` and `Opus 5` both came to exist on this
     repository's own graph. `list_agents` had the answer the whole time and no
     consumer outside the CLI.
@@ -5072,7 +5073,7 @@ async def _elicit_agent_id(
 
     **A picker that fails degrades to free text rather than to a refusal.**
     Rendering a choice schema is the client's business and not every client will
-    do it, so the fallback is the interaction that used to be the only one. What
+    do it, so the fallback is a free-text question. What
     must not degrade is *asking*: every failure below reads as **no answer**,
     and no answer refuses.
     """

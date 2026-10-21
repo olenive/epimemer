@@ -553,8 +553,8 @@ describe("what a rule says happens over and over", () => {
 
 describe("buildRecordRows", () => {
   it("puts every node on one row, with type carried by the side", () => {
-    // Node type used to be a row. It is now the side of the axis a mark sits
-    // on, so splitting rows as well would only hide nodes.
+    // Node type is the side of the axis a mark sits on, so splitting rows as
+    // well would only hide nodes.
     const snapshot: SnapshotLike = {
       nodes: [
         node({ node_id: "n1", node_type: "fact" }),
@@ -603,8 +603,8 @@ describe("buildRecordRows", () => {
   });
 
   it("draws a never-retrieved node as an instant", () => {
-    // `retrieved_at` is null until a search returns the node — the state the
-    // backend used to fake by defaulting the timestamp to creation time.
+    // `retrieved_at` is null until a search returns the node, a state a
+    // default of the creation time would fake.
     const snapshot: SnapshotLike = {
       nodes: [
         node({

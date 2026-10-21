@@ -1,12 +1,12 @@
 """Nominating inferences that agree without sharing a premise (`SIMILAR_INFERENCES.md`).
 
 `inference_dedup` offers near-identical inferences resting on a common premise,
-as merge candidates. Two inferences that say nearly the same thing from
-evidence they do not share were offered by nothing, so the agreement between
-them had no way into the graph. This sweep offers those pairs, and the agent
-answers each one through `apply_reflection(similarities=[...])`: `one_claim`
-writes a `similarity` edge, `distinct` writes `assessed` alone, and either
-verdict stops the pair coming back.
+as merge candidates. This sweep offers the other pairs, two inferences that say
+nearly the same thing from evidence they do not share, so the agreement between
+them has a way into the graph. The agent answers each one through
+`apply_reflection(similarities=[...])`: `one_claim` writes a `similarity` edge,
+`distinct` writes `assessed` alone, and either verdict stops the pair coming
+back.
 
 **The two lists partition the pairs by premise overlap.** A pair sharing any
 premise belongs to `inference_merge_candidates`, and leaving it out here is

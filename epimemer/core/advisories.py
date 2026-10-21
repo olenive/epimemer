@@ -65,13 +65,12 @@ class AdvisoryKind(str, Enum):
 class AdvisoryStance(str, Enum):
     """Whether an advisory argues with the operation or reports on it.
 
-    **Two situations wore one kind until 2026-08-29, and they gave opposite
-    advice.** `SAME_METACONTEXT_CONTRADICTION` was raised both by
-    `record_contradiction` — where it means *you are right, and a person should
-    see this* — and by `record_variant`, where it means *this is the wrong
-    tool*. One field needing "or" to describe it is the tell this codebase has
-    caught several times; the fix was a fourth kind, and this is what the split
-    bought.
+    **Two situations once wore one kind, and they gave opposite advice.**
+    `SAME_METACONTEXT_CONTRADICTION` was raised both by `record_contradiction`,
+    where it means *you are right, and a person should see this*, and by
+    `record_variant`, where it means *this is the wrong tool*. One field needing
+    "or" to describe it is the tell this codebase has caught several times; the
+    fix was a fourth kind, and this is what the split bought.
 
     The distinction is not cosmetic: it decides whether a
     `proceeded_despite_warning` row is written. *Despite* is meaningful only

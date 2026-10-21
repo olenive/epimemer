@@ -682,14 +682,14 @@ QUARANTINE_METACONTEXT_ID = "unvouched"
 
 
 class JudgeRef(BaseModel):
-    """Who is deciding, resolved once at the MCP boundary (§3.2, §10.4).
+    """Who is deciding, resolved once at the MCP boundary (§3.2).
 
     Passed explicitly from there on and never read from a module global, so a
     second graph or a second session cannot inherit the first one's judge. The
     digest pins the description version current at the call, which is what makes
     a decision readable years later without an as-of query.
 
-    **Absent means unknown, and nothing more** (§3.3, revised 2026-08-23). It
+    **Absent means unknown, and nothing more** (§3.3). It
     carries no date and asserts nothing about why nobody is named — a graph may
     require a judge or not, and that is a per-graph setting rather than a
     property of this type.
@@ -721,12 +721,12 @@ class ValueSignal(BaseModel):
     judgment, so it is recorded as a number plus when someone last stood behind
     it.
 
-    There used to be a third answer, a decaying `relevance` float, and it was
-    removed rather than kept: nothing read it, and `retrieved_at` answers the
-    same question better. A decayed number is confounded by how often an
-    operator ran `reflect` — 0.3 might be "used once, long ago" or "used often,
-    on a graph that reflects a lot" — so it described operator habit as much as
-    the node. A timestamp separates *never* from *long ago* without that.
+    There is no third answer such as a decaying `relevance` float: nothing would
+    read it, and `retrieved_at` answers the same question better. A decayed
+    number is confounded by how often an operator ran `reflect` — 0.3 might be
+    "used once, long ago" or "used often, on a graph that reflects a lot" — so
+    it describes operator habit as much as the node. A timestamp separates
+    *never* from *long ago* without that.
 
     A `novelty` float was removed for a related reason. It was meant as
     how unlike existing graph state a node is, and it went not because nothing
@@ -828,7 +828,7 @@ def merged_value_signal(signals: Sequence[ValueSignal]) -> ValueSignal:
     - `confidence` takes the max — which looks wrong for a caller-supplied
       prior, since the more credulous assessment wins and the disagreement
       disappears. **The two callers reach it by different routes, and both are
-      recorded here because one of them used to be**: `merge_similar_topics`
+      recorded here**: `merge_similar_topics`
       makes the **higher-confidence description the primary content**, so the
       merged topic's confidence describes the text it actually leads with —
       one rule read from either end, and changing either alone makes the node
@@ -980,13 +980,13 @@ class Topic(BaseModel):
     """
 
     id: str = Field(default_factory=_new_id)
-    content: str  # the wording, and the name a tag resolves to by exact match
+    content: str  # the wording, and the name a tag resolves to (up to spelling, `tag_key`)
     # Advisory prose saying what the topic covers, kept apart from `content` so
     # that describing a topic never moves the name the graph joins on. Empty
     # means **undescribed**, a true state worth telling apart from a described
-    # one, which is why the field exists before anything writes it: enrichment
-    # gains the ability to write it in a later stage, and until then every topic
-    # reads back empty here. `dev-docs/TOPIC_DESCRIPTIONS.md` carries the case.
+    # one. Ingest writes it (`tag_descriptions`, or a decomposition entry's
+    # `description`) and so does reflect's enrichment.
+    # `dev-docs/TOPIC_DESCRIPTIONS.md` carries the case.
     description: str = ""
     # When somebody last wrote the description above or read it against the
     # topic's material and let it stand. `None` means nobody ever has, which is
@@ -997,7 +997,7 @@ class Topic(BaseModel):
     # material that has not moved is left alone. Read by reflect alone, and
     # written by creation-with-a-description, by `described()` and by
     # `apply_reflection(descriptions_confirmed=...)`.
-    # `dev-docs/DESCRIPTION_REVIEW.md` carries the case.
+    # `dev-docs/TOPIC_DESCRIPTIONS.md` carries the case.
     description_reviewed_at: datetime | None = None
     # Segment.id, if extracted from text (entity topics and topics from a tag have none)
     source_id: str | None = None
@@ -1347,7 +1347,7 @@ class MergeUndo(BaseModel):
     source_ids: list[str]
     edges: list[MergedEdge] = Field(default_factory=list)
     merged_at: datetime
-    decision_id: str | None = None  # the DecisionRecord, once §4 exists
+    decision_id: str | None = None  # the DecisionRecord journalling this merge (§4)
     # The survivor's wording, kept because reversal *deletes* the node holding
     # it. Without this a reversal cannot say what it withdrew, and the contested
     # text stops being quotable the moment the reversal lands.
@@ -1383,10 +1383,10 @@ class EmbeddingRecord(BaseModel):
     """An embedding vector associated with a specific item and model."""
 
     id: str = Field(default_factory=_new_id)
-    # A node id, in practice always. This was written as "node or segment id",
-    # but no path writes a segment: all 624 records across the real graphs point
-    # at nodes, and `vector_search` resolves every hit through `get_node`, so a
-    # segment record would be fetched and dropped (measured 2026-08-21).
+    # A node id, in practice always. No path writes a segment, and
+    # `vector_search` resolves every hit through `get_node`, so a segment record
+    # would be fetched and dropped (on 2026-08-21 all 624 records across the
+    # real graphs pointed at nodes).
     # Segments reach retrieval through BM25 instead, which indexes the whole
     # field — that is why they answer *where did I read that?* well.
     #
@@ -1911,8 +1911,8 @@ class Metacontext(BaseModel):
     of the same information. For example, "Real historical events" vs.
     "World of Darkness fictional universe" vs. "Reporting by the BBC".
 
-    Has value signals and status like epistemic nodes — supports
-    consolidation/merge during reflection.
+    Carries value signals and a status like the epistemic nodes. Nothing
+    merges or splits a metacontext.
     """
 
     id: str = Field(default_factory=_new_id)
@@ -2029,32 +2029,28 @@ class RelationVerdict(BaseModel):
     """What an agent decided about a nominated pair of relation labels.
 
     **The suppression index for FC1.** `sweep_similar_relation_pairs` re-derives
-    from scratch on every `reflect` and recorded nothing about declines, so a
-    pair an agent considered and rejected came back on every pass, for ever, to
-    a fresh agent who could not see the previous refusals. Worse, the graph
-    applied quiet pressure toward the wrong answer: accepting a merge makes one
-    label stop existing, so **accepting is self-suppressing and declining is
-    not**.
+    from scratch on every `reflect`, so without a record of the verdict a pair
+    an agent considered and rejected would come back on every pass, for ever, to
+    a fresh agent who could not see the previous refusals. Labels are never
+    merged, so nothing else suppresses a pair: this row is the only thing that
+    does.
 
-    The `assessed` edge closed exactly this for fact pairs, and
-    relation labels could not have one: that edge runs between two **nodes**,
-    and `works_for` and `employed_by` are not nodes. They are now records, which
-    is what makes this row addressable.
+    The `assessed` edge does this for fact pairs, and relation labels cannot
+    have one: that edge runs between two **nodes**, and `works_for` and
+    `employed_by` are not nodes. They are records, which is what makes this row
+    addressable.
 
     **A small append-only table, not a field on the label record.** Storing the
-    pair on each side would be mutable state held twice, free to disagree —
-    a lookup table drifting from what it encodes, for the fifth time. It is a
-    denormalised suppression index
-    and is legitimate as one for `similarity_decisions.py`'s stated reason: it
-    is immutable and append-only, so it cannot drift from the journal row that
-    also records it. The journal is the audit record; this is what the sweep
-    reads without a journal query.
+    pair on each side would be mutable state held twice, free to disagree: a
+    lookup table drifting from what it encodes. It is a denormalised
+    suppression index and is legitimate as one for `similarity_decisions.py`'s
+    stated reason: it is immutable and append-only, so it cannot drift from the
+    journal row that also records it. The journal is the audit record; this is
+    what the sweep reads without a journal query.
 
-    **Both verdicts suppress, and `synonymous` acts on nothing yet.** Recording
+    **Both verdicts suppress, and `synonymous` rewrites nothing.** Recording
     *"yes, these are synonyms, and I am not merging them"* is a real judgment,
     and leaving it unrecordable would be FC1 again for the affirmative answer.
-    Whatever consolidates labels can then act on standing verdicts rather than
-    re-asking.
 
     **A suppression stands until it is reopened.** `reopen` appends a row whose
     verdict is `reopened`, and the sweep reads the newest row for a pair: while
@@ -2087,13 +2083,13 @@ def standing_relation_pairs(verdicts: Iterable[RelationVerdict]) -> set[tuple[st
     """The label pairs a standing verdict keeps out of the nomination sweep.
 
     The newest row for a pair decides: a `distinct` or a `synonymous` suppresses
-    it, a `reopened` puts it back. Both backends read the table and call this,
-    rather than each writing the rule as a query, because a suppression index
-    the two backends spell differently is one that can disagree about what has
-    been judged.
+    it, a `reopened` puts it back. Every backend reads the table and calls
+    this, rather than each writing the rule as a query, because a suppression
+    index two backends spell differently is one that can disagree about what
+    has been judged.
 
-    Ties are broken by id so the two agree on an order the clock does not
-    settle. The tiebreak is arbitrary and only has to be the same on both sides.
+    Ties are broken by id so the backends agree on an order the clock does not
+    settle. The tiebreak is arbitrary and only has to be the same everywhere.
     """
     newest: dict[tuple[str, str], RelationVerdict] = {}
     for verdict in sorted(verdicts, key=lambda row: (row.decided_at, row.id)):
@@ -2192,8 +2188,8 @@ class Agent(BaseModel):
     **`former_ids` is the whole of aliasing.** It carries the ids this judge's
     rows may already record: the keys of records absorbed into this one. Nothing
     is ever rewritten — old rows keep the id they recorded and lookup resolves
-    through this list, the same shape as `rejudge` keeping the value it replaces
-    . An agent record whose id appears here has been absorbed and is no
+    through this list, the same shape as `rejudge` keeping the value it
+    replaces. An agent record whose id appears here has been absorbed and is no
     longer a judge in its own right; `live_agents` is where that is decided.
 
     The append-only-list-with-dates shape is deliberately `LifecycleEpisode`'s.
@@ -2567,10 +2563,9 @@ class DecisionKind(str, Enum):
     reads both lists.
 
     One kind is therefore **not** here, and is named so nobody re-derives it:
-    `relation_merge`, whose subjects `RELATION_LABELS.md` settled — they are the
-    two labels' record ids, which nothing could name while a label had no id —
-    and which waits only on whether label merging survives at all
-    (`RELATION_LABELS.md` §5).
+    `relation_merge`. Its subjects would be the two labels' record ids, but
+    labels are never merged (`RELATION_LABELS.md` §5), so it would have no
+    writer.
     """
 
     # Ingest. One row per `store_decomposition` call rather than per fact (§4.1)
@@ -2693,9 +2688,9 @@ class DecisionKind(str, Enum):
     # Prose about what one of this graph's relationship labels *means*.
     # Its own kind rather than `ENRICHMENT`, which is reflect's enrichment of a
     # **topic**: a reviewer auditing changes to what the graph claims does not
-    # want prose about what the graph's words mean mixed in. The first draft
-    # wrote `ENRICHMENT` because enriching is what it is — the right verb, and
-    # the wrong side of the line. `RELATION_LABELS.md` §7.2.
+    # want prose about what the graph's words mean mixed in. `ENRICHMENT` would
+    # be the right verb on the wrong side of the line (`RELATION_LABELS.md`
+    # §4.3).
     RELATION_DESCRIPTION = "relation_description"
     # A pair of relation labels judged `distinct` or `synonymous`.
     # Its own kind rather than `SIMILARITY`: review *selects* on kind, and a
@@ -2787,10 +2782,9 @@ class DecisionRecord(BaseModel):
     **Never edited, with no exceptions** — including for review state, which is
     why there is no `reviewed_at` here. A review is another record pointing back
     (`reviews`), so *reviewed* is derived from existence rather than stored as a
-    mutable flag on a row that claims to be append-only. The first draft had
-    both, and the contradiction was load-bearing: a mutable field on this row
-    also has to stay in sync with a copy on the node, across two backends
-    .
+    mutable flag on a row that claims to be append-only. A mutable field here
+    would contradict that claim, and would also have to stay in sync with a copy
+    on the node, on every backend.
 
     There is no update path on the protocol either, which is what makes the
     claim structural rather than a convention.

@@ -86,12 +86,13 @@ def query_terms(query_text: str) -> list[str]:
 def _merged(per_term: Sequence[Sequence[tuple[str, float]]]) -> list[tuple[str, float]]:
     """One ranked hit list from several per-term ones, merged by rank.
 
-    Scores used to do this. BM25 over several terms is the sum of the per-term
-    scores for the same document — verified on both engines — so adding them
-    reproduced the ranking of a single combined query while keeping each term's
-    own best hit visible, which is what R2 needs and a combined call cannot say.
+    Merging by score is the obvious alternative. BM25 over several terms is the
+    sum of the per-term scores for the same document (verified on both
+    engines), so adding them reproduces the ranking of a single combined query
+    while keeping each term's own best hit visible, which is what R2 needs and a
+    combined call cannot say.
 
-    R8 ends that. A declared term's list is ordered by containment first and
+    R8 rules that out. A declared term's list is ordered by containment first and
     score second, so its order is no longer a function of the numbers in it, and
     re-sorting on the sum would send a floored exact match — the hit containment
     just rescued — straight back to the bottom. Rank is what survives crossing

@@ -254,7 +254,7 @@ const logPanel = initLogPanel(
   // Click an entry, highlight what it acted on. `highlightNodes` reports what
   // it could not do — an id this graph does not hold, a type filter it had to
   // clear — and the rail says so, because a highlight that lands on nothing
-  // looks exactly like a broken panel (§7).
+  // looks exactly like a broken panel (VISUALISATION.md, Rules every panel follows).
   (entry) => highlightNote(graphPanel.highlightNodes(entry.subjects)),
 );
 
@@ -284,8 +284,9 @@ $("btn-warnings").addEventListener("click", () => warningsPanel.toggle());
  * Dim everything the chosen retrieval did not return, in **both** panels.
  *
  * Timeline marks are the same nodes, so dimming only the graph would leave the
- * two panels disagreeing about what came back — the class of bug #56 fixed for
- * colour. Focus state therefore lives here, above both, like the theme does.
+ * two panels disagreeing about what came back, the disagreement the shared
+ * palette removed for colour. Focus state therefore lives here, above both, like
+ * the theme does.
  */
 const applyFocus = (entry: RecordEntry | null): void => {
   const ids = entry === null ? null : entry.nodeIds;
@@ -543,8 +544,8 @@ const selectSession = async (sessionId: string): Promise<boolean> => {
     await loadRetrievals(sessionId);
     return true;
   } catch (err) {
-    // Say so on screen. The console is where this used to stop, which is why a
-    // dead backend was indistinguishable from a slow one for an hour.
+    // Say so on screen. Stopping at the console leaves a dead backend
+    // indistinguishable from a slow one.
     console.error("Failed to select session:", err);
     unreachable.add(sessionId);
     viewedGraph = "";

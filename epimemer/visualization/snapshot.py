@@ -1,17 +1,18 @@
 """Read-side assembly for visualization snapshots and graph listings.
 
-These build the JSON payloads the browser expects (`{"graph", "nodes", "edges"}`
-and `{"graphs", "active_graph", "backend"}`) from a raw storage backend. They run
-**inside the process that owns the storage** — historically the embedded viz
-server, now each MCP session answering an RPC from the hub — so `mem://` and
-in-memory graphs are readable (the reads execute where the data lives).
+These build the JSON payloads a client reads (the snapshot and the graph list,
+whose shapes `dev-docs/VIZ_CONTRACT.md` specifies), and the node vectors a
+layout by meaning needs, from a raw storage backend. They run **inside the
+process that owns the storage**, each MCP session answering an RPC from the
+hub, so `mem://` and in-memory graphs are readable (the reads execute where the
+data lives).
 
 Kept separate from any transport so both the RPC handler (`hub_client.py`) and
 tests can call them directly.
 """
 
 from epimemer.core.advisories import WarningPolicy
-from epimemer.core.types import DecisionKind, NodeStatus, live_edges
+from epimemer.core.types import DecisionKind, NodeStatus, NodeType, live_edges
 from epimemer.pipelines.query.validity import validity_from_edges
 from epimemer.pipelines.reflection.boundaries import (
     boundary_proposals_from,
@@ -28,9 +29,11 @@ from epimemer.visualization.events import (
     edge_to_view,
     metacontext_to_view,
     node_to_view,
+    node_type_label,
     relation_label_to_view,
     timeline_to_view,
 )
+from epimemer.visualization.protocol import VIZ_SCHEMA_VERSION
 
 
 async def assemble_snapshot(storage: StorageBackend, graph: str) -> dict:
@@ -79,6 +82,7 @@ async def assemble_snapshot(storage: StorageBackend, graph: str) -> dict:
     )
     return {
         "graph": graph,
+        "schema_version": VIZ_SCHEMA_VERSION,
         "nodes": [node_to_view(n, graph).model_dump(mode="json") for n in nodes],
         "edges": [edge_to_view(e, graph).model_dump(mode="json") for e in edges],
         "boundary_proposals": [
@@ -90,6 +94,55 @@ async def assemble_snapshot(storage: StorageBackend, graph: str) -> dict:
         ],
         "relation_labels": [
             relation_label_to_view(rl, graph).model_dump(mode="json") for rl in relation_labels
+        ],
+    }
+
+
+async def assemble_embeddings(storage: StorageBackend, graph: str, node_type: str | None) -> dict:
+    """The vectors of `graph`'s active nodes, of one type when `node_type` names one.
+
+    A viewer that lays topic nodes out by meaning, nearer the more alike they
+    are, needs their vectors, and the snapshot does not carry them: 2,000
+    vectors would quadruple it, and every snapshot refresh would pay for them
+    whether or not anything is laid out. Topic nodes are the usual request, a
+    few hundred vectors, so this answers for one type at a time when asked to.
+
+    The nodes are read with the snapshot's own `viz_list_nodes(graph)`, and
+    each entry names its node's type in the snapshot's words, so a client joins
+    the two by `node_id` with nothing to reconcile. A node with no embedding is
+    absent from the list. Entries come in the snapshot's node order, then by
+    model. `models` maps each model present to its vector length, so a client
+    can pick one model and size its arrays before reading an entry; vectors
+    from two different models are never comparable with each other.
+
+    `node_type` is checked here as well as at the hub, because the session is
+    what answers, and an unknown type must be an error rather than an empty
+    list that reads as a graph with no vectors.
+    """
+    wanted = NodeType(node_type).value if node_type is not None else None
+    labelled = ((node.id, node_type_label(node)) for node in await storage.viz_list_nodes(graph))
+    types = {node_id: label for node_id, label in labelled if wanted is None or label == wanted}
+    position = {node_id: index for index, node_id in enumerate(types)}
+    records = sorted(
+        await storage.viz_list_embeddings(graph, item_ids=list(types)),
+        key=lambda record: (position[record.item_id], record.model_id),
+    )
+    models: dict[str, int] = {}
+    for record in records:
+        models.setdefault(record.model_id, len(record.vector))
+    return {
+        "graph": graph,
+        "schema_version": VIZ_SCHEMA_VERSION,
+        "node_type": node_type,
+        "models": models,
+        "embeddings": [
+            {
+                "node_id": record.item_id,
+                "node_type": types[record.item_id],
+                "model_id": record.model_id,
+                "vector": list(record.vector),
+            }
+            for record in records
         ],
     }
 
@@ -128,7 +181,7 @@ async def warning_settings_result(storage: StorageBackend, default: WarningPolic
     A read and nothing else. The dashboard's panel shows these settings and
     never changes one: a write from the browser would be the first write into a
     graph with no author, and every change today is journalled against a session
-    and a judge (`WARNINGS_DASHBOARD.md` §2.4).
+    and a judge (`EVENT_LOG.md` §12.4).
 
     It describes the **active** graph, as the reflection pressure above does,
     because the overrides are read through the session's own connection, which

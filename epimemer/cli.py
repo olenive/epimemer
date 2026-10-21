@@ -3,15 +3,15 @@
 Every group here exists because of a rule rather than for convenience. Approving
 an agent id is the act that makes review provable (`dev-docs/REVIEW_MODE.md`
 §2.2), so no MCP tool may perform it: a tool the agent can call cannot establish
-that the *user* called it. The two channels that terminate at a person are
-`ctx.elicit`, which the server raises in-band, and this command, which the agent
-cannot run. `metacontexts declare` and `tags repair` are here on the same
-grounds: both state something about a graph's past that nothing in the graph can
-derive, and an agent asserting it about its own writes would be marking its own
-homework.
+that the *user* called it. The channels that terminate at a person are
+`ctx.elicit`, which the server raises in-band, this command, which the agent
+cannot run, and `EPIMEMER_APPROVED_AGENTS`, which the server reads at start.
+`metacontexts declare` and `tags repair` are here on the same grounds: both
+state something about a graph's past that nothing in the graph can derive, and
+an agent asserting it about its own writes would be marking its own homework.
 
 `graphs` is the one group that is here for reach rather than for a rule. An
-agent can back a graph up — `backup_graph` writes to the destination the server
+agent can back a graph up: `backup_graph` writes to the destination the server
 was configured with, and takes no path of its own, so it can act on a prompt
 without choosing where a graph goes. Naming a path, importing a bundle, and
 verifying one are the parts a person does, and they have to work when the server
@@ -24,8 +24,9 @@ backend) lives inside the server process — a second connection to `mem://` is 
 separate store, not a second view of one. Writing there would
 report success into a store the running server will never read, so it refuses
 and names `EPIMEMER_APPROVED_AGENTS`, which the server reads at connect. A
-SQLite graph is a file that a second process can write beside the server, so
-these commands work there as they do against a served SurrealDB.
+SQLite graph is a file that a second process can write beside the server, and
+Postgres and a served SurrealDB are databases this command reaches as the server
+does, so these commands work on all three.
 """
 
 import argparse
@@ -101,9 +102,10 @@ def unreachable_store(config: ServerConfig) -> str | None:
 def _embedded_advice(reason: str, agent_id: str | None, action: str) -> str:
     """What to do instead, named for the thing the user was trying to do.
 
-    Two settings live behind this wall and they have different environment
-    variables, so one generic message would send half of its readers to the
-    wrong one.
+    Each refused command has its own way forward: approving an id and requiring
+    a judge each have an environment variable the server reads at start, and
+    the others have none, so one generic message would send most of its readers
+    the wrong way.
     """
     if action == "backfill":
         # The one command here whose refusal costs nothing, and the message has
@@ -148,8 +150,8 @@ def _embedded_advice(reason: str, agent_id: str | None, action: str) -> str:
             f"{reason}\n\n"
             f"Whether a judge is retired lives on its record inside the graph, "
             f"so there is nothing out here to write it to. On a served "
-            f"SurrealDB or a SQLite graph this command works. On an embedded "
-            f"store the judges go "
+            f"SurrealDB, a SQLite graph or Postgres this command works. On an "
+            f"embedded store the judges go "
             f"with the process, and the one channel that reaches them is the "
             f"prompt claim_agent raises, whose *A retired judge…* entry can "
             f"bring one back."
@@ -1252,12 +1254,12 @@ def main(argv: list[str] | None = None) -> int:
         return _printed(config, args.graph, run)
 
     if args.group == "graphs" and args.action in ("list", "export", "import", "verify", "convert"):
-        # A note rather than the wall above. These three are not the user's
-        # exclusive act — `backup_graph` does the same export from inside the
-        # server — so refusing here would take away the one channel a user has
-        # when the server is not running. What the note is for: an embedded
-        # store opened from out here is an empty one, so exporting it writes an
-        # empty bundle and importing into it throws the graph away at exit.
+        # A note rather than the wall above. These are not the user's exclusive
+        # act (`backup_graph` exports from inside the server), so refusing here
+        # would take away the one channel a user has when the server is not
+        # running. What the note is for: an embedded store opened from out here
+        # is an empty one, so exporting it writes an empty bundle and importing
+        # into it throws the graph away at exit.
         unreachable = unreachable_store(config)
         if unreachable is not None:
             print(f"Note: {unreachable}\n", file=sys.stderr)

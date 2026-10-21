@@ -3,10 +3,10 @@
 The graph makes no inferences; the agent does and the graph stores them. So the
 defect this catches is not one the engine can prevent at write time — an
 inference drawn across *"the city is called Leningrad"* and a claim about 2020
-is unsound, and nothing in the model noticed until validity existed. This is the
-reason the validity model mattered more than anything else: not a display
-defect but a
-soundness defect in the layer the system exists to provide.
+is unsound, and only a model of when claims were true can notice. That is why
+the validity model matters more than anything else: what it catches is not a
+display defect but a soundness defect in the layer the system exists to
+provide.
 
 **It flags and never blocks, and it never fires on unknown.** Both are
 requirements rather than choices. `unknown` is the common outcome of any

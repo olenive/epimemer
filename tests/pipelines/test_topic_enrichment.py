@@ -9,7 +9,7 @@ embedded on its name alone.
 
 `changed_since` is the review rule itself, and it is pure, so it is asserted
 here against hand-built nodes rather than through a reflect.
-`dev-docs/DESCRIPTION_REVIEW.md` carries the case.
+`dev-docs/TOPIC_DESCRIPTIONS.md` carries the case.
 """
 
 from datetime import UTC, datetime, timedelta

@@ -11,8 +11,8 @@ import {
 import { semanticPaletteFor, type Theme } from "./theme";
 
 // The hazard this guards is the gap between a Python enum and a TypeScript
-// lookup table: `NodeStatus` grew `corrected` and `historical` in 666904f and
-// the table did not, so retired nodes drew at full opacity (#55). The fix is
+// lookup table: `NodeStatus` grew `corrected` and `historical` and the table
+// did not, so retired nodes drew at full opacity. The fix is
 // the *default*, not two more keys — the next status added must be safe
 // without anyone remembering this file exists.
 describe("statusOpacity", () => {
@@ -42,8 +42,9 @@ describe("statusOpacity", () => {
 });
 
 // The same Python-enum-to-lookup-table gap, one layer over: `EdgeType` grew
-// `temporally_followed_by` for #53's world-changes, and an edge kind this table
-// has never heard of draws in the unknown-kind neutral rather than as lineage.
+// `temporally_followed_by` for a claim the world moved on from, and an edge
+// kind this table has never heard of draws in the unknown-kind neutral rather
+// than as lineage.
 describe("edgeColor", () => {
   const THEMES: Theme[] = ["light", "dark"];
   // The neutral `graph-panel` falls through to for a kind it has never heard
@@ -77,9 +78,9 @@ describe("edgeColor", () => {
     });
 
     it(`draws a withdrawn similarity apart from a standing one (${theme})`, () => {
-      // #68 leaves both edges in the graph — nothing deletes — so both draw,
-      // and a withdrawal wearing the similarity hue would show agreement that
-      // has been taken back.
+      // A withdrawal leaves both edges in the graph, since nothing deletes, so
+      // both draw, and a withdrawal wearing the similarity hue would show
+      // agreement that has been taken back.
       expect(edgeColor("retracted_similarity", theme))
         .not.toBe(edgeColor("similarity", theme));
       expect(edgeColor("retracted_similarity", theme)).not.toBe(UNKNOWN_KIND);
@@ -89,12 +90,12 @@ describe("edgeColor", () => {
       // The family where colour carries the meaning: each of these says
       // something different about the *same two nodes*, and the panel draws
       // them on top of each other. Grey is a fine default for a structural
-      // edge — `sourced_from`, `tagged_with_topic` and eleven others take it — but a
-      // judgment that falls through is the #55 failure: an assertion reaching
-      // the browser and drawing as an anonymous neutral nobody reads.
+      // edge, `sourced_from`, `tagged_with_topic` and the rest, but a judgment
+      // that falls through is an assertion reaching the browser and drawing as
+      // an anonymous neutral nobody reads.
       //
-      // `variant_of` had been doing exactly that since it was introduced, and
-      // was found only because #68 added a row beside it. Spelled out rather
+      // `variant_of` did exactly that until a row for `retracted_similarity`
+      // was added beside it and showed it missing. Spelled out rather
       // than imported for `UNKNOWN_KIND`'s reason: a shared constant moves with
       // whichever side changed, and drift is what is being caught.
       const PAIR_JUDGMENTS = [
@@ -110,7 +111,7 @@ describe("edgeColor", () => {
   }
 });
 
-// EVENT_LOG.md §7 / RETRIEVAL_PROVENANCE.md §4.4 — the same two silent failures,
+// VISUALISATION.md, Rules every panel follows: the same two silent failures,
 // closed once rather than twice. `highlightNodes` is about to be driven from a
 // log entry and from a retrieval record, and in both cases a click that does
 // nothing, with nothing said, is indistinguishable from a broken panel.

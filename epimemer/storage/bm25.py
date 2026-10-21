@@ -6,9 +6,9 @@ so the query embeds to roughly "short alphanumeric string" — which is close to
 every *other* ticket id in the graph. BM25's IDF is exactly the missing
 statistic (`dev-docs/LEXICAL_SEARCH.md` §1).
 
-SurrealDB scores in-engine. This module is what the in-memory backend uses so
-the two can be siblings rather than a feature and its absence, and it is where
-the arithmetic is pinned to numbers measured against the real engine
+SurrealDB scores in-engine. The in-memory, SQLite and Postgres backends score
+with this module, so every backend answers a lexical query the same way, and it
+is where the arithmetic is pinned to numbers measured against the real engine
 (`tests/storage/test_bm25.py`).
 
 Two things it deliberately does not do:
@@ -18,9 +18,8 @@ Two things it deliberately does not do:
   directions rather than one. The guarantee the backends share is set parity on
   *rare* terms — identifiers, error codes, names — which no stemmer touches.
 - **It builds no index.** Every call re-analyzes the corpus it is given. A
-  cached index would need invalidating on every write, and the backend this
-  serves is the ephemeral one; a stale lexical index is a worse bug than a
-  linear scan is a cost.
+  cached index would need invalidating on every write, and a stale lexical
+  index is a worse bug than a linear scan is a cost.
 """
 
 import math
@@ -99,7 +98,7 @@ def containment_first(
     is here to rescue. Containing rows keep their score for the record but do
     not depend on it; the remainder still obeys the zero rule.
 
-    Lives here, in the module both backends already share, rather than being
+    Lives here, in the module every backend already shares, rather than being
     written out twice. One rule stated in one place and re-derived, differently,
     somewhere else is the shape of half the bugs this project has found.
     """

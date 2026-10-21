@@ -162,15 +162,18 @@ still holds it.
 **The point is really two events.** Both sources are right, each about a
 different occurrence of what the point names: the town had two fires. The point
 is what is wrong, so the verdict splits it. A new point takes the same label,
-and the assertions and facts the judge names move to it. A fact's date is part
-of what it claims, so nothing moves a fact off its date without someone
-deciding it, and anything the judge does not name stays where it is.
+and the assertions and facts the judge names move to it. It takes the label
+and not the dates, since two fires are not one moment, so a point with no
+label cannot be split. A fact's date is part of what it claims, so nothing
+moves a fact off its date without someone deciding it, and anything the judge
+does not name stays where it is.
 
 **Hold.** The sources genuinely disagree and nothing on hand settles it. The
 contradiction stays open, the point stays contested, and `reflect` stops
-nominating it. A hold is cleared by new evidence, an ordering assertion or a
-dated point touching any point in the contradiction, and by nothing else. It is
-not a snooze, and nothing reopens it on a schedule.
+nominating it. A hold is cleared by new evidence and by nothing else: an
+ordering assertion touching any point in the contradiction clears it, and a
+new dated point on the timeline clears every hold there. It is not a snooze,
+and nothing reopens it on a schedule.
 
 ### Two points that turn out to be one moment
 
@@ -205,14 +208,12 @@ and the rule that made it are two things that can disagree. `query_timeline`
 computes a rule's occurrences into its answer beside the stored points, capped
 per rule per call: a rule can produce occurrences without end, so the response
 says `truncated` for that rule and names the window it did cover. Asking for
-more than the ceiling gets the ceiling.
+more than the ceiling gets the ceiling. The ordering queries (`before`, `after`
+and `between`) leave occurrences out: an occurrence takes part in the order
+only once it is materialised as a point (below).
 
 An occurrence is identified by **`occurrence_start`**, the start the rule gives
-it. There is no occurrence number: for a calendar rule, numbering would need a
-walk from the rule's first occurrence, cheap near it and not cheap a century
-later, so a number that had to be capped would be missing exactly where most
-queries land. "The twelfth market" is a label a fact can carry in its own words
-if a source says it. The response to `add_recurrence` previews the first few
+it. The response to `add_recurrence` previews the first few
 occurrences, and it is worth reading: an rrule string is easy to mistype in a
 way that still parses, and the preview is where that shows up.
 
@@ -239,7 +240,11 @@ happened at another time. A cancelled occurrence is left out of query answers,
 and materialising one is refused, since making a point of something the graph
 records as not having happened is always a mistake. A moved occurrence keeps
 the start the rule gave it as its identity and is reported at its new date, so
-materialising it before and after the move gives one point, not two.
+materialising it before and after the move gives one point, not two. An
+occurrence holds one exception, so recording a second replaces the first. A
+range query selects occurrences by the start the rule gave them, so one moved
+out of the window still comes back, at its new date, and one moved into the
+window from outside it does not.
 
 ### Ending a rule never retires it
 
@@ -295,7 +300,9 @@ said or what a judge decided go through the same gate as any other write.
 ## 7. What the dashboard draws today
 
 The visualisation panel shows a timeline's dated points on a vertical axis, past
-at the top. Four things beyond the dates are drawn.
+at the top. Beside the axis it also draws when each claim was true, one lane
+per source, which [VALIDITY.md](VALIDITY.md) §6 points to. What it draws for
+the timeline itself, beyond the dates, is below.
 
 **A point the order places.** A point nobody dated, that a source said came
 after one dated point and before another, is drawn as a hatched band spanning
@@ -318,11 +325,10 @@ into a real timepoint is drawn as an ordinary point instead, because that is
 what it now is. A moved occurrence sits on the date it moved to.
 
 Occurrences are worked out on the spot and never stored, so the panel has to
-pick a window. It uses the span of the timeline's dated points widened by one
-period of the rule on each side, which brings in the occurrence either side of
-the data. A timeline with no dated points uses its own stated present, and one
-with neither draws no beads, since the only alternative is to enumerate from
-today and put marks where the graph never said anything.
+pick a window, which it takes from the span of the timeline's dated points. A
+timeline with no dated points uses its own stated present, and one with
+neither draws no beads, since the only alternative is to enumerate from today
+and put marks where the graph never said anything.
 
 **What stays in the tray.** Points nothing constrains, contested points with no
 date, and points belonging to another timeline's clock. A chip in the tray is a

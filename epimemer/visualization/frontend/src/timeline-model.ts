@@ -430,10 +430,10 @@ const markForNode = (resolver: Resolver, node: NodeView): DatedMark => {
 /**
  * Record time: one row holding every node.
  *
- * It used to be a row per node type. That split now lives in the *side* a mark
- * is drawn on (`sideForTypes`), and keeping both would mean picking one type
- * at a time from the timeline selector — which would hide two thirds of the
- * graph to say something the layout already says.
+ * Node type is carried by the *side* a mark is drawn on (`sideForTypes`)
+ * rather than by a row per type: rows per type would mean picking one type at
+ * a time from the timeline selector, which would hide two thirds of the graph
+ * to say something the layout already says.
  *
  * Only nodes present in the snapshot appear, and the snapshot carries active
  * nodes — so this shows what the graph currently holds and when it arrived,

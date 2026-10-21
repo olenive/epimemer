@@ -5,7 +5,7 @@ What is under test here is the part a backend is needed for: the record written
 back, the journal row, the `TIMELINK` retirement a split and a merge need, and
 the flags a reader sees on `search` and `reflect`.
 
-Both backends via the `storage` fixture.
+Every backend, through the `storage` fixture.
 """
 
 from datetime import UTC, datetime, timedelta

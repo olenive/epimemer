@@ -1,11 +1,11 @@
-"""Who is judging, and who decided that (REVIEW_MODE.md §2, step 2).
+"""Who is judging, and who decided that (REVIEW_MODE.md §2).
 
 The registry has one job that nothing else in this system does: make *"a
 different agent reviewed this"* something the graph can show rather than
 something an agent asserts. Everything here follows from that, and the tests are
 grouped by the claim each one protects rather than by function.
 
-Run against both backends, because approval is per-graph *settings* and a graph
+Run against every backend, because approval is per-graph *settings* and a graph
 that forgot its approved ids on one backend would refuse every claim on that
 backend alone — the exact shape of divergence `tests/conftest.py` exists for.
 """
@@ -926,7 +926,7 @@ class TestApprovalIsPerGraph:
 class TestConfiguredApprovalsReachTheGraphYouLandOn:
     """`EPIMEMER_APPROVED_AGENTS` is the only approval channel that reaches an
     embedded store, so a graph switch that skipped it would leave an
-    elicitation-less client with no way to admit a judge at all (§10.3)."""
+    elicitation-less client with no way to admit a judge at all."""
 
     async def test_seeding_admits_ids_to_a_newly_created_graph(self, storage):
         await tools.use_graph(

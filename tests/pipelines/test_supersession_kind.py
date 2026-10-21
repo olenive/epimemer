@@ -8,10 +8,9 @@ Petersburg became Leningrad became Saint Petersburg, every name correct in its
 turn, and the only thing the model could say was that the earlier one had been
 replaced.
 
-This is the floor of the validity model, not the fix. It records the distinction; it does not
-give a node a validity interval, so a claim that becomes true *again* still has
-nowhere to say so. The full design is in `dev-docs/VALIDITY_DESIGN.md` and
-`REVIEW_EPISTEMIC.md` §13.
+This is the floor of the validity model. It records the distinction; when a claim
+was true is recorded separately, as validity intervals per source. The full
+design is in `dev-docs/VALIDITY_DESIGN.md` and `REVIEW_EPISTEMIC.md` §13.
 
 One behavioural consequence is asserted here rather than left implied: a node
 retired because the world changed is **not** an archival candidate. Archiving it

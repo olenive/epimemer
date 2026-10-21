@@ -63,7 +63,7 @@ async def fold_lineage(
     **Only a retired node folds.** Two ACTIVE nodes joined by a lineage edge are
     two current claims, and one of them is not history — that pairing is
     reachable both through `link`, which writes a lineage edge without flipping a
-    status (`REVIEW_EPISTEMIC.md` §6.1), and through `restore`, which brings a
+    status (`docs/RETRIEVAL.md` §6), and through `restore`, which brings a
     claim back while leaving the edge that recorded it stepping aside. Folding
     there would hide a live answer, so the rule reads the status rather than the
     edge.

@@ -19,14 +19,14 @@ from typing import TypeVar
 
 T = TypeVar("T")
 
-# How many coarse acts a session keeps. Traced to the measured numbers rather
-# than to the withdrawn estimates (§3, corrected): a 25-node
+# How many coarse acts a session keeps. Traced to the measured numbers (§3): a
+# 25-node
 # `store_decomposition` emits 176 fine-grained events and **one** act, because
 # it is one transaction. So the coarse stream is two orders of magnitude
 # smaller than the one that prompted "a raw log is a firehose", and a few
 # hundred entries is a long working session rather than a few seconds of one.
-# Not configurable, deliberately — a knob here is one more thing that can be set
-# to a number nobody measured (§10, resolved by construction).
+# Not configurable, deliberately: a knob here is one more thing that can be set
+# to a number nobody measured (§4.2).
 LOG_RING_CAPACITY = 512
 
 # Retrieval records carry response payloads and id lists, so they are bounded by

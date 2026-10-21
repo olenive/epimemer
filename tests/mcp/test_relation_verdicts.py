@@ -20,7 +20,7 @@ it is **permanent by design** rather than by oversight, and that none of it
 needs the CLI — the backfill refuses embedded backends, which is the default
 development configuration.
 
-Both backends via the `storage` fixture.
+Every backend, through the `storage` fixture.
 """
 
 import pytest

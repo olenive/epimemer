@@ -335,18 +335,18 @@ def _embeddings_at(g: _GraphStore, item_id: str, model_id: str | None) -> list[E
     ]
 
 
-_DEFAULT_DB = "default"
-
-
 class InMemoryStorage:
     """In-memory implementation of StorageBackend.
 
     Supports multiple named graphs. Each graph is an isolated _GraphStore.
     """
 
-    def __init__(self):
-        self._database: str = _DEFAULT_DB
-        self._graphs: dict[str, _GraphStore] = {_DEFAULT_DB: _GraphStore()}
+    def __init__(self, database: str = "default"):
+        # Validated here, as every backend validates the graph it starts on, so
+        # the first graph obeys the rule `switch_database` applies to every
+        # later one.
+        self._database: str = validate_graph_name(database)
+        self._graphs: dict[str, _GraphStore] = {self._database: _GraphStore()}
         self._guard = make_graph_guard()
 
     # --- Lifecycle ---
@@ -1553,3 +1553,27 @@ class InMemoryStorage:
         # The order `query_decisions` answers in, tie-broken the same way.
         matches.sort(key=lambda record: (record.decided_at, record.id), reverse=True)
         return _copy_all(matches)
+
+    async def viz_list_embeddings(
+        self,
+        database: str,
+        *,
+        item_ids: Sequence[str] | None = None,
+        model_id: str | None = None,
+    ) -> Sequence[EmbeddingRecord]:
+        graph = self._graphs.get(database)
+        if graph is None:
+            return []
+        if item_ids is None:
+            return _copy_all(
+                embedding
+                for embedding in graph.embeddings.values()
+                if model_id is None or embedding.model_id == model_id
+            )
+        # Asked by item, the read goes through the item index, as
+        # `get_embeddings_for_items` does on the active graph.
+        return _copy_all(
+            embedding
+            for item_id in dict.fromkeys(item_ids)
+            for embedding in _embeddings_at(graph, item_id, model_id)
+        )

@@ -643,7 +643,7 @@ class TestTimepointKind:
 
     def test_kind_is_not_stored(self):
         """The serialised form never gains a `kind` that could go stale beside
-        the dates, so the bundle format and both backends are unaffected."""
+        the dates, so the bundle format and every backend are unaffected."""
         dumped = Timepoint(label="afterwards").model_dump(mode="json")
         assert "kind" not in dumped
 

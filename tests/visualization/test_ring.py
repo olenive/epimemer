@@ -1,7 +1,7 @@
 """The bounded ring both the log and the retrieval records hang off.
 
 Pure: no hub, no socket, no session. One implementation with two instances is
-the point (`EVENT_LOG.md` §4.3) — a second ring written out by hand is a second
+the point (`EVENT_LOG.md` §4.2) — a second ring written out by hand is a second
 eviction rule, and the two would differ the first time one of them was tuned.
 """
 

@@ -30,20 +30,9 @@ Or add it directly to `~/.claude.json`:
 From a checkout, `uv run --directory /path/to/epimemer epimemer serve` is the
 equivalent command.
 
-This uses the defaults: sentence-transformers for embeddings and in-memory
-storage. The embedding model (`all-MiniLM-L6-v2`, about 80 MB) downloads on
-first run. The provider comes from the `sentence-transformers` extra; if it is
-selected without that extra installed, the server refuses to start and names
-the extra.
-
-Epimemer does no decomposition of its own. Extracting topics, facts and
-inferences from text is the agent's job, done through the two-step ingest
-`segment` then `store_decomposition` (see *Available Tools*).
-
-With visualization enabled, open http://127.0.0.1:8765 in your browser to see
-the knowledge graph and pipeline execution as they happen, alongside a timeline
-of what the graph knows about when, and a log of every decision and every
-warning the agent was given.
+With visualization enabled, open http://127.0.0.1:8765 in your browser to
+watch the graph, the pipelines, a timeline and a log of every decision and
+warning as they happen.
 
 ### Configuration
 
@@ -54,12 +43,9 @@ plus `EPIMEMER_SURREALDB_URL` for a SurrealDB server, `EPIMEMER_SQLITE_DIR`
 for file-backed graphs or `EPIMEMER_POSTGRES_DSN` for a Postgres database (see
 *Which graph a server opens* below).
 
-Two variables describe the seat a judge is confirmed in (see *Agents* below):
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `EPIMEMER_CLIENT_SESSION_ID` | `CLAUDE_CODE_SESSION_ID`, else unset | The client conversation this server serves. Claude Code sets `CLAUDE_CODE_SESSION_ID` for every stdio server and keeps it across a `/mcp` reconnect, so there is nothing to set there |
-| `EPIMEMER_CLIENT_STATE_DIR` | `~/.epimemer/client-state` | Where the client hook records which model is behind each conversation |
+`EPIMEMER_CLIENT_SESSION_ID` and `EPIMEMER_CLIENT_STATE_DIR` describe the seat
+a judge is confirmed in (see *Agents* below); under Claude Code neither needs
+setting.
 
 ### Record the model (Claude Code hook)
 
@@ -82,11 +68,9 @@ confirmed across a `/mcp` reconnect, and a model switch is noticed. Add it to
 ```
 
 No matcher, so `SessionStart` fires for every start reason (startup, resume,
-clear, compact, fork). The command reads the hook's JSON on stdin, writes
-`<dir>/<session_id>.json` and `<dir>/client-<pid>.json`, prints nothing, and
-always exits 0, so a problem in it never breaks a session; where it records
-nothing it says why in one line on stderr. It prunes both kinds of file once
-they have not been written for 30 days.
+clear, compact, fork). The command prints nothing and always exits 0, so a
+problem in it never breaks a session; where it records nothing it says why in
+one line on stderr.
 
 `$PPID` is the id of the Claude Code process running the hook, and it links
 every hook event of that process to the conversation the server was started
@@ -133,7 +117,7 @@ restate the count.
 | `list_sources` | List the distinct source nodes, with reference counts |
 | `list_relations` | List the distinct user-defined relationship labels, with usage counts and descriptions |
 | `describe_relation` | Say what one of this graph's relationship labels means here: guidance the next agent reads before coining a label |
-| `graph_stats` | Node and edge counts, type breakdown, and reflection pressure for the active graph |
+| `graph_stats` | Node and edge counts, type breakdown, nodes without a metacontext, and reflection and backup pressure for the active graph |
 
 ### Conflict Handling
 
@@ -152,9 +136,9 @@ restate the count.
 
 | Tool | Purpose |
 |------|---------|
-| `reflect` | Analyse the graph for consolidation and cleanup candidates, including open disputes about the order of timepoints. Reads only |
+| `reflect` | Analyse the graph for consolidation and cleanup candidates, including open disputes about the order of timepoints. Changes nothing in the graph; it resets the count of stores since the last reflect |
 | `configure_reflection` | Set or clear this graph's store threshold for suggesting a reflect |
-| `apply_reflection` | Apply your decisions from a reflection, including user-approved archivals |
+| `apply_reflection` | Apply your decisions from a reflection, including user-approved archivals, which export the nodes and retire them as `archived` |
 | `reopen` | Put a question a verdict suppressed back on the worklist: two node ids for a pair judged `distinct`, two relation label names for a label pair, one node id for a node a `retained` verdict kept. Asserts nothing about the answer, and a `reason` is required |
 
 ### Review
@@ -182,7 +166,7 @@ and when. See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
 
 | Tool | Purpose |
 |------|---------|
-| `archive` | Export old superseded and merged nodes for cold storage. Deletes nothing |
+| `archive` | Export old corrected and merged nodes, with their edges, for cold storage. Changes nothing in the graph |
 | `restore` | Reimport archived nodes, or return a retired claim to active when a new source says it is true again |
 
 ### Timeline Operations
@@ -210,13 +194,13 @@ and when. See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
 
 ### Graph Management (knowledge graphs)
 
-Both storage backends support multiple named graphs.
+Every storage backend supports multiple named graphs.
 
 | Tool | Purpose |
 |------|---------|
 | `list_graphs` | List the available knowledge graphs and show the active one |
-| `use_graph` | Switch to a knowledge graph, creating it if needed |
-| `delete_graph` | Delete a knowledge graph permanently |
+| `use_graph` | Switch to a knowledge graph. A name that does not exist comes back with similar names in case of a typo; `confirm=true` creates it |
+| `delete_graph` | Delete a knowledge graph permanently. Requires `confirm=true`, and refuses the active graph |
 | `backup_graph` | Write the active graph out as a bundle, to the destination the server was configured with (`EPIMEMER_BACKUP_DESTINATION`). Takes no path: where a graph goes is the user's decision. Refuses plainly when nothing is configured |
 | `configure_backup` | Set or clear this graph's store threshold for suggesting a backup |
 
@@ -227,6 +211,10 @@ One rule, applied when the process starts:
 ```
 EPIMEMER_GRAPH  →  else EPIMEMER_SURREALDB_DATABASE  →  else "default"
 ```
+
+`EPIMEMER_SURREALDB_DATABASE` is read by the SurrealDB backend only, so the
+SQLite, Postgres and in-memory backends go from `EPIMEMER_GRAPH` straight to
+`"default"`.
 
 **The active graph is process state.** `use_graph` switches it for the life of
 the process only. A client reconnect (`/mcp`, a restart, a crash) starts a
@@ -247,8 +235,7 @@ own `use_graph`. Do not copy the name out of a refusal: the check works only
 while your expectation and the server's state are arrived at independently.
 The refusal names the active graph so you can recover, not so you can echo it.
 
-There is no setting to relax the requirement. Concurrent tool calls cannot
-move the graph out from under each other: a `use_graph` batched alongside
+There is no setting to relax the requirement. A `use_graph` batched alongside
 other calls waits for them to finish, so a batched ingest cannot be split
 across two graphs.
 
@@ -264,43 +251,27 @@ graphs can unbind a judge.
 | `claim_agent` | Propose a name and a self-description; binds this session to the judge the user picks. Returns `name` (say this to a person), `agent_id` (an opaque key, for `review`) and `judge_token` (pass it as `judge_token` on every write) |
 
 Approval reaches the user through the client's approval prompt, through
-`EPIMEMER_APPROVED_AGENTS`, or through `epimemer agents confirm <id>` (served
-SurrealDB only, since an embedded store lives inside the server process). No
-MCP tool can approve an id: a tool the agent calls cannot prove that the user
+`EPIMEMER_APPROVED_AGENTS`, or through `epimemer agents confirm <id>`. No MCP
+tool can approve an id: a tool the agent calls cannot prove that the user
 called it.
 
 Several agents can share one connection, a subagent beside the agent that
 spawned it. Each claims its own judge and passes the `judge_token` its claim
-returned on every write, which is what credits the write to that agent's judge
-rather than to whichever of them claimed last. A write carrying no token is
-credited to the most recent claim; a token the connection never issued is
-refused.
+returned on every write. A write carrying no token is credited to the most
+recent claim; a token the connection never issued is refused.
 
-**A confirmation belongs to a seat**: the conversation the claim is made in,
-the client that carries it, and the model behind it. Once the user has picked a
-judge in a seat, a claim from the same seat binds without asking again, even
-after a `/mcp` reconnect or a server restart, and the response says so
-(`carried_over`, and *confirmed in this seat on <date>, carried over*). Any
-change of seat, a new conversation, client or model, asks again, and every
-claim that asks says why in `asked_because` and in the prompt itself. The
-client's name and version count when the client sends them; Claude Code does
-not, so there the seat is the conversation and the model. The model
-comes from the hook above; without it the model is unknown, and a claim asks
-after every reconnect as it always did. Confirmations are kept per graph, the
-newest 500, with no time limit.
+**A confirmation belongs to a seat**: the conversation, the client and the
+model. A claim from the same seat binds without asking again, even after a
+`/mcp` reconnect or a server restart (`carried_over` in the response). A
+change of seat asks again and says why in `asked_because`, and a write from a
+changed seat is refused until the agent claims again; reads are unaffected.
+Claude Code sends no client name, so there the seat is the conversation and
+the model, and the model comes from the hook above: without it, a claim asks
+again after every reconnect.
 
-**A write from a changed seat is refused.** The token and the session binding
-remember the seat their claim was made from, and a write from a different one,
-for example after switching model, is refused with what changed named. Claim
-again and the user is asked which judge the new seat is. Reads are unaffected.
-Subagents share their parent's conversation, so they record the parent's
-model.
-
-Every write records the claimed identity, and every decision is also appended
-to a journal, so *what did this agent judge* is one query. A graph can be set
-to refuse writes that name no judge (`epimemer agents require on`, or
-`EPIMEMER_REQUIRE_JUDGE` for the whole server). That is off by default, and no
-MCP tool can change it. See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
+A graph can be set to refuse writes that name no judge (`epimemer agents
+require on`, or `EPIMEMER_REQUIRE_JUDGE` for the whole server); no MCP tool can
+change it. See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
 
 ### Visualization
 
@@ -314,13 +285,12 @@ The server carries its own guidance, so nothing needs copying into an agent's
 instructions. It comes in two sizes:
 
 - **The rules**, `epimemer_prompts/RULES.md`, are the server's MCP
-  `instructions` string: about 2 KB, sent to every client on connect, so they
-  sit in every context. They are what must hold on every call: pass
+  `instructions` string, sent to every client on connect, so they sit in every
+  context and are kept short. They are what must hold on every call: pass
   `expected_graph`, claim a judge, name the metacontext, record every verdict,
   read `warnings` first.
 - **The guide**, `epimemer_prompts/DEFAULT.md`, is the MCP prompt `guide`:
-  about 60 KB, when to ingest, search, reflect and review, and what each
-  warning means. Claude Code lists it as the slash command
+  when to ingest, search, reflect and review, and what each warning means. Claude Code lists it as the slash command
   `/mcp__epimemer__guide`; an agent should pull it before nontrivial memory
   work rather than hold it in every context.
 
@@ -345,3 +315,7 @@ All tool responses follow this structure:
   }
 }
 ```
+
+A call that fails or times out, and a write refused over its judge (an
+unknown token, a changed seat, or no judge where the graph requires one),
+returns an `error` string in place of `result`, beside the same `_meta`.

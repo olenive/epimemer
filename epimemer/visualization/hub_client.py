@@ -26,6 +26,8 @@ from epimemer.storage.protocol import StorageBackend
 from epimemer.visualization.event_bus import InProcessEventBus
 from epimemer.visualization.events import Event
 from epimemer.visualization.protocol import (
+    INGEST_MAX_MESSAGE_BYTES,
+    VIZ_SCHEMA_VERSION,
     PublishEvent,
     Register,
     RpcRequest,
@@ -33,6 +35,7 @@ from epimemer.visualization.protocol import (
     SessionInfo,
 )
 from epimemer.visualization.snapshot import (
+    assemble_embeddings,
     assemble_snapshot,
     list_graphs_result,
     warning_settings_result,
@@ -42,6 +45,54 @@ logger = logging.getLogger(__name__)
 
 _MAX_BACKOFF = 30.0
 _QUEUE_MAXSIZE = 1000
+
+# An answer is sent only if it leaves this much of the ingest ceiling unused.
+# The error that replaces one that does not is built from the method, a node
+# type and two numbers, a few hundred bytes, so whichever reply goes, it fits.
+_ANSWER_HEADROOM_BYTES = 4096
+
+
+def _too_large(req: RpcRequest, size: int, budget: int) -> str:
+    """Why an answer was not sent, and what to ask for instead.
+
+    Nothing unbounded from the request is repeated: the method is one of the
+    protocol's names, a node type has passed `NodeType` by the time an answer
+    exists, and the graph name is left out because the caller sent it.
+    """
+    over = (
+        f"the {req.method} answer would be {size:,} bytes, over the {budget:,} an "
+        f"answer may take under the hub's {INGEST_MAX_MESSAGE_BYTES:,}-byte message ceiling"
+    )
+    version = f"schema version {VIZ_SCHEMA_VERSION}"
+    if req.method == "embeddings":
+        node_type = req.params.get("node_type")
+        if node_type is None:
+            return f"{over}; ask for one node_type: topic, fact or inference"
+        return f"{over}; this graph has too many {node_type} vectors for one answer at {version}"
+    if req.method == "snapshot":
+        return f"{over}; this graph is too large for one snapshot at {version}"
+    return over
+
+
+def _reply(req: RpcRequest, result: dict) -> str:
+    """The answer to `req`, or an error in its place if the answer would not fit.
+
+    An answer over the ceiling does more than fail: the hub closes the socket
+    with 1009, which drops the session and every RPC in flight on it.
+    Measured in UTF-8 bytes, which is what the ceiling counts; node content is
+    sent unescaped, so counting characters would undercount it.
+
+    The ceiling is read at call time rather than captured, so a test can lower
+    it without building a 16 MiB graph.
+    """
+    answer = RpcResponse(request_id=req.request_id, result=result).model_dump_json()
+    size = len(answer.encode())
+    budget = INGEST_MAX_MESSAGE_BYTES - _ANSWER_HEADROOM_BYTES
+    if size <= budget:
+        return answer
+    reason = _too_large(req, size, budget)
+    logger.warning("viz RPC answer not sent: %s", reason)
+    return RpcResponse(request_id=req.request_id, error=reason).model_dump_json()
 
 
 async def start_hub_client(
@@ -71,13 +122,12 @@ async def start_hub_client(
     type, exactly as ``PublishEvent.payload`` is opaque to the hub.
     """
     stop_event = asyncio.Event()
-    # Every RPC read takes the storage guard's mover turn. Two
-    # things follow from that one line. Snapshot reads still do not interleave
-    # with each other — a mover excludes a mover — which is what the plain
-    # `asyncio.Lock` here used to buy. And they no longer interleave with **tool
-    # calls** either, which is what it did not: a snapshot of a graph this
-    # session is not on borrows the SurrealDB connection, and a write in flight
-    # during that borrow lands in the graph being snapshotted.
+    # Every RPC read takes the storage guard's mover turn. Two things follow
+    # from that one line. Snapshot reads do not interleave with each other, since
+    # a mover excludes a mover. And they do not interleave with **tool calls**
+    # either, which a lock of their own would not prevent: a snapshot of a graph
+    # this session is not on borrows the SurrealDB connection, and a write in
+    # flight during that borrow would land in the graph being snapshotted.
     #
     # It is one turn for the whole handler rather than one per `viz_list_*`, so
     # every read behind a snapshot describes a single instant.
@@ -110,15 +160,19 @@ async def start_hub_client(
                     )
                 elif req.method == "snapshot":
                     result = await assemble_snapshot(raw_storage, req.params["graph"])
+                elif req.method == "embeddings":
+                    result = await assemble_embeddings(
+                        raw_storage, req.params["graph"], req.params.get("node_type")
+                    )
                 elif req.method == "retrievals":
-                    # No storage read, so the lock buys nothing here — but
+                    # No storage read, so the turn buys nothing here, but
                     # every RPC staying on one path is worth more than the
                     # microseconds, and a future record that *did* read
                     # storage would otherwise be the exception nobody noticed.
                     result = {"records": records() if records else []}
                 else:
                     raise ValueError(f"unknown rpc method {req.method!r}")
-            await ws.send(RpcResponse(request_id=req.request_id, result=result).model_dump_json())
+            await ws.send(_reply(req, result))
         except Exception as exc:  # report the error back rather than hang the hub
             with contextlib.suppress(Exception):
                 await ws.send(
@@ -167,7 +221,7 @@ async def start_hub_client(
         while not stop_event.is_set():
             try:
                 state["queue"] = asyncio.Queue(maxsize=_QUEUE_MAXSIZE)
-                async with ws_connect(hub_url) as ws:
+                async with ws_connect(hub_url, max_size=INGEST_MAX_MESSAGE_BYTES) as ws:
                     backoff = 1.0
                     if failure_logged:
                         logger.info("viz hub reachable again at %s", hub_url)

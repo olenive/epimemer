@@ -1,47 +1,13 @@
 # Proposed features
 
-Work that does not exist yet. This is a backlog, not a set of designs: each
-entry carries what it is, why it is worth doing, roughly what it costs, and what
-has to be true before it can start. A feature gets a real design when it is
-picked up, in its own document, as `VISUALISATION.md`,
-`TIMELINE_VISUALISATION.md` and `REVIEW_EPISTEMIC.md` all did. Designs written
-far ahead of building are usually wrong by the time anyone reads them.
-
-Three files divide the work:
-
-| File | Holds |
-|---|---|
-| `ISSUES.md` | Things that are **wrong**: bugs, and fixes deferred with a stated trigger |
-| **This file** | Things that **do not exist** and might be worth building |
-| Per-feature design docs | **How** a specific thing gets built, written when it is picked up |
-
-Nothing is duplicated across them. An item here that turns out to be a defect
-moves to `ISSUES.md`; an item that gets picked up grows a design document and
-is reduced here to a pointer; an item that ships is deleted, and the CHANGELOG
-and git history are the record.
-
-Entries are written to be picked up cold. The six things an actionable entry
-carries are listed in `ISSUES.md` under *Working an issue*, and they apply here
-too, with **Blockers** standing in for that list's *decision* row. The
-difference in kind: an issue must say what breaks, and an entry here must say
-what does not exist. An entry that can only be justified as "this is currently
-wrong" belongs in `ISSUES.md` instead.
-
-Claim an entry by name in your commit message.
+A backlog of proposals, none of them built: what each is, why, roughly what it
+costs and what has to be true before it starts. Defects go in `ISSUES.md`.
 
 ---
 
 ## Needs a decision before it needs code
 
 ### Sharing a graph between users
-
-**The state, 2026-10-08.** A graph lives on a served SurrealDB or, since the
-Postgres backend, in a Postgres database, and several servers can open it at
-once: each person runs their own server against the shared database with
-their own credential, and the two-instance tests on both backends show one
-server seeing another's writes. What is still missing is everything finer
-than "can open the database": read-only access, a grant on one graph and not
-its neighbours, and knowing which person was behind a judge binding.
 
 **What.** A way for one user to grant another read, or read and write, access
 to a named graph and nothing else: the project's own development history, for
@@ -50,8 +16,8 @@ example, is kept in a graph its maintainers can read and its users cannot.
 **Why.** A graph is a shared understanding, and today it can be shared only by
 sharing a database.
 
-**Decisions taken, 2026-09-12.** Two tiers. The read-only tier is the graph
-bundle: `epimemer graphs export`, hand the file over or publish it, they run
+**Decisions taken.** Two tiers. The read-only tier is the graph bundle:
+`epimemer graphs export`, hand the file over or publish it, they run
 `epimemer graphs import`. That is what the project's own development history
 needs, and it needs no notion of a user. The live tier, people working on one
 graph together, is parked until a team needs it, with the shape decided:
@@ -67,17 +33,21 @@ graph together, is parked until a team needs it, with the shape decided:
   The judge registry is a separate thing: a judge is an agent identity a
   person approves, not the person.
 - What Epimemer then owes a per-graph credential: a read path that writes
-  nothing (`search` stamps `retrieved_at` and `claim_agent` writes
-  `last_seen_at`, so a viewer cannot search today, on any backend); permission
+  nothing (`search` stamps `retrieved_at` unless the server runs with
+  `EPIMEMER_RECORD_RETRIEVAL=false`, and `claim_agent` writes `last_seen_at`,
+  so a viewer cannot work through the tools today, on any backend); permission
   errors turned into plain refusals naming the access level; `list_graphs`
   under a credential that cannot see every schema or namespace; a CLI that
   wraps the grant; and the database user recorded on a judge binding, since
   two people sharing one picker will pick the same judge and review would
   merge their sessions.
+- A write from the dashboard waits on the same question. Every change is
+  journalled against a session and a judge, and a browser has neither, which
+  is why the dashboard's warning-settings panel is read-only.
 - Nothing finer than a whole graph, and nothing about reaching the database
   across machines, which is the database's own configuration.
 
-**Blockers.** A team that needs it. Two servers on one database is now an
+**Blockers.** A team that needs it. Two servers on one database is an
 ordinary test fixture on Postgres and on a served SurrealDB, so the read-only
 path and the per-graph grant can be built and tested when that team appears.
 
@@ -109,13 +79,86 @@ works unchanged on any clock. Only `CalendarRule` is about months and weekdays
 and stays Gregorian.
 
 **Cost.** Medium. The coordinate type touches every timeline query function,
-both storage backends (SurrealDB stores dates as strings, and numbers compared
-as strings sort wrongly, the trap the design rules name), extraction, and the
-dashboard axis. `TIMELINES.md` keeps this cheap by forbidding anything that
-assumes a date where a number would do.
+the timeline record every storage backend stores whole, extraction, and the
+dashboard axis. No backend query compares a coordinate today; one that did
+would meet the trap the design rules name, numbers compared as text sorting
+wrongly. `TIMELINES.md` keeps this cheap by forbidding anything that assumes a
+date where a number would do.
 
-**Blockers.** A graph that needs one. Decided on 2026-09-16 not to build it
-alongside `TIMELINES.md`.
+**Blockers.** A graph that needs one. It was deliberately left out of the
+`TIMELINES.md` build.
+
+---
+
+### Saving the in-memory store to a file
+
+**The state.** `InMemoryStorage` has no save or load path: a graph lives in
+`_GraphStore` for exactly as long as the process does. A graph that has to
+outlive the process lives on SQLite, SurrealDB or Postgres instead, and SQLite
+gives a command-line tool or a CI step a file per graph with no server to run.
+
+**What.** Serialise `_GraphStore` and reload it. Persistence for an existing
+backend rather than a new backend, so the full-protocol rule does not apply.
+
+**Why.** A convenience for tools that want the in-memory store's speed and a
+file at the end, worth having and not worth prioritising over designed work.
+
+**Decisions first.**
+
+1. **What is saved.** Nodes, edges and lifecycle records; embeddings with
+   them, since they are expensive to recompute. There is no BM25 index to
+   save: `memory.py` scores the corpus on every call.
+2. **When it writes.** A snapshot on clean shutdown loses everything on a
+   crash; writing on every mutation costs the speed that makes the in-memory
+   store worth having. The choice should be stated rather than defaulted into.
+3. **Format.** Measured on a synthetic corpus at the real embedding width
+   (384): floats as JSON text are not viable (a gigabyte and eleven seconds at
+   100,000 nodes, for 153 MB of float32), and the parts want opposite
+   treatment, since node and edge records compress by an order of magnitude
+   while vectors are near-incompressible. So: one zip container, structural
+   records deflated, vectors stored uncompressed as a `.npy` member. One file
+   cannot desync the way a sidecar pair can, `zipfile` sets compression per
+   member, and nothing beyond the standard library and numpy is needed. A
+   version field in the container, because a stale snapshot silently loading
+   into a newer type is the failure hardest to notice.
+
+**Blockers.** A tool that needs it and cannot use SQLite.
+
+---
+
+### A demo walkthrough: `epimemer demo`
+
+**What.** One command that starts from an empty, throwaway graph, loads a small
+corpus through the tool functions an agent calls, and narrates in the terminal
+while the dashboard shows the graph being built, searched, corrected and
+reflected over. It is the introduction for a new user and the thing to put on a
+screen in a presentation.
+
+**Decisions taken with the owner.**
+
+- The decompositions are a fixture shipped with the package, so the demo runs
+  the same every time with no model in the loop. A companion prompt runs the
+  same story through Claude Code for the live version.
+- Sentence-transformers when that extra is installed, so similarity means
+  something; otherwise the mock embedder, with a line on screen saying so.
+- A CLI subcommand with the corpus inside the package, so it works from an
+  installed tool and shows up in `epimemer --help`.
+
+**The subject.** The history of computing, 1822 to 1991, from Babbage to the
+first website: four short summaries written for the purpose, real history
+stored in `the-real`, with firm dates and public primary sources.
+
+**What the corpus must show.** Dated events across the whole span, so the
+timeline has a shape; a world-change (Shannon's 1948 paper retitled as the
+1949 book); a correction that was honestly stated and honestly wrong (ENIAC as
+the first electronic computer, retired once Colossus is declassified);
+corroboration (two documents stating one claim independently); and a held
+contradiction (which machine was the first programmable computer, a
+disagreement of definitions).
+
+**Cost.** Small to medium. The demo calls the tool functions directly, as
+`scripts/bench.py` does, and needs the server lifespan's visualisation setup
+factored into one function both can call.
 
 ---
 
@@ -135,16 +178,16 @@ first.
 - **Value-driven consolidation thresholds.** Archival thresholds are settled
   (importance ceiling, judgment age); merge and split still key off embedding
   similarity alone.
-- **Contradiction resolution strategy.** Contradictions surface and are
-  recorded; whether and how the system should help resolve rather than merely
-  hold them needs design.
+- **Contradiction resolution strategy.** A contradiction between claims is
+  recorded and held, and a judge can retire one side with `supersede_by`; a
+  dispute about order has `resolve_temporal_contradiction`. Whether and how
+  the system should help resolve a contradiction between claims, rather than
+  hold it, needs design.
 - **Per-source support levels.** Confidence today is one prior on the node; a
   per-source level on the `sourced_from` edge would let a level die with the
-  source it describes, and is also what a source-discredit sweep needs
-  (`ISSUES.md`, *Older carry-overs*).
-- **Metacontext inheritance scope.** If a metacontext is inherited from a document,
-  do inferences derived from those facts inherit it too? Probably yes, but the
-  edge cases need thought.
+  source it describes. It is also what a source-discredit sweep needs: when a
+  document turns out fabricated, every prior derived from it overstates, and
+  nothing can sweep per source today.
 - **Cross-metacontext retrieval composition.** When a query straddles metacontexts
   ("compare real AI with sci-fi AI"), how should results from several metacontexts
   compose? Search takes a list of metacontexts today; composition beyond the union is
@@ -158,5 +201,9 @@ first.
   the semantic hues settable. `VISUALISATION.md` Part C.
 - **A dedicated read connection for viz snapshots**: deferred until the server
   gains concurrent clients.
-- **Native HNSW vector indexes**: the `TODO` in `surrealdb_adapter.py`'s
-  vector search. Waiting on SurrealDB, not on us.
+- **A vector index**: every backend ranks vectors by brute force, and
+  SurrealDB declares no vector index (`vector_search`'s docstring). The
+  candidates are SurrealDB's own vector index and pgvector on Postgres, as an
+  opt-in with the `bytea` path as fallback, since not every Postgres has the
+  extension. A per-model matrix cache, invalidated on write, comes first if
+  anything does. Each waits until brute force is measured to hurt.

@@ -1,6 +1,6 @@
-"""Every decision leaves a row (REVIEW_MODE.md §4, step 5).
+"""Every decision leaves a row (REVIEW_MODE.md §4).
 
-Step 3 and step 4 put the judge *on* the thing decided — the episode, the edge,
+Attribution puts the judge *on* the thing decided — the episode, the edge,
 the node. That answers *who judged this*. This is the inverse: one table so
 *what did this agent judge* is a query rather than five scans and a reassembly.
 
@@ -811,7 +811,7 @@ class TestNoKindGoesUnwritten:
     def test_every_kind_has_a_writer(self):
         """Read over the whole package, not one module.
 
-        This scanned `mcp/tools.py` alone until step 7, which was true only
+        An earlier version scanned `mcp/tools.py` alone, which was true only
         because every writer happened to live there — and it stopped being true
         the moment `CONFIRMATION` and `DISSENT` were written from
         `pipelines/review/apply.py`. A guard whose reach is an accident of where

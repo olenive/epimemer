@@ -10,7 +10,7 @@ Usage:
     bus = create_event_bus()
 
     # Consumer subscribes
-    unsubscribe = bus.subscribe(NodeStored, my_handler)
+    unsubscribe = bus.subscribe(NodeStored, handler=my_handler)
 
     # Producer publishes
     await bus.publish(NodeStored(node_id="abc", ...))

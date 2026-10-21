@@ -3,11 +3,11 @@
 Finds pairs of active facts with high embedding similarity that may
 represent contradictions or redundancies, for further analysis.
 
-This phase is the one that fails first as a graph grows. Pairs are
-quadratic in facts and there is no redundancy left to remove — the comparisons
-are genuine work — so the fix was to do that work in bulk rather than less of
-it. The scoring itself now lives in `pair_scoring`, shared with the topic phase
-; this module keeps the part that is about facts.
+This phase is the one that fails first as a graph grows. Pairs are quadratic
+in facts and there is no redundancy left to remove, since the comparisons are
+genuine work, so the work is done in bulk rather than less of it. The scoring
+lives in `pair_scoring`, shared with the topic phase; this module keeps the part
+that is about facts.
 """
 
 from epimemer.core.types import (

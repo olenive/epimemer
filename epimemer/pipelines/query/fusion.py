@@ -1,6 +1,6 @@
 """Reciprocal Rank Fusion for the query layer.
 
-Retrieval now has more than one arm, and their scores cannot be compared.
+Retrieval has more than one arm, and their scores cannot be compared.
 Cosine similarity and BM25 live on different scales with no calibration between
 them, and BM25's own scale is per index — IDF's N counts one table — so even the
 lexical arm's several lists are mutually incomparable

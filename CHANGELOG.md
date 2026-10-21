@@ -4,6 +4,43 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+- The design notes are shorter and fewer. They state decisions and the reasons
+  for them, and leave how the code does it to the code. SQLite and Postgres
+  share `dev-docs/STORAGE_BACKENDS.md`; the warnings panel is part of
+  `EVENT_LOG.md`; topic nodes created from tags have one page,
+  `TAG_IDENTITY.md`; description review is part of `TOPIC_DESCRIPTIONS.md`;
+  the demo plan is an entry in `PROPOSED_FEATURES.md`.
+- The `EPIMEMER_SIMILARITY_THRESHOLD` setting is gone. Nothing read it:
+  `reflect` and the merge tools take their own thresholds per call.
+- The in-memory backend opens the graph `EPIMEMER_GRAPH` names, like the other
+  backends, and falls back to `"default"` as SQLite and Postgres do; before,
+  it always opened `"default"`.
+- Every backend refuses an illegal starting graph name when it is created, by
+  the rule `use_graph` applies to every later graph. SurrealDB used to take one
+  from `EPIMEMER_GRAPH` or `EPIMEMER_SURREALDB_DATABASE` and hand it to the
+  server unchecked.
+- The visualisation contract is versioned for a second client. The snapshot,
+  the session's register message, the health route and each entry on the
+  sessions route carry `schema_version`, 1 today; a removed or renamed field
+  or a change of meaning bumps it, an added field does not. A new
+  `/api/embeddings` route answers with the embedding vectors of a graph's
+  nodes, filtered by node type, served by the session from a new
+  `viz_list_embeddings` read on every backend: a client that lays topics out
+  by meaning needs the vectors, and the snapshot does not carry them. A
+  session's answer to the hub that would pass the ingest socket's 16 MiB
+  message ceiling, which an unfiltered embeddings answer for a large graph
+  does, now comes back as an error naming the size and the remedy instead of
+  closing the socket and taking the session off the hub; the hub and every
+  session share the one named limit. `dev-docs/VIZ_CONTRACT.md` says what a
+  client may rely on.
+- The design of a Rust and Bevy visualiser in its own repository,
+  `epimemer-bevy`, one 3D scene with time as the third axis and the graph,
+  timeline and 3D views as camera presets of it, was written here and moved
+  to that repository's `DESIGN.md` the same day. The contract it builds on
+  stays here, in `dev-docs/VIZ_CONTRACT.md`.
+
 ## [0.3.1] — 2026-10-17
 
 - Petritype 0.3.1, and the dashboard shows a transition working while its

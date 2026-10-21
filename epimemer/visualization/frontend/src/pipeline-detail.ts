@@ -82,7 +82,7 @@ export const generateDot = (
   return lines.join("\n");
 };
 
-// --- Palette (shared with the legacy panel) ---
+// --- Palette (one set for the glyph and the detail view) ---
 
 const ACTIVE_TRANSITION_COLOR = "#ec4899"; // pink-500
 const COMPLETED_TRANSITION_COLOR = "#22c55e"; // green-500

@@ -1,47 +1,39 @@
 """What an agent decided about a nominated pair of relation labels.
 
-The label layer's answer to `similarity_decisions.py`, and the same defect one
-tier down. `sweep_similar_relation_pairs` re-derives from scratch on every
-`reflect` and **recorded nothing about declines**: reflection nominated, a merge
-happened only if the agent called `apply_reflection(relation_merges=[…])`, and
-declining therefore meant *not making that call* and left no trace anywhere. The
-next session a different agent scans the same edges, embeds the same strings,
-gets the same cosine, and is asked the same question. For ever.
+The label layer's answer to `similarity_decisions.py`.
+`sweep_similar_relation_pairs` re-derives its nominations from scratch on every
+`reflect`, so without a record of the verdict the next session's agent scans the
+same edges, embeds the same strings, gets the same cosine, and is asked the same
+question, for ever.
 
-**Getting it right is what caused the loop.** Accepting a merge made one label
-stop existing, so that pair could never be nominated again — accepting was
-self-suppressing and declining was not, and the graph therefore applied quiet
-pressure toward the wrong answer, on a fresh agent each time who could not see
-the previous refusals.
+**A verdict is the only thing that stops a pair coming back.** Labels are never
+merged (`RELATION_LABELS.md` §5), so nothing self-suppresses. A merge that made
+one label stop existing would stop its pair being nominated while a decline left
+no trace, and that asymmetry would press quietly toward merging, on a fresh
+agent each time who could not see the previous refusals.
 
-**Merging is gone as of 2026-08-28** (`RELATION_LABELS.md` §5), which removes
-the asymmetry rather than this module: with nothing self-suppressing, a verdict
-is the *only* thing that stops a pair coming back, so what was the fix for a
-bias is now the whole mechanism.
-
-The `assessed` edge closed exactly this for fact pairs, and relation
-labels could not have one: that edge runs **between two nodes**, and `works_for`
-and `employed_by` are not nodes. Stage 1 gave them records, which is what makes
-this row addressable at all — the same identity that answers the question
-about a relation decision's subjects.
+The `assessed` edge does this for fact pairs, and relation labels cannot have
+one: that edge runs **between two nodes**, and `works_for` and `employed_by` are
+not nodes. Each label has a record (`RelationLabel`), which is what makes this
+row addressable at all, the same identity that answers the question about a
+relation decision's subjects.
 
 **Both verdicts suppress.** `distinct` is *different relationships that look
 alike* — the worked example is a servant who *works for* a master in a culture
 with no employment relation, beside a corporation that formally *employs* a
 consultant who does very little work: near-identical strings, opposite meanings,
 and the nominator sees only strings. `synonymous` is *the same relationship
-written two ways*, and it acts on nothing — no edge is relabelled and neither
-label stops existing. Recording *"yes, these are
-synonyms, and I am not merging them"* is a real judgment, and leaving it
-unrecordable would be FC1 again for the affirmative answer; whatever
-consolidates labels can then act on standing verdicts rather than re-asking.
+written two ways*, and it rewrites nothing: no edge is relabelled and neither
+label stops existing. Recording *"yes, these are synonyms, and I am not merging
+them"* is a real judgment, and leaving it unrecordable would be FC1 again for
+the affirmative answer.
 
 **A label with no record is not refused; it gets one.** The verdict creates it,
-carrying no judge — nobody is claiming to have introduced the word. The first
-draft refused here and pointed at `epimemer relations backfill`, which was a
-dead end: the CLI refuses embedded backends, which is the default development
-configuration, and an agent cannot run it in any case. *A remedy the agent
-cannot issue, on a backend where it refuses, is not a remedy.*
+carrying no judge, since nobody is claiming to have introduced the word.
+Refusing here and pointing at `epimemer relations backfill` would be a dead end:
+the CLI refuses embedded backends, which the default configuration is, and an
+agent cannot run it in any case. *A remedy the agent cannot issue, on a backend
+where it refuses, is not a remedy.*
 """
 
 from collections.abc import Sequence

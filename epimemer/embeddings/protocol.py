@@ -1,7 +1,8 @@
 """Embedding provider protocol.
 
-Defines the interface that all embedding backends must implement.
-Providers are pluggable — swap between sentence-transformers, OpenAI, etc.
+Defines the interface that all embedding backends must implement. Two
+providers implement it: sentence-transformers for real use, and a deterministic
+mock for tests.
 """
 
 from typing import Protocol

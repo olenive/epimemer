@@ -98,10 +98,6 @@ refusal names every problem at once: an anchor not found after the one before,
 quoted; an anchor that is too short; a passage left empty; text before the
 first anchor, quoted in part; or no anchors at all.
 
-Character offsets and full passage texts were both considered and rejected. A
-wrong offset is silent, since the passage exists and is the wrong stretch, and
-full texts echo the whole document back for the same check anchors make.
-
 ## 5. When to cut, and with which call
 
 The procedure:
@@ -142,11 +138,8 @@ rule's cut is right, leave it.
   the passages are provenance and stay as they are. To cut a decomposed
   document differently, ingest it again as a new document.
 - Accepted, the old passages are **deleted** and the new ones take their
-  place, so the keyword arm of `search` stops returning the old ones. This is
-  the one deletion in an append-only system, and it is safe for the reason the
-  check enforces: a passage nothing cites is material rather than a claim. It
-  carries no judge and no journal row, and the cut it made is kept on the
-  document.
+  place, so the keyword arm of `search` stops returning the old ones. The cut
+  they made is kept on the document (§7).
 
 A re-cut asks for no reason and writes no journal row. The document carries
 no judge of its own, and a cut is not a verdict about the world, so `review`
@@ -166,8 +159,7 @@ Every path that cuts records how it cut in the document's
 
 `strategy` is `paragraph`, `semantic` or `agent`. `history` is empty until a
 re-cut, which appends the cut it replaced, oldest first, with when and by
-which judge. A re-cut made with no judge claimed has no `replaced_by` key,
-since storage keeps an unknown as an absent key rather than a null. A
+which judge. A re-cut made with no judge claimed has no `replaced_by` key. A
 document ingested before this record existed has none; its first re-cut
 records the passage count it replaced and leaves the strategy unrecorded.
 

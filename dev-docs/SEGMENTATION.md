@@ -1,13 +1,12 @@
 # Segmentation: the agent cuts, on evidence
 
-**Status: decided 27 September 2026; built, Stages 0 to 3, on 8 October
-2026.** The backlog entry *LLM-guided and hybrid segmentation* offered two
-ways to get better cuts than a rule can make: the calling agent cuts, or the
-server calls a model itself. The user chose the first. This document says
-when the agent cuts, how it states a cut, what the server checks, and what is
-recorded. §8 breaks the work into stages with the functions and tests each
-one needs; §10 lists what is still open. `docs/INGEST.md` describes the built
-behaviour for someone using it.
+A design, built: the code is `epimemer/pipelines/segmentation/` and the `segment` and `resegment` tools.
+
+There are two ways to get better cuts than a rule can make: the calling agent
+cuts, or the server calls a model itself. The user chose the first.
+`docs/INGEST.md` describes the behaviour for someone using it: the doubts, the
+anchor contract and its refusals, re-cutting, and what the document records.
+This document holds the reasons.
 
 The one property this design protects: **the server makes no model calls of
 its own.** That is why Epimemer has no API keys, no provider configuration,
@@ -19,40 +18,19 @@ giving that up.
 
 ## 1. What a passage is for
 
-Ingest is two steps. `segment` stores the document and cuts it into passages;
-the agent reads each passage and hands back facts, inferences and topics with
-`store_decomposition`. Every claim carries the id of the passage it came from
-(`source_id` on the node, and `get_nodes_by_source` is the bridge back), and
-`search` returns matching passages under `segments` to answer *where did I
-read that?* rather than *what do I believe?* Passages are also the corpus the
-lexical arm of search runs over. They are not embedded.
-
-So a passage is the unit of provenance, and a cut is a decision about what a
-reader will later be shown as the context of a claim. A passage that spans two
-subjects muddies every claim's context; one that separates a sentence from its
-qualifier can lose a hedge, a date or a speaker. The damage is quiet and it
-lasts, because nothing downstream revisits a cut.
+A passage is the unit of provenance, so a cut decides what a reader will later
+be shown as the context of a claim (`docs/INGEST.md` §1). The damage from a bad
+cut is quiet and it lasts, because nothing downstream revisits a cut. Passages
+are also the corpus the lexical arm of search runs over; they are not embedded.
 
 ## 2. The two strategies, and how they fail
 
-Both run without a model, and both stay.
-
-**Paragraph**, the default, cuts on blank lines and falls back to one passage
-for the whole document when there are none. Right for ordinary prose. Wrong,
-predictably, for:
-
-- a transcript or chat log with no blank lines, which becomes one passage;
-- a bulleted list separated by blank lines, which becomes one passage per
-  bullet, each too short to stand on its own;
-- a long legal or academic paragraph covering several matters.
-
-**Semantic**, TextTiling style, splits into sentences by regular expression,
-embeds each sentence with the local model, and cuts wherever similarity
-between neighbours drops more than one standard deviation below the mean.
-Better on topic drift inside a paragraph. Its failures are the splitter's and
-the threshold's: headings, dialogue, tables and code defeat the regular
-expression, and the statistical threshold means a document with one abrupt
-change gets no cut while a uniformly meandering one gets many.
+Both run without a model, and both stay. **Paragraph**, the default, cuts on
+blank lines. **Semantic**, TextTiling style, embeds each sentence with the
+local model and cuts wherever similarity between neighbours drops more than one
+standard deviation below the mean, so a document with one abrupt change gets no
+cut while a uniformly meandering one gets many. `docs/INGEST.md` §2 lists where
+each goes wrong.
 
 Neither can see a speaker change, a clause boundary, a scene change, or prose
 giving way to a table. A reader can, and the agent is a reader that already
@@ -69,76 +47,36 @@ cut by any means other than the two rules above.
 
 ### 3.2 After the programmatic cut, on evidence
 
-The agent does not choose a strategy blind. The programmatic cut always runs
-first, because it is free and right for most documents, and the agent
-overrides it only when there is something to point at:
-
-- **the server doubts its own cut** (§6), or
-- **the agent recognises a shape the rules cannot see** (§7).
+The programmatic cut always runs first, because it is free and right for most
+documents, and the agent overrides it only when there is something to point
+at: the server doubts its own cut (§6), or the agent recognises a shape the
+rules cannot see.
 
 Judging a proposed cut is easier and more reliable than proposing one from
 scratch, and cutting every document by hand would cost a judgment per
 document and invite mistakes on long texts, for no gain on the prose that
 paragraph cutting already handles. The exception is a document the agent
-already knows is awkward, which it may cut on the first call (§5.1).
-
-### 3.3 The procedure
-
-1. Call `segment` as today. The document and its passages are stored.
-2. Read the result: the passages, and `doubts` if the server has any.
-3. If doubted, or a passage visibly spans two subjects or splits a sentence
-   from what qualifies it, call `resegment` with the agent's own cuts. This
-   is allowed only while no claim cites any of the document's passages.
-4. Decompose.
-
-Once `store_decomposition` has run, the passages are provenance and stay as
-they are. A document that needs re-cutting after that is ingested again as a
-new document; moving claims between passages is not a thing this design
-offers (§9).
+already knows is awkward, which it may cut on the first call.
 
 ## 4. Stating a cut: anchors
 
-### 4.1 The contract
+A cut is stated as **anchors**: for each passage, the text it begins with,
+copied exactly from the document. The contract and its refusals are in
+`docs/INGEST.md` §4. The decisions behind them:
 
-A cut is stated by **anchors**: for each passage, the text it begins with,
-copied exactly from the document. The server walks them in order:
-
-- the first anchor is located from the start of the document, every later
-  one from the end of the previous anchor, taking the **first occurrence**;
-- each passage runs from its anchor's start to the next anchor's start, and
-  the last runs to the end of the document;
-- leading and trailing whitespace is trimmed from each passage's text, with
-  `span_start` and `span_end` kept accurate, exactly as the paragraph rule
-  does today;
-- text before the first anchor is refused rather than silently dropped
-  (§4.2), so the anchors must cover the document.
-
-An anchor is at least three words or twelve characters, whichever the agent
-finds easier to satisfy; a shorter one is refused, since a two-word anchor
-matches too early too often. An agent that needs a later occurrence of a
-phrase lengthens the anchor until it is the first occurrence, which is
-deterministic and needs no notion of ambiguity on the server.
-
-One anchor at the document's start is a valid cut: it says the document is
-one passage, and that is a judgment the agent is allowed to make.
-
-### 4.2 Refusals
-
-The whole call is refused, nothing written, naming every problem at once, on
-the pattern `apply_reflection` uses for a malformed batch:
-
-- an anchor that is not found at or after the previous cut, quoted with
-  any space other than an ASCII one escaped (a non-breaking space shows as
-  `\xa0`), and named as differing only in Unicode normalisation when its
-  NFC or NFD form is found there;
-- an anchor shorter than the minimum;
-- two anchors that produce an empty passage (adjacent, or one inside the
-  other);
-- text before the first anchor that is not whitespace, quoted in part, so
-  the agent sees what it left out;
-- no anchors at all.
-
-A refusal is prose, as `BoundaryRefused` is: nothing branches on it.
+- **The first occurrence wins**, searched from the end of the previous anchor.
+  An agent that needs a later occurrence lengthens the anchor until it is the
+  first, which is deterministic and needs no notion of ambiguity on the server.
+- **An anchor is at least three words or twelve characters**, since a shorter
+  one matches too early too often (§10).
+- **Text before the first anchor is refused rather than silently dropped**, so
+  the anchors must cover the document.
+- **One refusal names every problem at once**, on the pattern
+  `apply_reflection` uses for a malformed batch, and nothing is written. A
+  missing anchor is quoted with any space other than an ASCII one escaped (a
+  non-breaking space shows as `\xa0`), and is named as differing only in
+  Unicode normalisation when its NFC or NFD form is found there. A refusal is
+  prose, as `BoundaryRefused` is: nothing branches on it.
 
 ### 4.3 Rejected forms
 
@@ -154,13 +92,8 @@ A refusal is prose, as `BoundaryRefused` is: nothing branches on it.
 
 ## 5. The two calls
 
-### 5.1 `segment(..., cuts=[...])`
-
-`segment` takes an optional `cuts`, a list of anchors. Given, the programmatic
-strategy does not run and the passages are the agent's; `segmentation_strategy`
-and `cuts` together is refused, since they answer the same question two ways.
-Everything else about the call is unchanged: the document is stored, the
-publisher is linked, the result lists passage ids and lengths.
+`segment` takes an optional `cuts`; given, no strategy runs and the result
+carries no doubts. `docs/INGEST.md` §5 has the rest of the call.
 
 ### 5.2 `resegment(document_id, cuts, expected_graph, judge_token)`
 
@@ -170,33 +103,18 @@ repository's own tell that two tools are wearing one name, and the two differ
 in the guard they need: `segment` creates, `resegment` replaces under a
 precondition.
 
-The precondition: **no node cites any of the document's passages.** Checked
-inside the same transaction as the replacement, through a new
-`resegment_tx(document_id, segments)` on `StorageBackend`, implemented on
-every backend. Granularity is the logical operation: a check in one call and
-a replacement in the next would let a decomposition land between them and
-leave claims pointing at passages that no longer exist. Refused with the
-count of citing nodes when the precondition fails.
+The precondition: **no node cites any of the document's passages**, at any
+status, since a retired claim still names its passage. It is checked inside
+the same transaction as the replacement, by `resegment_tx` on
+`StorageBackend`, which every backend implements in its own way. A check in
+one call and a replacement in the next would let a decomposition land between
+them and leave claims pointing at passages that no longer exist.
 
-As built, the method is `resegment_tx(document_id, segments, *,
-segmentation) -> int`: the caller computes the new `segmentation` entry
-(§5.4) from the document as it read it, and the backend writes it in the same
-transaction, keeping every other metadata key as stored, and returns how many
-passages it replaced. A refusal raises `PassagesCited`, carrying the count.
-Nodes at any status count, since a retired claim still names its passage.
-Each backend makes the count and the writes one unit in its own way:
-
-| Backend | How the check and the replacement stay together |
-|---|---|
-| In-memory | nothing in the method awaits, so no other call on the event loop runs between them |
-| SQLite | `BEGIN IMMEDIATE` takes the write lock before the count, against every connection to the file |
-| Postgres | the document row `FOR UPDATE`, then the node table in `SHARE` mode, which waits for transactions already writing nodes and holds off new ones; each later statement reads what is committed by then |
-| SurrealDB | one `BEGIN ... COMMIT` batch that counts and `THROW`s, the count read back out of the thrown text |
-
-What none of them sees is a decomposition already in flight: one that read
-the passages before the re-cut and writes its nodes after it. Its write is
+What none of the backends sees is a decomposition already in flight: one that
+read the passages before the re-cut and writes its nodes after it. Its write is
 not refused, and its nodes cite passages that are gone. Closing that would
-take a check inside `write_batch_tx` that the passages still exist.
+take a check inside `write_batch_tx` that the passages still exist;
+`dev-docs/ISSUES.md` records it as deferred, with its trigger.
 
 `resegment` asks for no `reason`: the row is not a verdict and there is no
 journal entry to carry prose.
@@ -204,23 +122,18 @@ journal entry to carry prose.
 ### 5.3 What a re-cut replaces
 
 The old passages are **deleted**, and this is the one place the design steps
-outside the append-only habit, so the reasoning is stated in full. Confirmed
-by the user on 27 September 2026.
+outside the append-only habit. The user confirmed it.
 
-They are real rows by then: `segment` stores the document and every passage
-before it returns the ids, and the passages join the lexical search corpus at
-once. Nothing is held back until decomposition, because that would need the
-server to keep state between the two calls, or the agent to echo the passages
-back, and the ids would not survive a reconnect. So a re-cut replaces stored
-rows, and the question is what to do with the ones it replaces.
+They are real rows by then: `segment` stores every passage before it returns
+the ids, and the passages join the lexical search corpus at once. Holding them
+back until decomposition would need the server to keep state between the two
+calls, or the agent to echo the passages back, and the ids would not survive a
+reconnect.
 
 A passage before decomposition is material, not a claim: it carries no judge,
-no journal row, and nothing cites it. `segment_text`'s own comment already
-says splitting text into paragraphs is not a verdict anybody would review.
-Retiring instead of deleting would add a status to `Segment` and a filter to
-every reader of segments: the lexical search corpus, `get_segments_for_document`,
-`query_segments` for export, and the visualization. Four filters, each a place
-a retired passage can leak back into a search result, against one guarded
+no journal row, and nothing cites it. Retiring instead of deleting would add a
+status to `Segment` and a filter to every reader of segments, each a place a
+retired passage can leak back into a search result, against one guarded
 delete of rows nothing refers to. Nothing epistemic is lost: the document is
 untouched, and the cut it replaced is recorded on the document (§5.4).
 
@@ -229,22 +142,19 @@ transaction, never by convention.
 
 ### 5.4 What is recorded
 
-The document's `metadata` gains a `segmentation` entry, written by every path
-that cuts:
+Every path that cuts writes a `segmentation` entry into the document's
+`metadata`, so a reader of a passage can tell whether its boundaries were a
+rule's or a judgment's, and a re-cut document keeps the rule's result in
+`history`:
 
 ```
-{"strategy": "paragraph" | "semantic" | "agent",
- "passages": <count>,
+{"strategy": "agent", "passages": 2,
  "history": [{"strategy": "paragraph", "passages": 1,
-              "replaced_at": "...", "replaced_by": <judge or null>}]}
+              "replaced_at": "...", "replaced_by": {"agent_id": ..., "digest": ...}}]}
 ```
 
-A reader of a passage can tell whether its boundaries were a rule's or a
-judgment's, and a re-cut document keeps the rule's result in `history`.
-`replaced_by` is the judge as recorded everywhere else, `{agent_id, digest}`.
-With no judge it is absent rather than null, since every backend drops a
-None-valued key on the way in. A document cut before this entry existed
-records, on its first re-cut, the passage count it replaced and no strategy.
+With no judge, `replaced_by` is absent rather than null, since every backend
+drops a None-valued key on the way in.
 
 No journal row. A document and its passages carry no judge by design (*who
 pasted this text* is a different question from *who judged what it says*),
@@ -257,21 +167,12 @@ about the world.
 
 ### 6.1 The checks
 
-After the programmatic strategy runs, a pure function over the resulting
-passages reports structural signs that the cut is poor. Closed vocabulary,
-thresholds as constants in one module, not settings:
-
-| Doubt | Raised when |
-|---|---|
-| `single_passage` | one passage, and the document runs past 1,200 characters, about a dozen sentences |
-| `fragments` | more than half the passages are under about forty characters |
-| `outsized` | one passage is several times the median length |
-| `mid_sentence` | a cut where the passage before does not end in terminal punctuation and the passage after begins in lower case |
-
-The result carries them as `doubts: [{kind, detail}]`, with `detail` naming
-the passages involved. A doubt refuses nothing: the passages are stored, and
-the agent re-cuts or proceeds. Cuts the agent supplied are not doubted; the
-agent chose them.
+After a programmatic strategy runs, a pure function over the passages reports
+structural signs that the cut is poor; `docs/INGEST.md` §3 has the kinds and
+their thresholds. The thresholds are constants in one module, not settings: a
+per-graph setting would make the calibration a property of whichever graph was
+measured (§6.3). Cuts the agent supplied are not doubted; the agent chose
+them.
 
 ### 6.2 Not warnings
 
@@ -287,91 +188,26 @@ its own small vocabulary.
 ### 6.3 Calibrate before building
 
 Measured on 27 September 2026 with `scripts/segmentation_doubts.py`, read-only,
-over every graph the server held: 148 documents in the six that hold anything
-(memory 84, petritype-server 48, freeagent-agent 5, petritype-rs-dev 5,
-rcloud 5, cyberpunk-2020 1; default, main and cyberpunk-ttrpg are empty).
+over every graph the server held: 148 documents in the six that held anything,
+84 of them in the development graph.
 
 | Doubt | Documents | Rate | What they were |
 |---|---|---|---|
-| `single_passage` | 17 | 11.5% | every one a session note written as one paragraph, 850 to 2,000 characters (memory 15, petritype-server 2) |
+| `single_passage` | 17 | 11.5% | every one a session note written as one paragraph, 850 to 2,000 characters (15 in the development graph) |
 | `outsized` | 3 | 2.0% | all genuine: a passage four to seven times the median, in two dev notes and one docs page |
 | `mid_sentence` | 1 | 0.7% | a false positive: a markdown heading line as its own passage, followed by a paragraph starting with a lower-case identifier |
 | `fragments` | 0 | 0% | no list-heavy or transcript corpus exists yet |
 
-Two thresholds moved as a result. `single_passage` now needs more than 1,200
-characters rather than 600: a paragraph-sized note left whole is the author's
-own cut, while a dozen sentences with no break are worth a look. And a passage
-that is a markdown heading, or a single line shorter than 80 characters, no
-longer counts as an unfinished sentence, so `mid_sentence` is not raised
-across a title.
+The measurement set two thresholds. `single_passage` needs more than 1,200
+characters, where the first guess was 600: a paragraph-sized note left whole
+is the author's own cut, while a dozen sentences with no break are worth a
+look. And a passage that is a markdown heading, or a single line shorter than
+80 characters, does not count as an unfinished sentence, so `mid_sentence` is
+not raised across a title.
 
 `fragments` has not been exercised: nothing measured could have raised it.
 The first list-heavy or transcript corpus ingested should be measured before
-Stage 1's thresholds are trusted.
-
-## 7. Guidance for the agent
-
-What the guide (`epimemer_prompts/DEFAULT.md`) says, in substance. The shapes
-the rules cannot see, and where the cut goes:
-
-- **Transcripts and dialogue**: at speaker turns, keeping a question with its
-  answer when they are short.
-- **Contracts and specifications**: at clause or numbered-section boundaries,
-  keeping a heading with the text under it.
-- **Narrative**: at scene changes, never inside a scene.
-- **Mixed prose, tables and code**: a table or code block stays with the
-  sentence that introduces it.
-- **Chat logs and notes**: at changes of subject, not at message boundaries.
-
-And the rules that hold for every shape: a passage is the smallest stretch
-that stands on its own as the context of a claim; a sentence is never
-separated from what qualifies it; when the programmatic cut is right, leave
-it. The guide also says plainly that a re-cut is possible only before
-decomposition, and that a document already decomposed is re-ingested rather
-than re-cut.
-
-## 8. Stages
-
-Each stage is one commit or one tightly coupled group, tests written first,
-both backends through the `storage` fixture where storage is touched.
-
-**Stage 0: measure and record.**
-- `segmentation/doubts.py`: `doubt_cut(content, segments) -> list[Doubt]`,
-  pure. Tests: each doubt on a document built to trigger it and only it;
-  ordinary prose raises none.
-- `segment_text` records `metadata["segmentation"]` for both existing
-  strategies. Test: the document read back names the strategy and count.
-- A script under `scripts/` runs `doubt_cut` over every document in a named
-  graph and prints the rates; it was run on every graph the server held, six
-  of them non-empty, and the numbers and the thresholds they settled are in
-  §6.3.
-
-**Stage 1: anchors.**
-- `segmentation/anchors.py`: `segments_from_anchors(document, anchors) ->
-  list[Segment] | AnchorsRefused`, pure. Tests: coverage, first occurrence,
-  lengthened anchor selecting a later occurrence, every refusal in §4.2 named
-  at once, whitespace trimming with accurate spans, one anchor equals one
-  passage.
-- `segment(cuts=...)` in `tools.py` and the `server.py` wrapper; refused with
-  `segmentation_strategy`. Tests through the tool: passages stored with the
-  agent's boundaries, `segmentation.strategy == "agent"`, no doubts raised.
-
-**Stage 2: re-cutting.**
-- `resegment_tx` on `StorageBackend`, all four backends and the instrumented
-  wrapper, with the parity tests the repository uses for protocol methods.
-  Tests: replaces passages and stamps history in one transaction; refuses
-  with the citing count when any node cites a passage; nothing changes on
-  refusal.
-- `resegment` tool and wrapper. Tests: end to end through `segment`,
-  `resegment`, `store_decomposition`; a `resegment` after decomposition is
-  refused; the lexical arm no longer returns a replaced passage.
-
-**Stage 3: words.**
-- `DEFAULT.md` §7 guidance and the procedure; `docs/` gets an ingest section
-  or a new `docs/INGEST.md` (there is none today), covering cuts, doubts and
-  re-cutting; `INTEGRATION.md` if it lists result keys; `CHANGELOG.md`
-  under Unreleased. The `PROPOSED_FEATURES.md` entry is already a pointer
-  here and is deleted when Stage 3 ships.
+its threshold is trusted.
 
 ## 9. Rejected
 
@@ -386,33 +222,20 @@ both backends through the `storage` fixture where storage is touched.
 - **Re-cutting after decomposition.** Claims would have to move between
   passages, and a claim's passage is what search shows as its context. That
   is a new document version, not a re-cut, and ingesting again gives it.
-- **Retiring replaced passages instead of deleting them.** §5.3.
-- **Doubts as `Advisory` kinds.** §6.2.
 - **A `segmentation_strategy` setting for "agent".** There is nothing to
   configure: the agent supplies cuts or it does not.
 
 ## 10. Open
 
-Settled:
-
-- A re-cut deletes the passages it replaces, guarded in the transaction
-  (§5.3), confirmed by the user on 27 September 2026.
-- A re-cut asks for no `reason`. The row is not a verdict and there is no
-  journal entry to carry prose. If the `history` entry turns out to be read
-  and the reader wants to know why, add it then.
-
-Open:
-
-- **The anchor minimum.** Three words or twelve characters, as built. Stage
-  1's tests (`tests/pipelines/segmentation/test_anchors.py`) wrote the anchors
-  an agent would for each shape in §7: a speaker turn
-  (`INTERVIEWER: Where were you`), a numbered clause (`3. Termination`), a
-  chat line (`[09:40] ben: separate thing`). All clear it. The bare label
-  `WITNESS:` is refused, and it is the anchor the minimum exists for, since it
-  finds that speaker's first turn wherever the agent meant. The one natural
-  anchor it trips is a short heading: `## Fees`, `# Changelog` and `2. Term`
-  are two words, marker included, and under twelve characters, so the agent
-  carries the anchor into the next line, newline included, which is the copy
-  a model is likeliest to get wrong. Accepting a whole line as an anchor
-  would let those through, since a heading's line is usually unique; it waits
-  until a real refusal says it is needed.
+- **The anchor minimum.** Three words or twelve characters clears the anchors
+  an agent writes for each shape: a speaker turn
+  (`INTERVIEWER: Where were you`), a numbered clause (`3. Termination`), a chat
+  line (`[09:40] ben: separate thing`). The bare label `WITNESS:` is refused,
+  and it is the anchor the minimum exists for, since it finds that speaker's
+  first turn wherever the agent meant. The one natural anchor it trips is a
+  short heading: `## Fees`, `# Changelog` and `2. Term` are two words, marker
+  included, and under twelve characters, so the agent carries the anchor into
+  the next line, newline included, which is the copy a model is likeliest to
+  get wrong. Accepting a whole line as an anchor would let those through, since
+  a heading's line is usually unique; it waits until a real refusal says it is
+  needed.

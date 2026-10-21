@@ -10,8 +10,8 @@ The verb set stays closed (§11). A timeline act carries its `DecisionKind` as
 its verb, so the live log and the journal keep speaking one vocabulary, which is
 the whole reason the verb set is small. Nothing was added to `ActionVerb`.
 
-Both backends, through the `storage` fixture: the acts are emitted at the sixth
-`_tx` boundary, so each backend's implementation of it is under test here.
+Every backend, through the `storage` fixture: the acts are emitted at
+`write_timeline_tx`, so each backend's implementation of it is under test here.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -66,7 +66,7 @@ def acts(bus) -> list[GraphActionRecorded]:
 
 @pytest.fixture
 def watched(storage, bus):
-    """The `storage` fixture's backend, instrumented. Runs on both backends."""
+    """The `storage` fixture's backend, instrumented. Runs on every backend."""
     return instrument_storage(storage, bus)
 
 

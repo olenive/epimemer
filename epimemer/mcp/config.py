@@ -18,8 +18,9 @@ from epimemer.storage.protocol import StorageBackend
 # copy that can drift out of step with the config.
 DEFAULT_RECORD_RETRIEVAL = True
 
-# How much of the gap to 1.0 one `judge_importance` call closes. Shared with
-# `tools.judge_importance` for the same reason as the flag above.
+# How much of the gap to its bound one `judge_importance` call closes: to 1.0
+# when raising, to 0.0 when lowering. Shared with `tools.judge_importance` for
+# the same reason as the flag above.
 DEFAULT_IMPORTANCE_STEP = 0.25
 
 
@@ -31,13 +32,14 @@ class ServerConfig(BaseModel):
     surrealdb_user: str = "root"
     surrealdb_pass: str = "root"
     surrealdb_namespace: str = "epimemer"
-    # The graph a server lands on when nothing names one. **Deliberately a name
-    # nobody would give a real graph**: it used to be `"memory"`, which collided
-    # with a real graph of that name, so a server started without
-    # `EPIMEMER_GRAPH` wrote into somebody's actual data and looked like it had
-    # worked. A default that lands somewhere empty is wrong in a way you notice.
+    # The graph a SurrealDB server lands on when nothing names one.
+    # **Deliberately a name nobody would give a real graph**: a default that is
+    # also a real graph's name lets a server started without `EPIMEMER_GRAPH`
+    # write into somebody's actual data and look like it had worked. A default
+    # that lands somewhere empty is wrong in a way you notice.
     surrealdb_database: str = "default"
-    # `EPIMEMER_GRAPH` — the graph to open, overriding `surrealdb_database`.
+    # `EPIMEMER_GRAPH`: the graph to open, on any backend. On SurrealDB it
+    # overrides `surrealdb_database`; elsewhere the default is `default`.
     # Empty means *unset*, not a graph named "". Set it per server: the active
     # graph is process state, so `use_graph` lasts only as long as the process
     # and a client reconnect lands back on whatever this resolves to.
@@ -60,7 +62,6 @@ class ServerConfig(BaseModel):
     embedding_dimension: int = 384
 
     segmentation_strategy: Literal["paragraph", "semantic"] = "paragraph"
-    similarity_threshold: float = 0.75
 
     reflect_threshold: int = 10
 
@@ -93,7 +94,7 @@ class ServerConfig(BaseModel):
     tool_timeout_seconds: float = 30.0
 
     # Agent ids the user admits to every graph this server opens
-    # (REVIEW_MODE.md §2.3, §10.3). This is the approval channel for clients
+    # (REVIEW_MODE.md §2.3). This is the approval channel for clients
     # that cannot elicit **and** for the embedded backend, where the
     # `epimemer agents confirm` CLI cannot help: a second `mem://` connection is
     # a separate store, so the CLI would write approvals into a
@@ -196,7 +197,6 @@ def load_config() -> ServerConfig:
         "embedding_model_id": "EPIMEMER_EMBEDDING_MODEL_ID",
         "embedding_dimension": "EPIMEMER_EMBEDDING_DIMENSION",
         "segmentation_strategy": "EPIMEMER_SEGMENTATION_STRATEGY",
-        "similarity_threshold": "EPIMEMER_SIMILARITY_THRESHOLD",
         "reflect_threshold": "EPIMEMER_REFLECT_THRESHOLD",
         "backup_threshold": "EPIMEMER_BACKUP_THRESHOLD",
         "backup_destination": "EPIMEMER_BACKUP_DESTINATION",
@@ -289,7 +289,10 @@ def create_storage(config: ServerConfig) -> StorageBackend:
     else:
         from epimemer.storage.memory import InMemoryStorage
 
-        return InMemoryStorage()
+        # The same deliberately empty default as the other backends: a server
+        # started without `EPIMEMER_GRAPH` lands somewhere visibly empty.
+        database = config.graph if config.graph != "" else "default"
+        return InMemoryStorage(database=database)
 
 
 def create_embedding_provider(config: ServerConfig) -> EmbeddingProvider:

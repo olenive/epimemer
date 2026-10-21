@@ -14,12 +14,17 @@ The latest release is the supported version.
 Epimemer is an MCP server that talks to one client over stdio. It trusts that
 client completely: every tool an agent can call is available to whatever
 process launched the server, and the tools deliberately cannot do the things
-reserved for a person (approving a judge, renaming one, requiring one), which
-live in the `epimemer` CLI and in the client's elicitation prompts instead.
+reserved for a person (approving, renaming, retiring or deleting a judge, and
+requiring one), which live in the `epimemer` CLI and in the client's
+elicitation prompts instead.
 
 Storage credentials are the deployer's. The `root`/`root` defaults are
 SurrealDB's local-development credentials; anything reachable from another
 machine needs `EPIMEMER_SURREALDB_USER` and `EPIMEMER_SURREALDB_PASS` set.
+Postgres takes its credentials from `EPIMEMER_POSTGRES_DSN`, which accepts
+anything libpq does, a password file and `sslmode` included. A SQLite graph is
+a plain file under `EPIMEMER_SQLITE_DIR`, protected by its file permissions
+alone.
 
 The visualization hub binds `127.0.0.1` by default and, on that bind, keeps
 whole retrieval records, including query text and response payloads. Pointing

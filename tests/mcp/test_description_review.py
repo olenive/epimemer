@@ -11,7 +11,7 @@ delta rather than a sample.
 The two answers are `enrichments`, a new sentence, and `descriptions_confirmed`,
 *I read it against the change and it still fits*. Both clear the nomination;
 neither is optional, because an unanswered one comes back for ever.
-`dev-docs/DESCRIPTION_REVIEW.md` carries the case.
+`dev-docs/TOPIC_DESCRIPTIONS.md` carries the case.
 """
 
 import pytest

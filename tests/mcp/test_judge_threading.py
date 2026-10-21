@@ -6,11 +6,11 @@ mistakes live: a judge that reaches seven writers and not the eighth leaves a
 hole nobody can see from the response, and one stamped on the wrong record —
 the reviewed decision rather than the review — is worse than none.
 
-Both backends, because a nullable field that one store keeps and the other drops
+Every backend, because a nullable field that one store keeps and another drops
 is exactly the divergence `tests/conftest.py` exists for, and this one would be
 invisible until somebody asked *who judged this* months later.
 
-**A blank judge means unknown, and nothing else** (§3.3, revised 2026-08-23).
+**A blank judge means unknown, and nothing else** (§3.3).
 Every write here works without one; the tests that pass `None` are not testing a
 degraded mode, they are testing the default.
 """
@@ -505,7 +505,7 @@ class TestWhatTheAgentSees:
 
 
 class TestBothBackendsKeepIt:
-    """A nullable field one store keeps and the other drops is invisible until
+    """A nullable field one store keeps and another drops is invisible until
     somebody asks *who judged this* months later."""
 
     async def test_an_episode_round_trips_both_judges(self, storage, embedder):

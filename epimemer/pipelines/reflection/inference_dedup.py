@@ -8,9 +8,9 @@ conclusion. It goes wrong in exactly one **checkable** case: `F1` and `F2` are
 both dated and their asserted periods provably fall clear of each other.
 
 **That is a warning rather than a rule, and the distinction is the whole
-design.** The first reading of this treated the union as a *fabrication* — the
-merge inventing a derivation nobody made — and concluded inferences must never
-merge. It was wrong, because the merge does not silently preserve two arguments:
+design.** Treating the union as a *fabrication*, the merge inventing a
+derivation nobody made, would mean inferences must never merge. It is not one,
+because the merge does not silently preserve two arguments:
 **the agent writes fresh content**, asserting one claim over the combined
 premises. If those premises never held together, the resulting inference is
 *genuinely* unsound and `find_unsound_inferences` is right to say so. So the

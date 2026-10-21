@@ -30,7 +30,7 @@ class SeedProvenance(StrEnum):
     room for: tools that return nodes without ranking them at all. It never
     appears on a `search` result — the query pipeline always knows which arm
     reached a node — and it carries no score, because showing a blank is honest
-    where showing 1.0 would be a lie (§9).
+    where showing 1.0 would be a lie (`RETRIEVAL_PROVENANCE.md` §3).
     """
 
     LEXICAL = "lexical"  # BM25 on node content

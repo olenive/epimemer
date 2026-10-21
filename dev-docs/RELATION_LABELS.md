@@ -1,43 +1,43 @@
 # Relation labels: a vocabulary with a record
 
-A user-tier relationship label (`works_for`, `published_by`) used to exist
-only as a string repeated on every edge carrying it. This document is the
-design that gives each label a record: something to describe, something a
-decision can name, and something a decline can be recorded against. Labels
-are never rewritten; a vocabulary converges through descriptions and
-verdicts, not merges.
+A design, built except label deprecation (§5): the code is `epimemer/pipelines/reflection/relation_verdicts.py`, `relation_consolidation.py` and the label tools in `epimemer/mcp/tools.py`.
+
+Each user-tier relationship label (`works_for`, `published_by`) has a record:
+something to describe, something a decision can name, and something a decline
+can be recorded against. Labels are never rewritten; a vocabulary converges
+through descriptions and verdicts, not merges. `docs/REFLECTION.md` describes
+`relation_verdicts` for a caller.
 
 ---
 
 ## 1. The problem
 
-### 1.1 A label existed nowhere
+### 1.1 A label needs a record
 
 `list_relations` derives the vocabulary by scanning the edges of active nodes
 and grouping by `(label, kind)`. Without a record there is nothing to
 describe, so an agent choosing a label sees words and counts and no way to
 learn what *this graph* means by each; nothing to name in a decision, so a
 journal row about a pair of labels has no subject; and nothing to change but
-the edges, so any rename is an irreversible bulk rewrite.
+the edges, so any rename would be an irreversible bulk rewrite.
 
 ### 1.2 What labels affect, and what they do not
 
-**Labels do not affect retrieval.** `traversal_excluded` in `core/types.py`
-is the single function deciding whether a search expands through an edge, and
-it reads `edge.type` and `edge.kind`, never `edge.label`. Outside
-`list_relations` (counting), `link` (writing), and the engine-tier
-`published_by` constant in `corroboration.py`, no query pipeline reads a
-user-tier label. So consolidating two labels changes a string that gets
-printed and nothing about which nodes come back. That is a different class of
-operation from a fact merge, which destroys a node and moves corroboration
-counts, and the two should not share machinery.
+**Labels do not affect retrieval.** Expansion reads an edge's type and kind,
+never its label (`traversal_excluded`), and outside `list_relations`, `link`
+and the engine-tier `published_by` label corroboration reads, no query
+pipeline reads a user-tier label. So consolidating two labels changes a string
+that gets printed and nothing about which nodes come back. That is a different
+class of operation from a fact merge, which destroys a node and moves
+corroboration counts, and the two should not share machinery.
 
-**Relation merges fire approximately never on real graphs.** The largest real
-graph held one user-tier label for its first months. A nomination needs two
-same-`kind` labels at 0.9 cosine or above. That is either evidence the
-problem does not occur, or evidence that nothing encourages `link` with a
-user relation so the vocabulary never grows enough to need consolidating; the
-two readings point opposite ways and have not been distinguished.
+**Relation nominations are rare on real graphs.** The largest real graph held
+one user-tier label for its first months. A nomination needs two same-`kind`
+labels at 0.9 cosine or above (`reflect`'s `relation_similarity_threshold`).
+That is either evidence the problem does not occur, or evidence that nothing
+encourages `link` with a user relation so the vocabulary never grows enough to
+need consolidating; the two readings point opposite ways and have not been
+distinguished.
 
 **Near-identical strings can mean opposite things.** The user's example: a
 servant *works for* a master in a culture with no employment relation, while
@@ -46,16 +46,12 @@ consultant who does very little work. The nominator sees only strings.
 
 ### 1.3 The decline treadmill
 
-`sweep_similar_relation_pairs` re-derives from scratch on every `reflect`.
-Without a record of declines, a pair an agent considered and declined is
-re-nominated next session, to a different agent, for ever. Getting it right
-is what causes the loop: accepting a merge makes one label stop existing, so
-accepting is self-suppressing and declining is not, and the graph applies
-quiet pressure toward the wrong answer.
-
-The `assessed` edge closes exactly this for fact pairs. It could not serve
-here because it runs between two nodes, and `works_for` and `employed_by` are
-not nodes. §4 is the equivalent for labels.
+The relation sweep re-derives from scratch on every `reflect`. Without a
+record of declines, a pair an agent considered and declined would be
+re-nominated next session, to a different agent, for ever. The `assessed` edge
+closes exactly this for fact pairs. It cannot serve here because it runs
+between two nodes, and `works_for` and `employed_by` are not nodes. §4 is the
+equivalent for labels.
 
 ---
 
@@ -63,83 +59,27 @@ not nodes. §4 is the equivalent for labels.
 
 ### 2.1 The type
 
-```python
-class RelationLabel(BaseModel):
-    """The vocabulary entry behind a user-tier edge's `label`.
-
-    Not a node, deliberately (§9): a label is vocabulary, not knowledge, and
-    a node enters search, embeddings, reflection and merging, every one of
-    which would then be answering questions about the *words* the graph uses.
-    `Metacontext` is the precedent and the shape: a named, described thing
-    that lives beside the graph rather than in it.
-    """
-
-    id: str = Field(default_factory=_new_id)
-    # What edges actually carry. The join key to `NodeEdge.label`, which keeps
-    # its string; edges are not re-pointed at ids (§9).
-    name: str
-    kind: Literal["relationship", "attribution"] = "relationship"
-    # Guidance an agent reads before coining (§3). Empty means
-    # undescribed, which is a true and useful state.
-    description: str = ""
-    # The coiner, and never the describer. A later agent may describe this
-    # label or judge it against another, and neither restamps this field;
-    # those are journalled in their own right. A record created by anything
-    # other than `link` (§2.3) carries no judge at all.
-    judged_by: JudgeRef | None = None
-    metadata: dict = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=_now)
-```
+A `RelationLabel` sits beside `Metacontext`: one table per graph on every
+backend, unique on `(name, kind)`. It is not a node (§9): a label is
+vocabulary, not knowledge, and `Metacontext` is the precedent for a named,
+described thing that lives beside the graph rather than in it.
 
 **`name`, not `content`.** `Metacontext.content` is named for prose. A
 relation label's name is a token that edges carry verbatim, and calling it
 `content` would invite someone to write a sentence in it. `label` would
 stutter against `NodeEdge.label`, which it joins to.
 
-**No `status`.** A status with one reachable value is a constant, not a
-state, the same reasoning `DecisionKind` applies to enum members. Nothing
-retires a label, so the field would arrive with deprecation if that is ever
-built (§5).
-
-**No `ValueSignal`.** A label is not ranked, retrieved, or judged for
-importance.
-
 ### 2.2 Where it lives
 
-One table per graph, beside `metacontext`, on both backends: the full
-protocol, no capability flags.
-
-```python
-async def store_relation_label(self, label: RelationLabel) -> str:
-    """Store a relation label, or update its description and metadata.
-
-    Those are the only fields an update may move. `name` cannot change,
-    because edges join to it by string (§2.4); `kind` cannot, because the
-    kind is in force on the edges and this record only mirrors it (§7.2).
-    """
-
-
-async def get_relation_label(self, name: str, kind: str) -> RelationLabel | None:
-    """The record for one label, or None if it has none. Every caller
-    degrades to the recordless behaviour rather than refusing (§2.3)."""
-
-
-async def query_relation_labels(self) -> list[RelationLabel]:
-    """Every relation label record in the active graph."""
-```
-
-Uniqueness is `(name, kind)` within a graph. `recorded_relation_label` is the
-pure merge both backends write through: `id`, `created_at` and `judged_by`
-come from the record already there, and a blank description never
-overwrites prose, so the coiner-never-the-describer rule is structural rather
-than a convention every caller has to remember. The SurrealDB write is
-`UPSERT … CONTENT … WHERE name = $name AND kind = $kind`, keyed on the
-natural pair rather than on `uid`, so a create-or-fetch caller that lost a
-race writes over the same row instead of hitting the unique index.
-
-Viz reads the table through `viz_list_relation_labels(database)`, following
-`viz_list_metacontexts`, including the never-expose rule: viz reads are never
-registered as MCP tools and never imported in `epimemer/mcp/`.
+Every backend writes through one pure merge, `recorded_relation_label`: `id`,
+`created_at` and `judged_by` come from the record already there, and a blank
+description never overwrites prose, so the coiner-never-the-describer rule is
+structural rather than a convention every caller has to remember. Only the
+description and metadata may move: `name` cannot, because edges join to it by
+string (§2.4), and `kind` cannot, because the kind in force is the one on the
+edges. The SurrealDB write upserts on the natural pair rather than on `uid`,
+so a create-or-fetch caller that lost a race writes over the same row instead
+of hitting the unique index.
 
 ### 2.3 Creation, and the graphs that already exist
 
@@ -148,20 +88,19 @@ of them: `link` when a label is coined, `describe_relation` when one is
 described, and `relation_verdicts` when a pair is judged. Each already writes
 and already carries a judge, so the record comes into existence at exactly
 the moments an agent touches the vocabulary, and no path can be blocked
-waiting for one. An enumeration of write paths is a claim that ages; the
-test in §7.1 that asserts every record is reachable without the CLI is what
-catches a fourth.
+waiting for one. An enumeration of write paths is a claim that ages; a test
+asserting every record is reachable without the CLI is what catches a fourth.
 
 **Only `link` records a judge**, because only `link` coins.
 
 **The CLI backfill is a convenience, not a precondition.** `epimemer
-relations backfill` reads the same `related_edges_of_active_nodes` scan
-`list_relations` uses and writes a judge-less record per distinct `(label,
-kind)`, so a long-lived graph can get its vocabulary in one go. It must not
-be the only way a pre-existing label gets a record: the CLI refuses embedded
-backends, which is the default development configuration, and an agent
-cannot run it at all (`DEVELOPER_GUIDE.md`, *The CLI is not a remedy an
-agent can reach*). Its refusal message says plainly that nothing is lost.
+relations backfill` reads the same scan `list_relations` uses and writes a
+judge-less record per distinct `(label, kind)`, so a long-lived graph can get
+its vocabulary in one go. It must not be the only way a pre-existing label
+gets a record: the CLI refuses embedded backends, which is the default
+development configuration, and an agent cannot run it at all
+(`DEVELOPER_GUIDE.md`, *The CLI is not a remedy an agent can reach*). Its
+refusal message says plainly that nothing is lost.
 
 **Every read tolerates a missing record.** A label without one is a graph
 nobody has touched since records existed, and every reader falls back to the
@@ -194,13 +133,23 @@ rather than the shared label would make this a hypergraph. Neither is done
 
 - `list_relations` returns `description` beside `label`, `kind` and `count`,
   always carrying the field (empty when absent), because the row exists
-  either way.
-- `link` returns the description of the label it reused, so an agent coining
-  against an existing name is told what that name already means at the
-  moment it matters. It omits the key rather than sending an empty one: `""`
-  reads as *this graph means nothing by the word*, absence as *nobody has
-  said*.
-- `describe_relation(name, kind, description)` writes one, journalled.
+  either way. Its counts stay derived from edges, scoped to active nodes, for
+  a reason a stored count would drift from.
+- `link` returns the description of the label it reused, as
+  `relation_description`, so an agent coining against an existing name is
+  told what that name already means at the moment it matters. It omits the
+  key rather than sending an empty one: `""` reads as *this graph means
+  nothing by the word*, absence as *nobody has said*.
+- `describe_relation(name, kind, description)` writes one, journalled. It
+  resolves the kind from the edges, as `link` does for a reused label, and
+  that read covers every edge while `list_relations` is scoped to active
+  nodes, so a label whose only remaining edges hang off retired nodes is
+  describable but not listed. Right way round: the vocabulary outlives the
+  claims that used it, and the alternative would make a word undescribable
+  exactly when the graph had begun to forget what it meant. The response
+  reports what was stored, not what was asked for, since a blank description
+  leaves existing prose alone and echoing the argument would tell an agent it
+  had cleared a description it had not.
 
 This is the half that pays. It moves the intervention from repair to
 prevention: an agent picking from a described vocabulary never coins the
@@ -215,37 +164,30 @@ building deprecation (§5).
 
 ### 4.1 The verdict
 
-Mirrors `apply_reflection(similarities=[…])`, the same problem one layer down:
+`relation_verdicts` mirrors `apply_reflection(similarities=[…])`, the same
+problem one layer down, with two answers: **`distinct`**, different
+relationships that look alike, and **`synonymous`**, the same relationship
+written two ways. `docs/REFLECTION.md` has the shape and the refusals.
 
-```
-relation_verdicts: [{pair: [label_a, label_b], kind: str,
-                     verdict: "distinct" | "synonymous", because: str}]
-```
-
-- **`distinct`**: different relationships that look alike.
-- **`synonymous`**: the same relationship written two ways.
-
-Both suppress. Recording *"yes, these are synonyms, and I am not merging
+**Both suppress.** Recording *"yes, these are synonyms, and I am not merging
 them"* is a real judgment, and leaving it unrecordable would be the
 treadmill again for the affirmative answer. `synonymous` acts on nothing (§5).
 
-`because` is required on both: a verdict with no reason marks the pair
+**`because` is required on both**: a verdict with no reason marks the pair
 judged, so the next agent skips it without knowing whether it was examined or
 waved through.
 
-Refused, per entry, in the shape `similarities_refused` uses: a missing
-`kind` (copy it from the nomination; defaulting it would make the stale-kind
-refusal blame the agent for a value the call invented), a label no edge in
-this graph carries, a pair whose two sides differ in `kind`, and a pair
-already carrying this agent's identical verdict, since a retry is not a
-second opinion.
+**A missing `kind` is refused rather than defaulted**: copying it from the
+nomination is the agent's job, and defaulting it would make the stale-kind
+refusal blame the agent for a value the call invented. A pair already
+carrying this agent's identical verdict is refused too, since a retry is not
+a second opinion.
 
 **A label with no record is not refused; it gets one**, judge-less, per §2.3.
 
 **A different judge recording a verdict the pair already carries has
-confirmed, not decided.** `_journal_pair_judgment(created=False)` writes a
-confirmation row citing the oldest decision for that pair, which is what
-stops a third agent doing the work a fourth time.
+confirmed, not decided.** A confirmation row cites the oldest decision for
+that pair, which is what stops a third agent doing the work a fourth time.
 
 **A different judge disagreeing is recorded, not refused.** Both rows survive
 with their judges and their reasons, and since both verdicts suppress, the
@@ -262,45 +204,13 @@ manufacture agreement out of nobody.
 
 ### 4.2 The suppression read
 
-A small append-only table, not a field on the label record:
-
-```python
-class RelationVerdict(BaseModel):
-    id: str = Field(default_factory=_new_id)
-    # Sorted, so (a, b) and (b, a) are one pair rather than two.
-    label_ids: list[str]
-    verdict: Literal["distinct", "synonymous", "reopened"]
-    because: str
-    judged_by: JudgeRef | None = None
-    decided_at: datetime = Field(default_factory=_now)
-```
-
-```python
-async def record_relation_verdict(self, verdict: RelationVerdict) -> str: ...
-async def judged_relation_pairs(self) -> set[tuple[str, str]]:
-    ...  # the sweep's read
-    # (newest row per pair)
-
-
-async def relation_verdicts_for(self, label_ids) -> Sequence[...]: ...  # the writer's read
-async def query_relation_verdicts(self) -> Sequence[...]: ...  # the reader's read
-```
-
-Three reads because three questions: the sweep asks *has this pair been
-judged* (a cheap set); the write path asks *by whom, and to what*, since a
-retry and a confirmation are told apart by the verdict matching while the
-judge does not, and a `DecisionRecord` carries the subjects and the judge but
-not the verdict; and the whole-table read serves the agent.
-
-Storing the pair on the label record was rejected: mutable state held twice,
-once on each side, free to disagree.
-
-The sweep resolves each label name to a record, drops any pair whose two ids
-are already judged, and suppresses nothing for a pair either of whose sides
-has no record. Both backends derive the judged set through
+Verdicts are a small append-only table, not a field on the label record
+(§9), and each row holds the sorted pair of label ids, so (a, b) and (b, a)
+are one pair. Every backend derives the judged set through
 `standing_relation_pairs`, a pure function over the rows, rather than each
-writing the rule as a query: a suppression index the two spell differently is
-one that can disagree about what has been judged.
+writing the rule as a query: a suppression index two backends spell
+differently is one that can disagree about what has been judged. A pair
+either of whose sides has no record is suppressed by nothing.
 
 **What was written is readable where the next agent looks.** Each
 `list_relations` row carries the standing verdicts naming its label: the
@@ -331,33 +241,30 @@ needs re-deriving.
 Two consequences follow, and both are load-bearing:
 
 - **A verdict recorded after a reopen is a fresh decision, never a retry.**
-  `_since_the_last_reopen` drops the rows the newest reopen set aside before
-  the retry and confirmation checks run. Without it the second judge's answer
-  reads as a repeat of the first one's, no row is written, and the pair stays
-  nominated for ever while the call reports success.
-- **`reopened` is not in `RELATION_VERDICTS`.** That tuple is the vocabulary
-  of *answers* about a pair, and `apply_relation_verdict` refuses anything
-  outside it: a withdrawal offered beside `distinct` and `synonymous` would
-  read as a third answer. `reopen` is the only writer.
+  The rows the newest reopen set aside are dropped before the retry and
+  confirmation checks run. Without that, the second judge's answer reads as a
+  repeat of the first one's, no row is written, and the pair stays nominated
+  for ever while the call reports success.
+- **`reopened` is not one of the answers.** A withdrawal offered beside
+  `distinct` and `synonymous` would read as a third answer, so a verdict
+  outside those two is refused and `reopen` is the only writer.
 
 The nomination carries the reopening, so the next judge sees the reason and
-the date rather than re-deriving why the pair is back. It is attached in the
-sweep, which is where the label names are resolved to the record ids the
-reopen named.
+the date rather than re-deriving why the pair is back.
 
 ### 4.3 The journal row
 
-`DecisionKind.RELATION_VERDICT`, with `subject_ids = [label_a.id,
-label_b.id]`. The subjects are ids of records that exist in this graph, and
-`review()` dereferences them through `subject_kind` (`node`,
-`relation_label`, or null), because a decision's subject is not always a
-claim. The label read happens only where an id failed to resolve as a node,
-so an ordinary page pays nothing, and a label is never declared in
-`retrieved`, which drives focus in a node viewer. Giving the subject an
-identity is worth nothing until the reader dereferences it.
+`DecisionKind.RELATION_VERDICT`, with the two label ids as its subjects. A
+decision's subject is not always a claim, so `review()` says what each
+subject is (`subject_kind`: `node`, `relation_label`, or null), and a label
+is never declared in `retrieved`, which drives focus in a node viewer. Giving
+the subject an identity is worth nothing until the reader dereferences it.
 
 Its own kind rather than `SIMILARITY`: review selects on kind, and a reviewer
 auditing judgments about claims does not want judgments about vocabulary.
+Describing a label journals `RELATION_DESCRIPTION`, not `ENRICHMENT`, for the
+same reason: `ENRICHMENT` is reflect's topic enrichment, and prose about what
+the graph's words mean does not belong among changes to what it claims.
 
 A reopen writes `DecisionKind.REOPENED` over the same two subjects, in the
 same transaction as the verdict row, rather than a `RELATION_VERDICT` with a
@@ -417,9 +324,9 @@ Two constraints bind it from the first version:
 
 A sweep recomputed from current state that records no declines is a futile
 cycle by construction: it re-offers what was already refused and cannot know
-it is doing so. Four instances were identified for labels. One was live and
-is fixed; the other three are constraints on features nobody has built, and
-are written as such rather than as work outstanding.
+it is doing so. Four instances were identified for labels. Verdicts bound the
+one that was live; the other three are constraints on features nobody has
+built, and are written as such rather than as work outstanding.
 
 | | Reachable? | Bound by |
 |---|---|---|
@@ -433,92 +340,6 @@ deprecate/un-deprecate would be direct calls that need no nomination.
 
 ---
 
-## 7. How it is built
-
-| Stage | Holds |
-|---|---|
-| 1 | `RelationLabel`, the three protocol methods on both backends, `link` create-or-fetch, `epimemer relations backfill` |
-| 2 | `description` on `list_relations` and on `link`'s response; `describe_relation` with `DecisionKind.RELATION_DESCRIPTION`; `viz_list_relation_labels` |
-| 3 | `relation_verdicts` in `apply_reflection`, `RelationVerdict` and its protocol methods, the suppression filter in `sweep_similar_relation_pairs`, `DecisionKind.RELATION_VERDICT` |
-| 4 | Deprecation: not built, not scheduled (§5) |
-
-### 7.1 The record
-
-**Types**: `RelationLabel` in `core/types.py`, beside `Metacontext`.
-**Protocol**: the three methods of §2.2, implemented in `storage/memory.py` (a
-`dict[str, RelationLabel]` on `_GraphStore`) and `storage/surrealdb_adapter.py`
-(a `relation_label` table in `_setup_schema`, unique index on `(name,
-kind)`), plus the passthrough in `visualization/instrumented_storage.py`,
-whose guard test compares signatures, not method names. **Call site**:
-`tools.link`, after `resolved_kind` is settled, fetches or creates the record
-with `judged_by=judge`: one extra read on the common path, and a write only
-on a label's first use. **CLI**: `epimemer relations backfill [--graph]`.
-
-**Tests** (both backends via the `storage` fixture): coining creates exactly
-one record carrying the coining judge and never restamps it; `(name, kind)`
-is unique; re-storing an existing label keeps its id; backfill is
-idempotent, writes no judge, and skips engine-tier edges; records are per
-graph; and every record a label can acquire is reachable without the CLI,
-asserted on the in-memory store, where the CLI refuses.
-
-### 7.2 Descriptions
-
-**The kind is resolved from the edges by `get_relation_kind`**, the method
-`link` already trusts for a reused label, so the two agree by construction.
-It reads every edge while `list_relations` is scoped to active nodes, so a
-label whose only remaining edges hang off retired nodes is describable but
-not listed. Right way round: the vocabulary outlives the claims that used it,
-and the alternative would make a word undescribable exactly when the graph
-had begun to forget what it meant.
-
-**The response reports what was stored, not what was asked for.** A blank
-`description` leaves existing prose alone (`recorded_relation_label`'s
-rule), so the stored text is what comes back; echoing the argument would
-tell an agent it had cleared a description it had not.
-
-**Call sites**: `tools.list_relations` joins each derived `(label, kind)` to
-its record. Counts stay derived from edges: they are scoped to active nodes
-for a reason and a stored count would drift. `describe_relation(name, kind,
-description)` creates the record if the label has none, refuses a label no
-edge carries, and refuses a `kind` change. Re-describing replaces the text
-and journals a second row; the first row is not edited.
-
-**It journals `DecisionKind.RELATION_DESCRIPTION`, not `ENRICHMENT`.**
-`ENRICHMENT` is reflect's *topic* enrichment, and a reviewer auditing changes
-to what the graph claims does not want prose about what the graph's words
-mean mixed in.
-
-**Frontend**: `assemble_snapshot` carries `relation_labels` and
-`RelationLabelView` exists on both sides of the wire; nothing renders them
-until an edge inspector exists.
-
-**Tests**: descriptions surface on `list_relations` and on `link` reuse; a
-description on a recordless label creates the record judge-less; a `kind`
-change is refused; re-describing journals a second row without editing the
-first; the journal kind is `RELATION_DESCRIPTION`; the viz read never appears
-in `list_tools()`.
-
-### 7.3 Verdicts
-
-**Types**: `RelationVerdict`; `DecisionKind.RELATION_VERDICT`, which the
-drift guard in `tests/mcp/test_decision_journal.py` requires to have a
-writer. **Protocol**: the four methods in §4.2. **Call sites**:
-`apply_reflection` applies `relation_verdicts` immediately after
-`similarities`, because both are judgments about pairs as the agent saw them
-and the anchoring rule covers them jointly: a merge earlier in the same
-batch would make one side of a pair vanish. The sweep gains the suppression
-filter and the `suppressed` count; `list_relations` carries each label's
-standing verdicts. `apply_relation_verdict` takes a `judge` it deliberately
-does not write onto a label record it creates.
-
-**Tests**: a declined pair is never re-nominated (shown failing without the
-filter); both verdicts suppress; `(a, b)` and `(b, a)` are one pair;
-`because` and `kind` are required per entry; a same-judge retry is refused
-where a different judge writes a confirmation row; verdicts are per graph
-and journal both label ids; suppression survives describing or re-using
-either label; `reflect` reports `relation_pairs_suppressed`.
-
----
 
 ## 8. What this deliberately does not do
 
@@ -535,24 +356,14 @@ either label; `reflect` reports `relation_pairs_suppressed`.
   it does not steer an agent away from a name it was about to coin. Steering
   carries FC3, so whatever proposes it owes the answer there.
 - **It does not merge labels** (§5).
-- **It does not check metacontexts when nominating a pair.** A metacontext check would
-  not stop the servant/consultant pair being proposed: both usages sit in the
-  same fictional universe, so their derived metacontext sets are identical and
-  nothing fires. It catches a different case, two universes or fiction beside
-  base reality, and the corroboration harm that justifies `merge_facts`'
-  cross-metacontext refusal does not transfer, because nothing corroborates on a
-  label. So it was only ever a nomination-quality improvement, and its last
-  real reason (deprecation folding a fiction label under a real one) went
-  with merging. The answer to a cross-metacontext label is its description.
-
-  If it is ever built, the bar is disjointness, not equality. Do not copy
-  `fact_dedup`'s *exactly the same set* rule: that bar is right there because
-  a merge inherits a union, and here nothing inherits, so a label
-  legitimately used in two metacontexts would become unpairable with anything. The
-  right check is the negation of `same_metacontext`'s *share at least one*: do not
-  nominate a pair whose derived metacontext sets are disjoint, where a label's
-  metacontexts are the union of `metacontexts_for` over the endpoint nodes of every edge
-  carrying it.
+- **It does not check metacontexts when nominating a pair.** A check would
+  not stop the servant/consultant pair, whose usages sit in one fictional
+  universe, and the corroboration harm behind `merge_facts`' cross-metacontext
+  refusal does not transfer, because nothing corroborates on a label. The
+  answer to a cross-metacontext label is its description. If a check is ever
+  built, the bar is disjointness, not `fact_dedup`'s exact equality: here
+  nothing inherits a union, so equality would make a label legitimately used
+  in two metacontexts unpairable with anything.
 
 ---
 
@@ -575,19 +386,17 @@ either label; `reflect` reports `relation_pairs_suppressed`.
    once per side, free to disagree.
 6. **A `ValueSignal` on the record.** Nothing ranks or retrieves a label.
 7. **`status` before anything writes it.** A status with one reachable value
-   is a constant.
+   is a constant, not a state; it arrives with deprecation if that is built.
 8. **Refusing a verdict on an unrecorded label and pointing at the CLI.** The
    CLI refuses embedded backends, the default development configuration, and
    an agent cannot run it in any case. A remedy the agent cannot issue, on a
    backend where it refuses, is not a remedy. Create-or-fetch at verdict time
    removes the refusal rather than improving its message.
-9. **Journalling descriptions as `ENRICHMENT`.** The right verb, the wrong
-   side of §4.3's line.
-10. **Suppressing declines keyed on the label strings, with no record.** It
-    looked like the small option and is not: declining is a decision, every
-    decision leaves a journal row, and `subject_ids` holds ids, so it would
-    have forced rejection 3 as a side effect.
-11. **Merging labels with a captured undo.** Meeting `REVIEW_MODE.md` §7.1's
+9. **Suppressing declines keyed on the label strings, with no record.** It
+   looked like the small option and is not: declining is a decision, every
+   decision leaves a journal row, and `subject_ids` holds ids, so it would
+   have forced rejection 3 as a side effect.
+10. **Merging labels with a captured undo.** Meeting `REVIEW_MODE.md` §7.1's
     rule (any operation collapsing many into one must capture the partition
     while it exists) is most of the cost of building deprecation, on an
     operation deprecation replaces.

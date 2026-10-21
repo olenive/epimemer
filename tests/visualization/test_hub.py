@@ -18,9 +18,21 @@ import pytest
 import uvicorn
 import websockets
 
+from epimemer.core.types import EmbeddingRecord, Fact, Topic
+from epimemer.storage.memory import InMemoryStorage
 from epimemer.visualization import hub as hubmod
+from epimemer.visualization.event_bus import InProcessEventBus
 from epimemer.visualization.hub import create_hub_app
-from epimemer.visualization.protocol import PublishEvent, Register, RpcResponse, SessionInfo
+from epimemer.visualization.hub_client import start_hub_client
+from epimemer.visualization.protocol import (
+    INGEST_MAX_MESSAGE_BYTES,
+    UNVERSIONED_SCHEMA,
+    VIZ_SCHEMA_VERSION,
+    PublishEvent,
+    Register,
+    RpcResponse,
+    SessionInfo,
+)
 
 
 def _session(session_id: str, *, backend: str = "surrealdb", graph: str = "memory") -> SessionInfo:
@@ -68,7 +80,13 @@ async def hub():
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
 
-    server = uvicorn.Server(uvicorn.Config(app, log_level="warning", lifespan="off"))
+    # The ceiling `run()` gives uvicorn, so an oversized answer meets the
+    # limit it would meet in a real hub.
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app, log_level="warning", lifespan="off", ws_max_size=INGEST_MAX_MESSAGE_BYTES
+        )
+    )
     task = asyncio.create_task(server.serve(sockets=[sock]))
     for _ in range(300):
         if server.started:
@@ -109,6 +127,76 @@ async def test_register_lists_session(hub):
 
 async def _pred_len(addr: str, n: int) -> bool:
     return len(await _sessions(addr)) == n
+
+
+# --- the contract's version ---
+
+
+def test_a_register_names_the_contract_it_speaks():
+    sent = json.loads(Register(info=_session("s-a")).model_dump_json())
+
+    assert sent["schema_version"] == VIZ_SCHEMA_VERSION
+
+
+async def test_health_names_the_contract_the_hub_speaks(hub):
+    status, body = await _http_get(hub.addr, "/api/health")
+
+    assert status == 200
+    assert json.loads(body)["schema_version"] == VIZ_SCHEMA_VERSION
+
+
+async def test_each_session_is_listed_with_the_contract_it_speaks(hub):
+    async with websockets.connect(hub.ingest) as ws:
+        await _register(ws, _session("s-a"))
+        await _wait(lambda: _pred_len(hub.addr, 1))
+
+        [listed] = await _sessions(hub.addr)
+
+    assert listed["schema_version"] == VIZ_SCHEMA_VERSION
+
+
+async def test_a_session_whose_register_predates_the_field_is_listed_as_0(hub):
+    """Listed as a number, so a client compares it like any other version,
+    rather than left out or filled in with the version the hub speaks."""
+    older = {"type": "register", "info": _session("s-old").model_dump(mode="json")}
+    async with websockets.connect(hub.ingest) as ws:
+        await ws.send(json.dumps(older))
+        await _wait(lambda: _pred_len(hub.addr, 1))
+
+        [listed] = await _sessions(hub.addr)
+
+    assert UNVERSIONED_SCHEMA == 0
+    assert listed["schema_version"] == UNVERSIONED_SCHEMA
+
+
+async def test_a_re_register_updates_the_listed_version(hub):
+    async with websockets.connect(hub.ingest) as ws:
+        older = {"type": "register", "info": _session("s-a").model_dump(mode="json")}
+        await ws.send(json.dumps(older))
+        await _wait(lambda: _pred_len(hub.addr, 1))
+        await _register(ws, _session("s-a", graph="other"))
+
+        async def _current() -> bool:
+            [listed] = await _sessions(hub.addr)
+            return listed["schema_version"] == VIZ_SCHEMA_VERSION
+
+        await _wait(_current)
+
+
+async def test_a_register_that_does_not_parse_is_refused(hub):
+    """The same refusal as a first message that is not a Register at all."""
+    malformed = {
+        "type": "register",
+        "info": _session("s-a").model_dump(mode="json"),
+        "schema_version": "one",
+    }
+    async with websockets.connect(hub.ingest) as ws:
+        await ws.send(json.dumps(malformed))
+        with pytest.raises(websockets.ConnectionClosed) as closed:
+            await asyncio.wait_for(ws.recv(), timeout=3)
+
+    assert closed.value.rcvd.code == 1002
+    assert await _sessions(hub.addr) == []
 
 
 async def test_disconnect_marks_session_not_connected(hub):
@@ -252,7 +340,7 @@ async def test_the_ring_keeps_only_the_coarse_stream(hub):
 
 
 async def test_warnings_and_acts_replay_as_one_sequence(hub):
-    """`WARNINGS_DASHBOARD.md` §3: the ring keeps both, because replay has to
+    """`EVENT_LOG.md` §12.3: the ring keeps both, because replay has to
     reproduce arrival order and a warning reads as a line after what it was
     about."""
     async with websockets.connect(hub.ingest) as sess:
@@ -311,7 +399,7 @@ async def test_a_warning_stays_inside_the_viewed_graph(hub):
 
 
 async def test_the_warning_settings_rpc_reaches_the_session(hub):
-    """Read-only, and answered where the graph's overrides live (§5)."""
+    """Read-only, and answered where the graph's overrides live (`EVENT_LOG.md` §12.4)."""
     async with websockets.connect(hub.ingest) as sess:
         await _register(sess, _session("s-a"))
         await _wait(lambda: _pred_len(hub.addr, 1))
@@ -341,7 +429,8 @@ async def test_the_warning_settings_route_needs_a_session(hub):
 
 
 async def test_backfill_stays_inside_the_viewed_graph(hub):
-    """§6: an entry from graph A must never highlight into graph B."""
+    """`VISUALISATION.md`, *Rules every panel follows*: an entry from graph A
+    must never highlight into graph B."""
     async with websockets.connect(hub.ingest) as sess:
         await _register(sess, _session("s-a"))
         await _wait(lambda: _pred_len(hub.addr, 1))
@@ -534,6 +623,114 @@ async def test_snapshot_rpc_round_trip(hub):
         assert json.loads(body) == canned
 
 
+async def test_embeddings_rpc_round_trip(hub):
+    async with websockets.connect(hub.ingest) as sess:
+        await _register(sess, _session("s-a"))
+        await _wait(lambda: _pred_len(hub.addr, 1))
+
+        get_task = asyncio.create_task(
+            _http_get(hub.addr, "/api/embeddings?session=s-a&graph=memory&node_type=topic")
+        )
+        req = json.loads(await asyncio.wait_for(sess.recv(), timeout=3))
+        assert req["method"] == "embeddings"
+        assert req["params"] == {"graph": "memory", "node_type": "topic"}
+
+        canned = {
+            "graph": "memory",
+            "schema_version": VIZ_SCHEMA_VERSION,
+            "node_type": "topic",
+            "models": {"m": 2},
+            "embeddings": [
+                {"node_id": "t1", "node_type": "topic", "model_id": "m", "vector": [0.5, 0.25]}
+            ],
+        }
+        await sess.send(RpcResponse(request_id=req["request_id"], result=canned).model_dump_json())
+
+        status, body = await get_task
+        assert status == 200
+        assert json.loads(body) == canned
+
+
+async def test_embeddings_without_a_type_asks_for_every_type(hub):
+    async with websockets.connect(hub.ingest) as sess:
+        await _register(sess, _session("s-a"))
+        await _wait(lambda: _pred_len(hub.addr, 1))
+
+        get_task = asyncio.create_task(
+            _http_get(hub.addr, "/api/embeddings?session=s-a&graph=memory")
+        )
+        req = json.loads(await asyncio.wait_for(sess.recv(), timeout=3))
+        assert req["params"] == {"graph": "memory", "node_type": None}
+        await sess.send(RpcResponse(request_id=req["request_id"], result={}).model_dump_json())
+
+        status, _ = await get_task
+        assert status == 200
+
+
+@pytest.mark.parametrize("query", ["", "?session=s-a", "?graph=memory", "?session=&graph=memory"])
+async def test_embeddings_needs_a_session_and_a_graph(hub, query):
+    status, body = await _http_get(hub.addr, f"/api/embeddings{query}")
+
+    assert status == 400
+    assert json.loads(body)["error"] == "Missing 'session' or 'graph' query parameter"
+
+
+@pytest.mark.parametrize("node_type", ["topics", "Topic", "edge", ""])
+async def test_embeddings_refuses_a_type_it_does_not_know(hub, node_type):
+    """Refused at the hub, before any session is asked, with the values that
+    would have worked."""
+    status, body = await _http_get(
+        hub.addr, f"/api/embeddings?session=s-a&graph=memory&node_type={node_type}"
+    )
+
+    assert status == 400
+    error = json.loads(body)["error"]
+    assert "node_type" in error
+    assert all(allowed in error for allowed in ("topic", "fact", "inference"))
+
+
+async def test_an_answer_over_the_ceiling_is_an_error_and_the_session_stays(hub):
+    """An answer the socket cannot carry would close it with 1009 and drop the
+    session. The session sends an error in its place, which reaches the caller
+    as any session error does, and the next request on the same socket works.
+
+    One topic node's vector is given a dimension no model has, so a single
+    real answer crosses the real ceiling against the in-memory backend.
+    """
+    storage = InMemoryStorage()
+    topic = Topic(content="a topic", source_id="s1")
+    fact = Fact(content="a fact", source_id="s1")
+    for node in (topic, fact):
+        await storage.store_node(node)
+    # 19 bytes a float on the wire, so 900,000 of them is about 17 MB.
+    await storage.store_embedding(
+        EmbeddingRecord(item_id=topic.id, model_id="m", vector=[0.1234567890123456] * 900_000)
+    )
+    await storage.store_embedding(EmbeddingRecord(item_id=fact.id, model_id="m", vector=[0.5]))
+    info = SessionInfo(session_id="s-big", pid=1, backend="memory", active_graph="default")
+    stop = await start_hub_client(InProcessEventBus(), storage, info, hub.ingest)
+    try:
+        await _wait(lambda: _pred_len(hub.addr, 1))
+
+        status, body = await _http_get(hub.addr, "/api/embeddings?session=s-big&graph=default")
+
+        assert status == 502
+        error = json.loads(body)["error"]
+        assert error.startswith("the embeddings answer would be ")
+        assert f"{INGEST_MAX_MESSAGE_BYTES:,}-byte message ceiling" in error
+        assert error.endswith("ask for one node_type: topic, fact or inference")
+
+        [listed] = await _sessions(hub.addr)
+        assert listed["connected"] is True
+        status, body = await _http_get(
+            hub.addr, "/api/embeddings?session=s-big&graph=default&node_type=fact"
+        )
+        assert status == 200
+        assert [e["node_id"] for e in json.loads(body)["embeddings"]] == [fact.id]
+    finally:
+        await stop()
+
+
 async def test_rpc_timeout_returns_504(hub, monkeypatch):
     monkeypatch.setattr(hubmod, "RPC_TIMEOUT_SECONDS", 0.3)
     async with websockets.connect(hub.ingest) as sess:
@@ -575,6 +772,32 @@ async def test_run_exits_1_when_a_stranger_holds_the_port(monkeypatch):
         assert await asyncio.to_thread(hubmod.run) == 1
     finally:
         stranger.close()
+
+
+def test_run_gives_uvicorn_the_protocols_ceiling(monkeypatch, tmp_path):
+    """The limit is the protocol's constant, passed explicitly, rather than a
+    default nobody chose that a uvicorn upgrade could move."""
+    configs = []
+
+    class _Server:
+        def __init__(self, config):
+            configs.append(config)
+
+        async def serve(self, sockets):
+            return None
+
+    bound = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    bound.bind(("127.0.0.1", 0))
+    monkeypatch.setattr(hubmod, "_try_bind", lambda host, port: bound)
+    monkeypatch.setattr(hubmod, "_pidfile_path", lambda: tmp_path / "viz-hub.pid")
+    monkeypatch.setattr(hubmod.uvicorn, "Server", _Server)
+    try:
+        assert hubmod.run() == 0
+    finally:
+        bound.close()
+
+    [config] = configs
+    assert config.ws_max_size == INGEST_MAX_MESSAGE_BYTES
 
 
 # --- the bundle is build output ---

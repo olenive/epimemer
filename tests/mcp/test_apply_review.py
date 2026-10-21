@@ -1,6 +1,6 @@
-"""What a reviewer can write (REVIEW_MODE.md §6.4, §6.5, step 7).
+"""What a reviewer can write (REVIEW_MODE.md §6.4, §6.5).
 
-Step 6 made the journal readable, shakiest first. On its own that is a reviewer
+`review` makes the journal readable, shakiest first. On its own that is a reviewer
 who can find every mistake and record nothing about any of them — which is
 the `assessed` edge's defect one layer up: *a verdict with no writer*. These are the writers.
 
@@ -635,7 +635,7 @@ class TestRejudgePointsAtTheDecisionItRevises:
         assert row.reviews == ingest.id
 
     async def test_it_points_at_the_decision_not_a_later_confirmation(self, storage, embedder):
-        """§10.5's rule for pair verdicts, applied here: the oldest originating
+        """§4.1's rule for pair verdicts, applied here: the oldest originating
         row is the decision; anything after it is a confirmation of one."""
         node = await _fact(storage, embedder, "a claim")
         first = await _decision(storage, subject_ids=[node.id])

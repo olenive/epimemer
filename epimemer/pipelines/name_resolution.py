@@ -2,24 +2,22 @@
 
 A tag is a name, and the graph joins on it twice: `_tag_topic` resolves or
 creates one at ingest, `_resolve_node_reference` resolves one for `find_nodes`.
-Both
-matched the content exactly, against active nodes only, and that failed in two
-ways this module exists to close.
+Matching the content exactly, against active nodes only, fails in two ways, and
+this module closes both.
 
 **A name written two ways is one name.** `claim_kind` and `claim-kind` differ by
 a separator, and an exact match makes them two topic nodes. Cosine cannot make
-the call
-either: those two score 0.9196 while `dev-session-2026-09-05` and
+the call either: those two score 0.9196 while `dev-session-2026-09-05` and
 `dev-session-2026-09-06` score 0.9935, so any threshold that unifies the first
 pair unifies the second, which is two different days of work. `tag_key` collapses
 the spelling and nothing else. `dev-docs/TAG_IDENTITY.md` carries the
 measurements.
 
-**A name whose node was retired still points somewhere.** Enrichment rewrites a
-topic's content and retires the old node `CORRECTED`; a merge retires its sources
-`MERGED` and names the survivor whatever the agent chose. In both cases the old
-name resolved to nothing, so the next document carrying it minted a second topic
-node while `find_nodes` returned an empty list for it. `live_successor` follows the
+**A name whose node was retired still points somewhere.** A merge retires its
+sources `MERGED` and names the survivor whatever the agent chose, and `update`
+retires a node under a new wording. Matched exactly, the old name would resolve
+to nothing, so the next document carrying it would mint a second topic node
+while `find_nodes` returned an empty list for it. `live_successor` follows the
 edge the retirement wrote. `dev-docs/TOPIC_DESCRIPTIONS.md` carries the case.
 
 The two are separate questions with one answer each, and both live here because

@@ -7,7 +7,7 @@ the retired version, and a correction moves them but records the old name as a
 mistake. A rename keeps the node: same id, same edges, same description, and a
 trail of the names it used to have.
 
-Both backends via the `storage` fixture.
+Every backend, through the `storage` fixture.
 """
 
 from epimemer.core.types import (

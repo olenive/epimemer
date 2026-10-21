@@ -1,36 +1,20 @@
 # Graph bundles: export, import, backup
 
+A design, built: the code is `epimemer/pipelines/transfer.py`, the `graphs`
+group in `epimemer/cli.py`, and the `backup_graph` and `configure_backup` tools.
+
 One graph written out as plain data files, and an import that rebuilds it on
-either backend. The code is `epimemer/pipelines/transfer.py`, the CLI is the
-`graphs` group in `epimemer/cli.py`, and the agent-facing half is
-`backup_graph`. What follows is what a maintainer needs to change any of it
-safely.
+any backend. README.md's *Backup and restore* describes the commands and the
+bundle for someone using them; what follows is what a maintainer needs to
+change any of it safely.
 
 ---
 
 ## 1. The layout
 
-A bundle is a flat set of files: `manifest.json` plus one `.jsonl` per section.
-The compressed form is a `tar.gz` holding those files at the archive root, named
-`<graph>-<YYYY-MM-DD>.epimemer.tar.gz`; `--plain` writes the same files into a
-directory. `read_bundle` takes either, deciding on whether the path is a
-directory.
-
-| File | Holds |
-|---|---|
-| `manifest.json` | One object: `format_version`, `epimemer_version`, `exported_at`, `graph`, `embedding_provider`, `embedding_model_id`, and `counts` per section |
-| `metacontexts.jsonl` | Every metacontext, at every status |
-| `agents.jsonl` | The judge records |
-| `approved_agents.jsonl` | One `{"agent_id": ...}` per id the user admitted |
-| `nodes.jsonl` | Every node at every status, each line `{"node_type": ..., "node": {...}}` |
-| `edges.jsonl` | Every edge |
-| `decisions.jsonl` | The decision journal |
-| `relation_labels.jsonl` | The relation vocabulary |
-| `relation_verdicts.jsonl` | The verdicts on label pairs |
-| `timelines.jsonl` | Timelines, with their timepoints embedded |
-| `documents.jsonl` | Raw documents |
-| `segments.jsonl` | Segments |
-| `settings.jsonl` | One record: the per-graph settings, including both counters and both threshold overrides |
+A bundle is `manifest.json` plus one `.jsonl` per section, compressed into a
+`tar.gz` or, with `--plain`, written into a directory; `SECTIONS` in
+`transfer.py` lists them.
 
 Every section writes a file even when it is empty, so a missing file always
 means a damaged bundle rather than an empty graph. `settings` counts 1 for the
@@ -44,9 +28,7 @@ the part that does not compress, and cheap to recompute. Import re-embeds every
 node through `embedding_text`, which is the single definition of what a node
 embeds on: computing it a second way here is how a restored graph would stop
 matching itself. The manifest records what the graph *was* embedded with, so a
-restore onto a different model reports it rather than doing it quietly. That is
-also the model-migration path: export, change `EPIMEMER_EMBEDDING_MODEL_ID`,
-import.
+restore onto a different model reports it rather than doing it quietly.
 
 ---
 
@@ -60,19 +42,16 @@ rather than *nothing obviously missing*.
   any order it likes.
 - Keys within a record are **sorted**, separators are tight, and each record is
   one line.
-- Datetimes are rendered by `_iso`: UTC, always to the microsecond, always with
-  an explicit `+00:00`. Pydantic's JSON mode drops the fractional part when it
-  is zero and renders UTC as `Z`, so without this the same instant comes back
-  spelled two ways depending on the clock it was written by.
-- Lengths of time (a recurrence's period and duration) are rendered as ISO-8601
-  durations, the same spelling Pydantic's JSON mode gives a `timedelta`, so one
-  reads the same in a bundle as it does anywhere else. A length is not an
+- Datetimes are UTC, always to the microsecond, always with an explicit
+  `+00:00`. Pydantic's JSON mode drops the fractional part when it is zero and
+  renders UTC as `Z`, so without this the same instant comes back spelled two
+  ways depending on the clock it was written by. Models are dumped in Python
+  mode for that reason, so the datetime rule has one home.
+- Lengths of time (a recurrence's period and duration) are ISO-8601
+  durations, the spelling Pydantic gives a `timedelta`. A length is not an
   instant, so the datetime rule has nothing to say about it.
 - Floats go through Python's `repr`, which is what `json.dumps` does. A float
   written that way and read back is exactly equal.
-- Models are dumped with `mode="python"` and rendered by `_json_default`, so the
-  datetime rule has one home. Dumping in JSON mode would have Pydantic render
-  the timestamps first and leave nothing here to normalize.
 
 `exported_at` is the one field that cannot be a function of the graph, which is
 why `export_graph` takes it as an argument and the round-trip comparison leaves
@@ -98,17 +77,16 @@ something:
 So the protocol carries `write_verbatim_tx`, which takes every section and
 writes each record exactly as given. It is **insert-only**, on `write_batch_tx`'s
 terms: the target graph did not exist a moment ago, so every id is new. It is
-atomic, and it is implemented on both backends with parity tests in
-`tests/storage/test_storage_parity.py`.
+atomic, and every backend implements it.
 
 Two renderings survive inside it and are not stamps: an edge's `type` is written
-as the enum's value, and a journal row's `decided_at` goes through
-`_decision_row`. The second is required: `decided_at` is indexed and compared
-as text, so the padded rendering is what makes a later range query correct.
+as the enum's value, and a journal row's `decided_at` goes through each
+backend's own row rendering. The second is required: on SurrealDB and SQLite
+`decided_at` is indexed and compared as text, so the padded rendering is what
+makes a later range query correct, and on Postgres it is a `timestamptz`.
 
 `set_reflect_counter` and `set_backup_counter` exist for the same reason and
-have the same single caller. Everything else in the settings section already had
-a whole-record setter.
+have the same single caller.
 
 **Do not reach for `write_verbatim_tx` to skip a writer's reasoning.** Every
 other path stamps for a reason. Import is the caller; a second one needs an
@@ -118,9 +96,9 @@ argument.
 
 ## 4. Import creates a new graph
 
-`import_graph` refuses when the target name is already in `list_databases()`,
-and there is no override flag. Replacing a graph is `delete_graph` and then
-import: two acts, each of which the user can be asked about separately.
+`import_graph` refuses a target name that already exists, and there is no
+override flag. Replacing a graph is `delete_graph` and then import: two acts,
+each of which the user can be asked about separately.
 
 On any failure it switches back to the graph the caller was on, drops the
 partial graph, and re-raises with the reason, so a retry is never blocked by
@@ -154,23 +132,21 @@ not a bump.
 
 ## 6. The round-trip test is the definition of lossless
 
-`tests/pipelines/test_transfer.py` builds a rich graph on one backend, exports
-it, imports it into a fresh graph on the **other** backend, exports that, and
-compares the files byte for byte. It runs both directions, because the two find
-different rendering differences. A second test compares every whole-graph
-protocol read on the two graphs, ids and timestamps included; a third asserts
-the re-embedded vectors equal the originals under the same provider.
+The round-trip test exports a rich graph, imports it into a fresh graph on
+another backend, exports that, and compares the files byte for byte, in both
+directions, because the two directions find different rendering differences.
 
 The graph is built by hand rather than driven through the tools, and that is the
 point: the fields an export can silently drop are the ones the tools do not
 routinely write: a closed lifecycle episode, a second retirement, a value
 signal with every clock set, a relation label with a description, a timeline
-with a reference time, a journal row with no judge. `test_every_section_actually_carries_something`
-is the control, since every other assertion passes over an empty graph.
+with a reference time, a journal row with no judge. A control asserts that
+every section actually carries something, since every other assertion passes
+over an empty graph.
 
-**Before each release, run the same test against a real long-lived graph.**
-Point the CLI at the served store, export, and verify the bundle against the
-test database:
+**Before each release, run the same check against a real long-lived graph.**
+Point the CLI at the served store, export, and verify the bundle, which imports
+it into a scratch graph on that same store:
 
 ```bash
 export EPIMEMER_STORAGE_BACKEND=surrealdb
@@ -195,19 +171,12 @@ differently, do not appear on a graph built by a test.
 `--to` and `EPIMEMER_BACKUP_DESTINATION` both go through `fsspec.open`, so a
 local path, a `gs://` URL and an `s3://` URL are one code path. `fsspec` is a
 core dependency: it is pure Python with no dependencies of its own, and a local
-path has to work with nothing installed. The cloud drivers are the optional
-extras `epimemer[gcs]` and `epimemer[s3]`.
+path has to work with nothing installed. The destination is checked before the
+graph is read, so a missing driver is a refusal naming the extra rather than an
+`ImportError` from inside the write.
 
-`unreachable_destination` is called before the graph is read, so a missing
-driver is a refusal naming the extra rather than an `ImportError` from inside
-the write. **Credentials come from each provider's own standard chain and
-Epimemer reads none**, so a URL this accepts can still be refused by the
-service, and that refusal is the service's to explain.
-
-`EPIMEMER_BACKUP_KEEP` is retention: with a count set, `backup_graph` removes
-the older bundles of the graph it just wrote, keeping the newest that many, and
-reports `kept` and `removed`. Unset it keeps everything, which is the default
-because deleting a backup has to be asked for. Three rules make it safe.
+`EPIMEMER_BACKUP_KEEP` is retention, and unset it keeps everything, because
+deleting a backup has to be asked for. Three rules make it safe.
 `stale_bundles` matches only `<graph>-<YYYY-MM-DD>.epimemer.tar.gz`, anchored on
 the date, so a graph named `notes` never claims the bundles of `notes-archive`
 and a `--plain` directory matches nothing. It orders by the date in the
@@ -230,32 +199,27 @@ repository they commit themselves.
 
 ## 8. Convert: a bundle that never touches disk
 
-`epimemer graphs convert <graph> --to <backend>` is export and import in one
-process. The source is the configured backend, the destination is a second
-`ServerConfig` built from the `--to` flags (`--to-dir` for SQLite, `--to-url`
-and its companions for SurrealDB, `--to-dsn` for Postgres; anything not named
-is inherited), and
-`create_storage` opens each one, so the command knows nothing about either
-backend. The bundle goes from `export_graph` straight to `import_graph`, and
-every rule above holds unchanged: the destination graph must not exist, records
-land verbatim, vectors are recomputed. `--as` names the new graph when it
-should differ. The in-memory store is refused as a destination, since it would
-be gone at exit.
+`epimemer graphs convert` is export and import in one process. The destination
+is a second `ServerConfig` built from the `--to` flags, and `create_storage`
+opens each side, so the command knows nothing about either backend. Every rule
+above holds unchanged: the destination graph must not exist, records land
+verbatim, vectors are recomputed. The in-memory store is refused as a
+destination, since it would be gone at exit.
 
 ## 9. Prompting, not scheduling
 
 Nothing polls and nothing runs in the background. `stores_since_backup` moves
 store for store with the reflect counter and is zeroed by a successful backup,
 so `store_decomposition`, `apply_reflection` and `graph_stats` can report
-`backup_suggested` the way they report `reflect_suggested`. The threshold is the
-`reflect_threshold` pattern exactly: `EPIMEMER_BACKUP_THRESHOLD` as the process
-default, a per-graph override on the backend, and `resolve_backup_threshold`.
+`backup_suggested` the way they report `reflect_suggested`. The threshold
+follows the `reflect_threshold` pattern, with `configure_backup` setting the
+per-graph override.
 
 Two counters rather than one, because they are zeroed by different acts. One
 counter would have to be reset by whichever came first, and the other question
 would go unanswered.
 
-The counter is bumped where the reflect counter is bumped, which today is
+The counter is bumped where the reflect counter is bumped, which is
 `store_decomposition` alone. `apply_reflection` **reports** the numbers without
 moving them: it is the moment an agent is already thinking about the state of
 the graph, which makes it a good place to see that a backup is due, but the

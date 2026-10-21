@@ -7,11 +7,10 @@ comparisons are genuine work, so the answer is to do that work in bulk rather
 than less of it, one matrix product per block instead of one Python call per
 pair.
 
-This lives on its own because it was written twice: once for facts and
-once, by copying, for topics. The second time is what makes it shared —
-the zero-vector rule below is subtle enough that two copies would eventually
-disagree, and a disagreement here is silent. Inference-merge nomination is the
-third caller and took `stack_uniform_width` alone, which is the shape a shared
+This lives on its own because facts and topics both need it, and the
+zero-vector rule below is subtle enough that two copies would eventually
+disagree, silently. Inference-merge nomination is a third caller and takes
+`stack_uniform_width` alone, which is the shape a shared
 module wants: a caller that needs one piece takes one piece.
 
 The exponent is unchanged by any of this. A constant factor moves a quadratic

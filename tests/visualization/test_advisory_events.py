@@ -1,6 +1,6 @@
 """A warning reaches the dashboard, whether or not the agent was shown it.
 
-`WARNINGS_DASHBOARD.md` §2.2: the dashboard is where a person looks at what
+`EVENT_LOG.md` §12.2: the dashboard is where a person looks at what
 the agent was *not* told, so a muted graph publishes its warnings all the same
 and `surfaced` says the agent never saw them. That matches the journal, which
 already records regardless of the mute.
@@ -84,7 +84,7 @@ async def _carry(storage, policy, advisories, *, bus=None, judge=CRITIC, tool="r
 
 
 class TestTheEventSaysWhatTheWarningWasAndWhoSawIt:
-    """§3: every field a reader of the log needs, and nothing that would need a
+    """`VIZ_CONTRACT.md` §7.4: every field a reader of the log needs, and nothing that would need a
     second lookup to resolve."""
 
     def test_it_is_a_graph_event_the_frontend_can_route(self):
@@ -213,7 +213,7 @@ class TestWhatTheAgentSawIsOnTheEvent:
         assert received[0].notify_user is False
 
     async def test_a_muted_graph_still_publishes_with_surfaced_false(self, storage, bus):
-        """The whole point of §2.2: hiding muted warnings on the dashboard would
+        """The whole point of §12.2: hiding muted warnings on the dashboard would
         hide exactly what a person opened it to see."""
         received = _recorder(bus)
 
@@ -350,7 +350,7 @@ class TestReflectPublishesWhatItAttachedToACandidate:
     async def test_a_muted_graph_publishes_the_warning_it_stripped(
         self, storage, bus, embedding_provider
     ):
-        """§2.2 on the reflect path: the warning never reaches the agent, and it
+        """§12.2 on the reflect path: the warning never reaches the agent, and it
         still reaches the log, because the dashboard is where a person looks at
         what the agent was not told."""
         received = _recorder(bus)

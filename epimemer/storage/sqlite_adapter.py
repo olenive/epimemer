@@ -1,7 +1,7 @@
 """SQLite storage backend.
 
 One file per graph, `<directory>/<graph>.sqlite`, no server and no dependency
-beyond the standard library's `sqlite3` and numpy. `dev-docs/SQLITE_BACKEND.md`
+beyond the standard library's `sqlite3` and numpy. `dev-docs/STORAGE_BACKENDS.md`
 is the design, and this module is held to it.
 
 **Every table has the same shape**: `uid TEXT PRIMARY KEY`, a column for each
@@ -22,7 +22,7 @@ assumes: a statement could then still be running against one graph after the
 guard had let a switch move to the next. Do not "fix" this.
 
 **The connection runs in autocommit mode**, so every statement commits on its
-own and a transaction exists only where the code says so: the ten `*_tx`
+own and a transaction exists only where the code says so: the `*_tx`
 methods, the two read-modify-writes (resetting a counter, merging a relation
 label) and `store_timeline`'s version check, each inside `_transaction`. None
 of them awaits anything inside it, so a transaction is never left open across a
@@ -451,6 +451,26 @@ def _embeddings(
 ) -> list[EmbeddingRecord]:
     sql = f"SELECT data, vector FROM embedding {where} ORDER BY rowid"
     return [_load_embedding(data, vector) for data, vector in connection.execute(sql, params)]
+
+
+def _embedding_where(
+    *, item_ids: Sequence[str] | None = None, model_id: str | None = None
+) -> tuple[str, list[Any]]:
+    """The embedding filters as one WHERE clause and its parameters.
+
+    Shared by the active graph's batched fetch and the viz read of a named
+    graph, so an item and a model select the same rows from either. An empty
+    list matches nothing.
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+    if item_ids is not None:
+        clauses.append(f"item_id {_IN_LIST}")
+        params.append(_json_list(item_ids))
+    if model_id is not None:
+        clauses.append("model_id = ?")
+        params.append(model_id)
+    return (f"WHERE {' AND '.join(clauses)}" if clauses else ""), params
 
 
 def _node(connection: sqlite3.Connection, node_id: str) -> EpistemicNode | None:
@@ -1491,11 +1511,7 @@ class SQLiteStorage:
         found: dict[str, list[EmbeddingRecord]] = {item_id: [] for item_id in wanted}
         if not wanted:
             return found
-        where = f"WHERE item_id {_IN_LIST}"
-        params: list[Any] = [_json(wanted)]
-        if model_id is not None:
-            where += " AND model_id = ?"
-            params.append(model_id)
+        where, params = _embedding_where(item_ids=wanted, model_id=model_id)
         for embedding in _embeddings(self._db, where, params):
             found[embedding.item_id].append(embedding)
         return found
@@ -2026,4 +2042,16 @@ class SQLiteStorage:
         where, params = _decision_where(kinds=kinds)
         return self._read_graph(
             database, lambda connection: _decisions(connection, where, params), []
+        )
+
+    async def viz_list_embeddings(
+        self,
+        database: str,
+        *,
+        item_ids: Sequence[str] | None = None,
+        model_id: str | None = None,
+    ) -> Sequence[EmbeddingRecord]:
+        where, params = _embedding_where(item_ids=item_ids, model_id=model_id)
+        return self._read_graph(
+            database, lambda connection: _embeddings(connection, where, params), []
         )

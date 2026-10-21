@@ -11,7 +11,7 @@ could not stay at zero either, because the next ingest minted another one.
 The union is the worst answer available for a claim and the right one for a
 name. `dev-session-2026-09-08` standing in `the-real` and in a novel's
 metacontext says exactly what is true: the name was used from both worlds.
-`dev-docs/TAG_METACONTEXTS.md` carries the argument.
+`dev-docs/TAG_IDENTITY.md` §2 carries the argument.
 """
 
 import pytest

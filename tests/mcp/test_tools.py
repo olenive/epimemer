@@ -4271,8 +4271,8 @@ class TestRunNetStdout:
 def test_tool_count_matches_integration_doc():
     """INTEGRATION.md's stated tool count must track the actual registrations.
 
-    A cheap guard against the doc drift catalogued in ISSUES.md — the count can
-    only be stated in one canonical place, and this fails the moment a tool is
+    A cheap guard against doc drift: the count can only be stated in one
+    canonical place, and this fails the moment a tool is
     added or removed without updating it.
     """
     import re

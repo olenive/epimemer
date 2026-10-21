@@ -1,8 +1,8 @@
 """Archival functions for the reflection layer.
 
-Identifies superseded and merged nodes that are old enough to archive,
-and exports them with their history edges into a serializable format
-suitable for cold storage.
+Nominates nodes for archival (`nominate_archival_candidates`: retired, evidence
+stale, never retrieved, and stale judgment), and exports nodes with their
+history edges into a serializable format suitable for cold storage.
 """
 
 from collections.abc import Sequence
@@ -296,8 +296,8 @@ async def nominate_archival_candidates(
        dependents. That label asks the agent for a re-read, which is recorded
        as a keep anchored to the absorbed ids; `archival_reasons` is the
        narrower set this class reads.
-    3. **never_retrieved** — active facts never returned by a search, not judged
-       important, and with nothing depending on them.
+    3. **never_retrieved** — active facts and topics never returned by a
+       search, not judged important, and with nothing depending on them.
     4. **stale_judgment** — active nodes held above the ceiling by an upward
        judgment older than `judgment_max_age_days` that nobody has revisited.
        Not an archival claim: importance protects a node from every class above,

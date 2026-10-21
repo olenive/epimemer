@@ -1,7 +1,8 @@
 """SurrealDB storage backend.
 
-Implements the StorageBackend protocol using SurrealDB.
-Supports ws://, http://, and mem:// (embedded) connections.
+Implements the StorageBackend protocol using SurrealDB. Supports a served
+SurrealDB (ws://, http://) and the embedded engine (mem://, file://,
+surrealkv://).
 
 Note: We use 'uid' as our application-level ID field to avoid conflicts
 with SurrealDB's built-in 'id' field (which uses RecordID type).
@@ -84,7 +85,7 @@ def is_embedded_url(url: str) -> bool:
     Public because it is not only a reconnect concern: a separate process
     cannot reach an embedded store at all, so the `epimemer` CLI has to ask
     this before offering to write anything a running server is meant to read
-    (`REVIEW_MODE.md` §10.3).
+    (`REVIEW_MODE.md` §2.3).
     """
     return url.startswith(_EMBEDDED_SCHEMES)
 
@@ -322,7 +323,7 @@ _EMBEDDING_FETCH_CHUNK = 250
 
 # --- Full-text search ---
 #
-# The analyzer is the one both backends are written against: `class`
+# The analyzer is the one every backend is written against: `class`
 # tokenization cuts a token wherever the character class changes, so `JIRA-4417`
 # becomes `jira`, `-`, `4417` and the rare piece is separable from the common
 # prefix. That is the whole mechanism — measured, `search::analyze` returns
@@ -333,7 +334,7 @@ _ANALYZER_DDL = (
     "TOKENIZERS class FILTERS lowercase, ascii, snowball(english);"
 )
 
-# The two backends this adapter connects to are two different SurrealDBs, and
+# The two engines this adapter connects to are two different SurrealDBs, and
 # they do not agree on how a full-text index is declared. The standalone 3.0.5
 # server renamed the keyword and dropped the parameter list; the engine embedded
 # in the Python SDK — which is what `mem://` is, and therefore what most of the
@@ -1327,7 +1328,10 @@ class SurrealDBStorage:
         self._user = user
         self._password = password
         self._namespace = namespace
-        self._database = database
+        # Validated here, as every backend validates the graph it starts on, so
+        # the first graph obeys the rule `switch_database` applies to every
+        # later one.
+        self._database = validate_graph_name(database)
         # Rendered once, here, so `location` never has to touch the URL again,
         # which may carry a password.
         self._location = (
@@ -1496,8 +1500,9 @@ class SurrealDBStorage:
         """Point the connection at `database` for one read, then give it back.
 
         Re-entrant through the guard, so a caller that already holds a mover
-        turn — `assemble_snapshot`, taking one turn for its four reads so the
-        snapshot is of a single instant — nests without deadlocking.
+        turn nests without deadlocking: a dashboard snapshot request takes one
+        turn for every read `assemble_snapshot` makes, so the snapshot is of a
+        single instant (`visualization/hub_client.py`).
         """
         async with self._guard.moving():
             original_db = self._selected
@@ -1584,6 +1589,32 @@ class SurrealDBStorage:
                 f"SELECT * FROM decision{where} ORDER BY decided_at DESC, uid DESC", params
             )
             return [DecisionRecord.model_validate(_clean_record(r)) for r in rows]
+
+    async def viz_list_embeddings(
+        self,
+        database: str,
+        *,
+        item_ids: Sequence[str] | None = None,
+        model_id: str | None = None,
+    ) -> Sequence[EmbeddingRecord]:
+        """Embedding records of a graph for visualization.
+
+        Asked by item, this is `get_embeddings_for_items`' own fetch, keyed on
+        `item_id` with the model filtered afterwards. Asked for the whole
+        graph, the model goes into the query: with no item to look up,
+        `idx_emb_model` is the index that narrows the read, as it does for
+        `_ranked_items`.
+        """
+        async with self._borrowed(database):
+            if item_ids is not None:
+                return await self._embeddings_of(item_ids, model_id)
+            if model_id is None:
+                rows = await self._query("SELECT * FROM embedding")
+            else:
+                rows = await self._query(
+                    "SELECT * FROM embedding WHERE model_id = $model_id", {"model_id": model_id}
+                )
+            return [EmbeddingRecord.model_validate(_clean_record(r)) for r in rows or []]
 
     async def close(self) -> None:
         if self._db is not None:
@@ -1672,7 +1703,7 @@ class SurrealDBStorage:
         # sense: nothing in this class updates or deletes a row here, and the
         # protocol offers no method that could. The indexes are the four reads
         # review mode needs — who decided it, when, what it was about, and
-        # whether anything has since reviewed it (§10.5). `judged_by` is indexed
+        # whether anything has since reviewed it. `judged_by` is indexed
         # on the id inside it rather than on the whole object: a judge that
         # re-described itself is the same judge, so an index over the pair would
         # partition one agent by its own wording.
@@ -2161,7 +2192,8 @@ class SurrealDBStorage:
         merge/reverse cycle came back looking like the first, blind to the
         oscillation `merge_cycle_limit` exists to catch. `InMemoryStorage` reads
         the stored node in all five of these paths, so trusting the argument also
-        made the two backends give different histories for the same call.
+        made this backend and that one give different histories for the same
+        call.
 
         One batched read, taken pre-transaction like every other plan here: the
         adapter is single-connection and documented as unsafe for concurrent
@@ -2798,11 +2830,25 @@ class SurrealDBStorage:
         # Pre-seeded for the same reason as `get_edges_for`: an item with no
         # embedding still gets a key, so absence means "not asked".
         found: dict[str, list[EmbeddingRecord]] = {item_id: [] for item_id in wanted}
-        if not wanted:
-            return found
+        for record in await self._embeddings_of(wanted, model_id):
+            records = found.get(record.item_id)
+            if records is not None:
+                records.append(record)
+        return found
 
+    async def _embeddings_of(
+        self, item_ids: Sequence[str], model_id: str | None
+    ) -> list[EmbeddingRecord]:
+        """The embeddings of `item_ids` on the selected database, a chunk at a time.
+
+        Shared by `get_embeddings_for_items` and `viz_list_embeddings`, which
+        differ only in which database is selected when they call it. No ids,
+        no statement.
+        """
         # `model_id` stays out of the query here too — the predicate that steers
         # the planner onto `idx_emb_model` is the one this fetch cannot afford.
+        wanted = list(dict.fromkeys(item_ids))
+        found: list[EmbeddingRecord] = []
         for start in range(0, len(wanted), _EMBEDDING_FETCH_CHUNK):
             chunk = wanted[start : start + _EMBEDDING_FETCH_CHUNK]
             rows = await self._query(
@@ -2810,11 +2856,8 @@ class SurrealDBStorage:
             )
             for row in rows or []:
                 record = EmbeddingRecord.model_validate(_clean_record(row))
-                if model_id is not None and record.model_id != model_id:
-                    continue
-                records = found.get(record.item_id)
-                if records is not None:
-                    records.append(record)
+                if model_id is None or record.model_id == model_id:
+                    found.append(record)
         return found
 
     async def vector_search(
@@ -2847,8 +2890,8 @@ class SurrealDBStorage:
         `item_id IN (SELECT ...)`, is the one thing to avoid: SurrealDB re-runs
         that subquery per embedding row. See `_ranked_items_with_status`.
 
-        TODO: When SurrealDB adds native HNSW vector indexes, switch to those.
-        For now, brute-force via SurrealQL vector::similarity::cosine().
+        The ranking is an exact scan through SurrealQL
+        `vector::similarity::cosine()`; no vector index is declared.
         """
         for factor in _OVERFETCH_FACTORS:
             limit = k * factor
@@ -3301,7 +3344,7 @@ class SurrealDBStorage:
             since=since,
             until=until,
         )
-        # Ordered here rather than by the caller so both backends answer in the
+        # Ordered here rather than by the caller so every backend answers in the
         # same order, and tie-broken on the id because a batch written in one
         # call shares a timestamp to the microsecond.
         order = " ORDER BY decided_at DESC, uid DESC"
@@ -3334,11 +3377,11 @@ class SurrealDBStorage:
     ) -> dict[str, int]:
         """Counts per named graph, by borrowing the connection once per graph.
 
-        **One mover turn wraps the whole sweep**, the way `assemble_snapshot`
-        takes one for its four reads: the counts are then of a single instant,
-        and the borrows nested inside re-enter the guard rather than queueing
-        against it. The caller is already a mover — `review` is in
-        `MOVES_THE_GRAPH` — so this nests again and takes nothing.
+        **One mover turn wraps the whole sweep**, the way a dashboard snapshot
+        request takes one for every read behind it: the counts are then of a single
+        instant, and the borrows nested inside re-enter the guard rather than
+        queueing against it. The caller is already a mover (`review` is in
+        `MOVES_THE_GRAPH`), so this nests again and takes nothing.
 
         **A graph is counted only if it already exists.** `USE` on an unknown
         database is not an error here, so counting one blind would answer zero

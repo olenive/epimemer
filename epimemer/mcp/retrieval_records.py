@@ -26,7 +26,7 @@ from epimemer.visualization.ring import RETRIEVAL_RING_CAPACITY, remember
 RESPONSE_TEXT_CAP = 20_000
 
 # The id list is as much a sizing problem as the payload: a `reflect` record can
-# carry hundreds of nominees (§3, amended).
+# carry hundreds of nominees (§3).
 RETRIEVED_CAP = 200
 
 _RECORD_IDS: Iterator[int] = count(1)
@@ -49,7 +49,7 @@ class RetrievedNode(BaseModel):
     provenance: SeedProvenance
     # Similarity or BM25, where the tool has one. `None` where it does not —
     # `find_nodes` and `graph_as_of` rank nothing, and a fabricated 1.0 would read as
-    # a perfect match (§9).
+    # a perfect match (`RETRIEVAL_PROVENANCE.md` §3).
     score: float | None = None
 
 
@@ -103,7 +103,7 @@ class RetrievalRecord(BaseModel):
 def structural_only(record: RetrievalRecord) -> RetrievalRecord:
     """The same record with nothing in it that a stranger should not read.
 
-    The guard is the **bind**, not the process (§3.2 revised): on a non-loopback
+    The guard is the **bind**, not the process (§3.2): on a non-loopback
     hub the mirror keeps what the selector and focus mode need — which record,
     which tool, which graph, which ids — and drops the query text and the
     payload. Undeclared stays undeclared, because "we do not know what this

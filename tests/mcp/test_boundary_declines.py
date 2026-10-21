@@ -5,7 +5,7 @@ date from the claim on the other side of a `temporally_followed_by` edge.
 Accepting one had a writer and declining one had none, so a proposal the judge
 disagreed with came back on every reflect, for ever.
 
-The case that found it, from the project's own memory graph: *"nothing
+The case that found it, from the project's development graph: *"nothing
 unreleased remains on main after release 0.2.7"*, open from the day of that
 release, followed by the same claim about 0.2.8 two days later. Closing the
 first period on the second release date would have the graph assert main
@@ -16,7 +16,7 @@ release. The judge declined, and the decline could not be recorded.
 are often also nominated as a similar or contradictory pair, and an `assessed`
 edge between them would silence those nominations as well.
 
-Both backends, through the `storage` fixture.
+Every backend, through the `storage` fixture.
 """
 
 from datetime import UTC, datetime

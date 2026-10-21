@@ -10,5 +10,5 @@ supersessions of the *epistemic* review loop. This package is about the journal.
   graph.
 
 The split is §6's own: *which*, *what order*, and *whether narrowed further* are
-different questions, and the first draft ran them together.
+different questions, and they are kept apart.
 """

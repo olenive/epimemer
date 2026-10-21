@@ -6,8 +6,8 @@ fact pair (`similarity_decisions.py`), a `RelationVerdict` for a label pair
 (`RELATION_LABELS.md` §4.2), a `retention` journal row for a single node
 (`retention.py`), and a `boundary_declined` journal row for a boundary
 proposal (`boundaries.py`). Suppression is what makes a sweep worth running
-twice, and until this module none of them could be undone. A pair judged `distinct`
-in error was silenced for good, however much later evidence said it should be
+twice, and it needs a way back: without one, a pair judged `distinct` in error
+would be silenced for good, however much later evidence said it should be
 looked at again.
 
 **A reopen withdraws the suppression and asserts nothing.** It does not record

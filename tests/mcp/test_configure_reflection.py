@@ -44,7 +44,7 @@ def _graph_with_the_real() -> InMemoryStorage:
 
 
 class TestOverrideStorage:
-    """The storage protocol half — both backends, per the parity rule."""
+    """The storage protocol half, on every backend, per the parity rule."""
 
     async def test_absent_by_default(self, storage):
         assert await storage.get_reflect_threshold_override() is None

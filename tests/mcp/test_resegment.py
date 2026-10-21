@@ -1,6 +1,6 @@
 """`resegment`: the agent replaces the server's cut before it decomposes.
 
-The procedure is `dev-docs/SEGMENTATION.md` §3.3: `segment` stores the
+The procedure is `docs/INGEST.md` §5: `segment` stores the
 document and a rule's passages, the agent reads them and any doubts, re-cuts
 if the cut is wrong, then decomposes against the new passages. A re-cut is
 possible only while no claim cites a passage; after `store_decomposition` the

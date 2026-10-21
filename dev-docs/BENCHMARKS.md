@@ -1,7 +1,8 @@
 # Benchmarks
 
-Measurements from `scripts/bench.py` (`make bench`) and
-`scripts/corpus_measure.py`. This file describes where the system stands now.
+A record of measurements, taken with `scripts/bench.py` (`make bench`) and
+`scripts/corpus_measure.py`.
+
 Superseded runs are deleted rather than kept, and `git log` holds them if a
 comparison is ever wanted.
 
@@ -11,9 +12,6 @@ ones.** Machine state matters more than it looks: a run taken against a
 previously recorded baseline on a busier box produced a 40% discrepancy on a
 metric the change could not touch. A same-session pair with unchanged controls
 is trustworthy; a cross-run comparison is not.
-
-Dates on measurements are deliberate. A measurement is evidence about the code
-on that date, and the date is what says how old the evidence is.
 
 ## How to read these
 
@@ -44,7 +42,8 @@ container.
 
 ## Where things stand
 
-Measured at 2,000, 4,000 and 8,000 nodes, templated corpus, mock embeddings:
+Measured at 2,000, 4,000 and 8,000 nodes, templated corpus, mock embeddings,
+recorded 2026-08-11:
 
 | Nodes | Backend | ingest (docs/min) | search p50 | `list_sources` | `reflect` |
 |---|---|---|---|---|---|
@@ -96,13 +95,8 @@ nomination cap truncates the lists downstream anyway.
 **Ingest is not a problem.** Flat across every size measured on both
 backends.
 
-**The exact-content lookup on the write path needs its index named.**
-`get_node_by_content` is resolved by SurrealDB's planner through
-`idx_{table}_status`, an index matching every active row, with `content`
-applied afterwards as a predicate, and that is linear in table size. Defining
-a `content` index does nothing on its own, and a composite `(content, status)`
-index plans the same way. `WITH INDEX idx_{table}_content` moves `content`
-into the access path:
+**The exact-content lookup on the write path needs its index named**
+(`CONTENT_LOOKUP` in `surrealdb_adapter.py` says why):
 
 | topics | planner's own choice | with a `content` index defined | with the index named |
 |---|---|---|---|
@@ -115,52 +109,34 @@ spread, cheap enough that ingest affords one such lookup per fact, which is
 what the verbatim-recurrence check needs.
 
 **`search` is the cheapest of the three, on both backends.** In-memory it is
-linear. On SurrealDB it is close to flat: ranking happens before the status
-filter, because SurrealDB re-runs such a subquery per embedding row and that
-cost two orders of magnitude when it sat inside the ranking query. Per-result
-enrichment is batched, one query per annotation kind for the whole result set
-rather than per hit.
+linear; on SurrealDB it is close to flat.
 
-**`list_sources` and `list_relations` ask once for the whole active set**
-(`get_edges_for`) rather than fetching each node's edges in turn. What is
-left in `list_sources` is one `get_document` plus `get_node` per distinct
-source, bounded by sources rather than by graph size.
+**In-memory endpoint indexes cost about 102 bytes per edge** (3.2 MiB at
+32,500 edges), roughly what the `edges` dict's own table and keys cost.
 
-**`reflect` is the limiting operation, and it is bound by bytes.**
+**`reflect` is the limiting operation, and it is bound by bytes.** In-memory
+it is arithmetic: both pair phases compare every pair, which is genuine work
+rather than redundancy, done as block-wise matrix products, and batching the
+storage reads buys nothing there (1.03 to 1.10×, noise). On SurrealDB it is
+payload.
 
-- **In-memory it is arithmetic-bound.** Both pair phases compare every pair,
-  which is genuine work rather than redundancy, so both were made fast rather
-  than made smaller: `similar_pairs` (`pipelines/reflection/pair_scoring.py`)
-  stacks the vectors and takes a matrix product per 512-row block instead of
-  one Python call per pair. Storage batching buys nothing on this backend
-  (1.03 to 1.10×, noise), as expected of one with no round-trips.
-- **On SurrealDB it was round-trip bound, and is not any more.** Batching
-  every read took round-trips at 1,200 nodes from 3,086 to 56. Three separate
-  causes, in order of size, and the batching everyone predicted was the
-  smallest:
+At 4,000 nodes `reflect` is 2,032 ms, of which 1,840 ms is inside 87 queries,
+21 ms each, because those queries move whole tables: 894 ms for the two
+`get_embeddings_for_items` calls that fetch every fact and topic vector,
+430 ms of edges, 349 ms of nodes. That is close to irreducible with this
+design: pairwise comparison needs the vectors, and they are 384 floats each.
+Reducing it means moving the comparison to the server or keeping vectors
+across calls, both larger changes than anything so far, and neither worth
+making while the crossing sits at about 26,000 nodes.
 
-  1. **A per-call full scan of the embedding table.** `get_embeddings_for_item`
-     asked `WHERE item_id = $i AND model_id = $m`, and the planner chose
-     `idx_emb_model`, which matches every row for the graph's one model, then
-     filtered `item_id` afterwards: linear in table size, inside a per-node
-     loop, 64% of `reflect` at 1,200 nodes. Asking on `item_id` alone uses
-     `idx_emb_item` and is flat at about 0.6 ms. That one predicate was 2.3×
-     on its own.
-  2. **`IN` does not use an index**, so `get_edges_for` was scanning the edge
-     table once per chunk and paying O(rows × ids) for the predicate. Reading
-     the candidate rows and matching them in Python is 14× faster past about
-     100 ids.
-  3. **The batched reads themselves** (`get_nodes`, `get_embeddings_for_items`).
-     Real, and the smallest of the three.
-
-  **What binds it now is payload.** At 4,000 nodes `reflect` is 2,032 ms, of
-  which 1,840 ms is inside 87 queries, 21 ms each, because those queries move
-  whole tables: 894 ms for the two `get_embeddings_for_items` calls that fetch
-  every fact and topic vector, 430 ms of edges, 349 ms of nodes. That is close
-  to irreducible with this design: pairwise comparison needs the vectors, and
-  they are 384 floats each. Reducing it means moving the comparison to the
-  server or keeping vectors across calls, both larger changes than anything so
-  far, and neither worth making while the crossing sits at about 26,000 nodes.
+**Memoising `reflect`'s repeated node reads is not built.** Several phases
+issue the same untyped scan of the active nodes; each is one batched call, so
+the round-trip count stays flat while the payload multiplies, and it is not
+what binds the crossing. If it is built: the memo is safe only because
+`reflect` writes nothing (`TestReflectWritesNothing`); it must be lazy rather
+than a prefetch, so each fetch stays attributed to the phase that first needs
+it in the pipeline strip; and it belongs on the storage handle rather than in
+a parameter on every phase function.
 
 ### What the soundness check and boundary proposals add to `reflect`
 
@@ -184,43 +160,6 @@ every premise fact and then discarding the undated ones cost 41.0 ms at 3,000
 nodes; reading validity first and fetching only the premises that can still
 form a pair costs 27.7 ms. On an undated graph no nodes are fetched at all.
 Narrow before you fetch, not after.
-
-### `reflect` reads the node set 13 times
-
-One `reflect` over a 1,000-node graph issues 13 `query_nodes` calls and
-materialises 5,250 node copies, 5.25× the graph:
-
-| # | Call | Phase | Rows at n=1,000 |
-|---|---|---|---|
-| 1 | `topic` | topic consolidation | 250 |
-| 2 | `topic` | split detection (cached on for enrichment) | 250 |
-| 3–4 | `fact` × active, historical | contradiction + recurrence | 500, 0 |
-| 5 | `inference` | soundness check | 250 |
-| 6–7 | *all* × active, historical | boundary proposals | **1,000**, 0 |
-| 8 | *all* × active | `gather_pending_review` | **1,000** |
-| 9–11 | *all* × superseded, corrected, merged | archival candidates | 0, 0, 0 |
-| 12 | *all* × active | archival nomination | **1,000** |
-| 13 | *all* × active | relation consolidation | **1,000** |
-
-Rows 6, 8, 12 and 13 are the same query. None is a per-node shape; every one
-is a single batched call, which is exactly why they go unnoticed: the
-round-trip count stays flat while the payload multiplies.
-
-| | in-memory | SurrealDB |
-|---|---|---|
-| share of `reflect` inside `query_nodes` | 39–43% | 17–23% |
-| just the four untyped active scans | ~30% | 13–16% |
-| recoverable by memoising identical calls | **18%** | **5%** |
-| recoverable by one read per status, filtered in Python | **27%** | **8%** |
-
-The share is lower on SurrealDB, the opposite of the usual shape here, because
-there the embedding reads dominate. **Not built.** 27% of the fastest backend
-is real but not what binds the crossing. If it is built: the memo is only safe
-because `reflect` writes nothing (`TestReflectWritesNothing`); the cache must
-be lazy rather than a prefetch, so the fetch stays attributed to the phase
-that needs it first in the pipeline strip; and it should arrive as the storage
-handle rather than as a parameter on every phase function. Of the 13 reads,
-five ask for genuinely different statuses and no cache removes them.
 
 ### What retrieval reinforcement costs
 
@@ -271,11 +210,6 @@ not read it; if this cost ever climbs, `assessed` in the neighbourhood walk
 would be a bug, not a workload. Re-measure against real degrees when a graph
 has a few dozen judged pairs.
 
-```bash
-uv run python scripts/bench.py --n 400,2000 --skip-reflect \
-    --publishers 4 --similarity-degree 10 --url ws://localhost:8000/rpc
-```
-
 The lever, if it is ever wanted on the default path: the six typed
 neighbourhood queries collapse into one untyped `get_edges_for` per
 direction, trading round-trips for bytes. Indicated by the degree-0 column
@@ -305,12 +239,9 @@ graphs:
 
 Nodes have 3× headroom at their worst, and no amount of graph growth changes
 that: a fact is one sentence by construction. Segments cross the window
-routinely, and it does not matter: no code path constructs an
-`EmbeddingRecord` for a segment, every stored embedding points at a node,
-`vector_search` resolves hits through `get_node` so a segment could not be
-returned anyway, and segmentation's own sentence embeddings are transient.
-Segments are searched by BM25 alone, which indexes the whole field, and that
-is precisely why they answer *where did I read that?* well.
+routinely, and it does not matter: segments are never embedded. They are
+searched by BM25 alone, which indexes the whole field, and that is precisely
+why they answer *where did I read that?* well.
 
 The rule this taught: a measured quantity is not yet a measured consequence.
 Before a distribution becomes a cost, something has to be shown to pay it.
@@ -384,7 +315,7 @@ because two sentences sharing a subject and a verb differ only by a qualifier.
 
 ### The diverse corpus, and planting
 
-`--corpus diverse` (the default) metacontexts sentences over slots wide enough that
+`--corpus diverse` (the default) builds sentences from slots wide enough that
 two draws rarely share phrasing, and `--duplicate-groups` /
 `--duplicate-size` plant restatement clusters, one claim as several sources
 would put it. 1,200 facts, real embeddings:
@@ -401,17 +332,6 @@ survivors, 80 gives 81, one clique of 50 (1,225 planted) gives 1,226. The
 generator contributes a residue in the single digits and everything else is
 an input, so a survivor count can be chosen before the run rather than
 discovered afterwards.
-
-`--corpus diverse` means nothing without `--real-embeddings`, and says so on
-stderr when a planted run does not get them: the mock hashes text rather
-than reading it, so a restatement is simply a different string. Measured at
-1,200 facts, templated and diverse both survive at about 0.05% under the
-mock, the same number twice and both a fact about the hash.
-
-Facts draw from their own random stream, guarded by a test: planting consumes
-randomness, and on one shared stream every topic, inference and document body
-after the first cluster would differ too, making two corpora rather than one
-corpus with and without duplicates.
 
 ### What a near-duplicate corpus costs
 
@@ -455,7 +375,9 @@ hash should be, which is what makes it the right baseline.
 ### Where `reflect`'s time goes, and what a networked backend changes
 
 `--reflect-phases` runs a second, watched `reflect` and reports each phase's
-share. 2,400 nodes, templated, mock embeddings:
+share. 2,400 nodes, templated, mock embeddings, recorded 2026-08-30, before
+`similar_inference_nomination` was a phase; `enrichment_scan` and
+`recurrence_detection` take the remainder:
 
 | phase | in-memory | SurrealDB |
 |---|---|---|
@@ -544,14 +466,8 @@ nothing.
 ## Before optimising anything here
 
 **Profile first.** Every performance fix in this project so far has
-overturned the cause its issue predicted, and in each case a profile
-redirected the work to something the issue had not mentioned: the
-contradiction phase's edge queries were 14% of `reflect`'s storage calls and
-removing all of them left the crossing where it was; the batched node and
-embedding reads turned out to be the smallest of three causes, behind a query
-that never used the right index. The one prediction that held was made *from*
-a profile. The recipe: seed via `bench._seed`, wrap one `await reflect(...)`
-in `cProfile`, sort by cumulative time.
+overturned the cause its issue predicted. The recipe: seed via `bench._seed`,
+wrap one `await reflect(...)` in `cProfile`, sort by cumulative time.
 
 On a networked backend, **count round-trips before timing anything**: wrap
 `SurrealDBStorage._query` in a counter and attribute each call to its caller.
@@ -567,47 +483,13 @@ two biggest wins so far were both plan problems no round-trip count would have
 found. `EXPLAIN` output is a nested `children` tree; walk it for `IndexScan`
 and the `index` attribute, and treat no index attribute as a full scan.
 
-Implementation notes that outlived the measurements that produced them:
-
-- **A single `LET $active = (…); SELECT …` call does not work through the
-  SurrealDB driver.** `db.query` returns the first statement's result, so the
-  select's rows are discarded and `LET`'s `None` comes back in their place,
-  silently. `search`'s exact fallback is therefore two calls. `query_raw`
-  returns every statement's result.
-- **`vector_search`'s over-fetch is not merely an optimisation.** Ranking `k`
-  rows and filtering afterwards returns fewer than `k` results on any graph
-  with history at the top of the ranking, so retrieval would quietly go blind
-  on the oldest graphs. That is why the escalation and the exact fallback
-  both exist, and why the tests pin which path answered rather than only what
-  it returned.
-- **In-memory endpoint indexes cost about 102 bytes per edge** (3.2 MiB at
-  32,500 edges), roughly what the `edges` dict's own table and keys cost, and
-  small next to the `NodeEdge` objects being indexed.
-- **A second predicate can cost you the index.** Adding `AND model_id = $m`
-  to an `item_id` lookup made the planner take the other, unselective index
-  and filter afterwards. A composite `(item_id, model_id)` index did not help;
-  the planner still preferred the unselective one, and adding it made the
-  plan a bare scan. `WITH INDEX idx_emb_item` worked (22× at 3,000 rows), but
-  so did dropping the predicate and filtering in Python, which is what
-  shipped: same speed, no version-specific syntax, and it degrades to correct
-  rather than to a parse error. Do not drop `idx_emb_model` itself:
-  `_ranked_items` narrows by model and needs it.
-- **`IN $ids` does not use an index here at all.** Verified with `EXPLAIN` on
-  `src_id IN $ids` against `idx_edge_src`, with and without a `WITH INDEX`
-  hint: both plan a full scan, and the list is then tested per row, so a
-  batched fetch costs O(rows × ids). Chunking an `IN` buys almost nothing
-  (3,000 nodes over 9,000 edges: 692 ms at 200 ids per chunk against 511 ms
-  as one query), so a chunk size is a memory bound, not a speed knob. Past a
-  crossover it is cheaper to read the candidate rows and match them in
-  Python: 100 to 200 ids for edges (stable across sizes, since both sides
-  grow linearly), past 400 for nodes, past 1,000 for embeddings. The heavier
-  the row, the longer `IN` stays worth it, since the alternative reads rows
-  nobody asked for.
-
 ---
 
 ## Not yet measured
 
+- **The SQLite and Postgres backends.** `scripts/bench.py` opens the in-memory
+  store and SurrealDB only, so every figure here is one of those two, and
+  "both backends" in this file means them.
 - **A remote (non-loopback) SurrealDB.** Every network number here is
   localhost. A round-trip over a real link is not a round-trip over a socket,
   and `contradiction_detection`'s share is what would move.
@@ -643,29 +525,9 @@ it. `--skip-reflect` drops the slowest step when only `search` and
 `list_sources` are of interest. `BENCH_N=10000` is about two minutes,
 dominated by `reflect`.
 
-### The corpus dials
-
-```bash
-# a corpus that survives the pair scorer like prose, with a known population
-# of near-duplicates planted in it
-uv run python scripts/bench.py --n 2400 --corpus diverse --real-embeddings \
-    --duplicate-groups 60 --duplicate-size 10
-
-# where reflect's time goes, on whichever backend is configured
-uv run python scripts/bench.py --n 2400 --reflect-phases
-
-# the soundness check with something to compare, and its quadratic part
-uv run python scripts/bench.py --n 2400 --dated-share 1.0
-uv run python scripts/bench.py --n 2400 --dated-share 1.0 --facts-per-segment 20
-```
-
-`diverse` is the default corpus; the figures in *Where things stand* and the
-phase table were taken over `templated`, and `--corpus templated` reproduces
-them. A benchmark should default to measuring the thing it exists to measure,
-and comparability belongs in a labelled row rather than in a default nobody
-re-reads. Every run emits a `corpus` record: the survival rate at the fact
-threshold, the planted pair count, the dated fact count, and what the
-soundness check finds. Guarded by `tests/test_bench_smoke.py`.
+The corpus, phase and dating dials are in `scripts/bench.py`'s docstring and
+`--help`. *Where things stand* and the phase table were taken over
+`--corpus templated`; `diverse` is the default.
 
 To measure a change against its own baseline, stash the changed file rather
 than checking out an older commit: the test suite may reference symbols the
@@ -676,21 +538,12 @@ everything else identical.
 
 ```bash
 uv run python scripts/corpus_measure.py \
-  --database memory,petritype-server --synthetic-control 400
+  --database notes,petritype-server --synthetic-control 400
 ```
 
-Reads whatever graphs are named without opening a storage backend, since
-`connect()` defines tables and runs the FTS backfill and these are real
-namespaces. It reads the stored vectors rather than re-embedding, so the pair
-scores are the ones `reflect` sees, and it reads both thresholds out of
-`detect_contradictions` and `find_similar_topic_pairs` rather than restating
-them. `--synthetic-control` scores the same number of `bench.py` sentences
-through the real model.
-
-The numbers are specific to the graphs measured and do not travel. Anyone
-reproducing this on a different corpus should expect different rates; that is
-the point of the measurement, and the reason the tables name the corpus and
-its size in every row. Guarded by `tests/test_corpus_measure_smoke.py`.
+`scripts/corpus_measure.py`'s docstring says why it reads without opening a
+storage backend. The numbers are specific to the graphs measured and do not
+travel, which is why every table names its corpus and size.
 
 ### Do supplied priors carry a reason?
 
@@ -703,7 +556,7 @@ informative. So the enforcement fallback stays unbuilt.
 
 ```bash
 uv run python scripts/corpus_measure.py \
-  --database memory,petritype-server --skip-survival
+  --database notes,petritype-server --skip-survival
 ```
 
 `confidence_basis` is stored in `node.metadata`, not beside the number in

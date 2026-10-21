@@ -174,12 +174,10 @@ async def merge_refusal(
         #
         # **The message names the bar this call applied rather than asserting
         # what the graph would have done.** `similarity_threshold` is an
-        # argument, so a caller can pass one the sweeps do not use — and the old
-        # wording ("not facts the graph would have offered each other") then
-        # stated something false about a pair reflect had just nominated. That
-        # was live until 2026-08-21, when the sweeps and this gate still ran at
-        # different numbers; the claim about the graph is now the constant's to
-        # make, not this string's.
+        # argument, so a caller can pass one the sweeps do not use, and wording
+        # such as "not facts the graph would have offered each other" would then
+        # state something false about a pair reflect had just nominated. The
+        # claim about the graph is the constant's to make, not this string's.
         return MergeRefused(
             reason=(
                 f"not every pair reaches the {similarity_threshold} similarity "

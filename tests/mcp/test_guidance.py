@@ -16,8 +16,8 @@ from epimemer.mcp.server import mcp as epimemer_mcp
 PROMPTS = Path(__file__).resolve().parents[2] / "epimemer_prompts"
 
 # The instructions string sits in every context window of every client, so it
-# has a budget. RULES.md was 2.2 KB when this was set; the full guide is 53 KB,
-# and the point of the split is that the two never converge.
+# has a budget. RULES.md was 2.2 KB when this was set; the full guide is many
+# times that, and the point of the split is that the two never converge.
 RULES_BUDGET_BYTES = 4_000
 
 

@@ -478,7 +478,7 @@ async def publish_advisories(
 ) -> None:
     """Tell a watching dashboard every warning this call computed.
 
-    **Muted warnings are published too** (`WARNINGS_DASHBOARD.md` §2.2). The
+    **Muted warnings are published too** (`EVENT_LOG.md` §12.2). The
     dashboard is where a person looks at what the agent was *not* told, so
     dropping the muted ones there would remove the reason for showing warnings
     at all. This matches the journal, which already records regardless of the
@@ -550,9 +550,9 @@ async def carry_advisories(
     there is no warning at all. Omitting it where nothing escalates leaks which
     branch ran, and it leaked in three shapes before this was made total, since
     *no warning*, *warning muted* and *warning shown but quiet* are the same
-    answer to the only question the key asks. A key documented in
-    `INTEGRATION.md` that is sometimes absent is worse to read than one that is
-    sometimes false.
+    answer to the only question the key asks. A key the agent guide documents
+    that is sometimes absent is worse to read than one that is sometimes
+    false.
 
     **Telling the dashboard changes nothing the agent is told.** This is the one
     function that knows both the warnings and the policy, so it is where a
@@ -585,9 +585,9 @@ async def carry_advisories(
     return {
         # The user's vocabulary on the wire; only the Python class is `Advisory`.
         "warnings": [advisory.model_dump(mode="json") for advisory in shown],
-        # The first warning's message, kept because it is the key the agent
-        # guidance and INTEGRATION.md already document. Breaking it to tidy an
-        # internal representation would cost more than it buys.
+        # The first warning's message, kept because it is already on the wire
+        # and a client may read it. Breaking it to tidy an internal
+        # representation would cost more than it buys.
         "warning": shown[0].message,
         "notify_user": notify_user(policy, shown),
     }
@@ -1058,12 +1058,11 @@ async def require_metacontext(
     unreachable by every mechanism that would have questioned it.
 
     **`the-real` is not special.** It is a convention — the string every graph
-    should use for the metacontext holding real-world claims — and it must exist here
-    like any other id, created once with `create_metacontext`. It used to be
-    accepted with no row, back when an untagged node resolved to it and it
-    therefore named something in every graph. Nothing resolves to it now, so
-    accepting it rowless would admit an id pointing at nothing: the isolation
-    failure this function exists to prevent, waved through by name.
+    should use for the metacontext holding real-world claims — and it must exist
+    here like any other id, created once with `create_metacontext`. Nothing
+    resolves to it implicitly, so accepting it rowless would admit an id
+    pointing at nothing: the isolation failure this function exists to prevent,
+    waved through by name.
 
     **The refusal lists what does exist**, because nothing else does: no MCP
     tool enumerates metacontexts, so for an agent holding a stale id this
@@ -1196,8 +1195,8 @@ async def store_decomposition(
             when omitted rather than defaulting, and an optional
             `confidence_basis` records why a supplied one was chosen. A fact may
             also carry `claim_kind` — condition or occurrence — which is the
-            judgment fact dedup is gated on and which only this step can make
-            . A topic may carry `description`, prose saying what it covers
+            judgment fact dedup is gated on and which only this step can
+            make. A topic may carry `description`, prose saying what it covers
             beside the name the graph joins on, so a topic arrives described
             rather than waiting for a reflect to notice it. The ladder an agent
             calibrates against lives in `server.py`'s tool docstring, which is
@@ -1536,12 +1535,10 @@ async def store_decomposition(
                         type=EdgeType.TAGGED_WITH_TOPIC,
                     )
                 )
-        # The metacontext, written explicitly — including for `the-real`, which is
-        # what makes requiring it worth anything. A node carrying no edge is
-        # read as base reality anyway, so an unwritten `the-real` would be
-        # indistinguishable from an agent that never considered the question,
-        # which is the whole defect. `metacontexts_of` reduces both to the same
-        # single-metacontext set, so no consumer sees a difference; a reviewer does.
+        # The metacontext, written explicitly, including for `the-real`, which is
+        # what makes requiring it worth anything: a node carrying no edge names no
+        # metacontext (`metacontexts_of`), so an unwritten `the-real` would be
+        # indistinguishable from an agent that never considered the question.
         for node in seg_nodes:
             batch_edges.append(
                 NodeEdge(
@@ -1761,10 +1758,11 @@ async def _historical_twins(nodes: Sequence[EpistemicNode], storage) -> list[dic
 
 # Metacontext-scoped search over-fetches. Vector top-k is computed before the metacontext
 # filter runs, so a metacontext whose nodes rank below k would be dropped before the
-# filter ever saw them — the query comes back short, or empty. We pull a multiple
-# of k candidates and grow the fetch until k in-metacontext nodes survive or the vector
-# store is exhausted. A storage-level metacontext filter is the eventual answer; this
-# bounds the work until then. (Issue 13, REVIEW_EPISTEMIC.md §4.3.)
+# filter ever saw them, and the query would come back short or empty. We pull a multiple
+# of k candidates and grow the fetch until k in-metacontext nodes survive, the vector
+# store is exhausted, or the ceiling is reached, which bounds the work. The storage
+# protocol's `vector_search` takes no metacontext filter, which is why this lives here
+# (REVIEW_EPISTEMIC.md §4.3).
 _METACONTEXT_SCOPE_OVERFETCH = 4
 _METACONTEXT_SCOPE_MAX_K = 200
 
@@ -1796,24 +1794,23 @@ async def _in_metacontext_nodes(
 ) -> list[EpistemicNode]:
     """Nodes standing in any of `metacontexts` — a set union, nothing more.
 
-    **No metacontext inherits another.** This used to return the named metacontext *plus*
-    untagged base reality, on the reasoning that real-world knowledge is the
-    shared background every metacontext is read against. That inheritance was
-    hardcoded and invisible: a caller could not see it, turn it off, or ask for
-    any other combination. It is now the caller's sentence — a query wanting a
-    novel's world read against real history asks for both by name, and one
-    wanting only what the novel says asks for one.
+    **No metacontext inherits another.** Real-world knowledge is not read in
+    beside a named metacontext as a shared background: an inheritance like that
+    would be hardcoded and invisible, and a caller could not see it, turn it
+    off, or ask for any other combination. The combination is the caller's
+    sentence: a query wanting a novel's world read against real history asks for
+    both by name, and one wanting only what the novel says asks for one.
 
     A node stating none of the listed metacontexts does not match, and a node stating
     no metacontext at all matches nothing scoped — it is only reachable by leaving the
     list out, which is what makes it findable at all while a graph waits to be
     declared.
 
-    One query for the whole set. This was previously an `asyncio.gather` over a
-    round-trip per node, which bought concurrency at the cost of issuing
-    overlapping reads on the shared SurrealDB connection — the hazard ISSUES.md
-    the active-graph guard describes. Batching is faster *and* sequential, so the trade goes away
-    rather than being taken.
+    One query for the whole set. An `asyncio.gather` over a round trip per node
+    would buy concurrency at the cost of overlapping reads on the shared
+    SurrealDB connection, the hazard the active-graph guard
+    (`storage/active_graph.py`) exists for. Batching is faster *and* sequential,
+    so the trade goes away rather than being taken.
     """
     from epimemer.pipelines.reflection.review import metacontexts_for
 
@@ -3532,7 +3529,7 @@ async def check_conflicts(
     result = {"conflicts": conflicts, "threshold": threshold}
     # The review loop's front door. Candidates are `vector` with the cosine as
     # the score — they genuinely are similarity results, so no new provenance
-    # value is needed for them (§3, amended). The source facts are declared too:
+    # value is needed for them (§3). The source facts are declared too:
     # the agent read their content here.
     meta = ResponseMeta(
         nodes_returned=candidate_count,
@@ -4728,7 +4725,7 @@ async def reflect(
     # and a kind named `flag` outranks the mute, which `is_surfaced` decides for
     # every caller. Every warning is published all the same, muted ones
     # included, with `surfaced` carrying the difference
-    # (`WARNINGS_DASHBOARD.md` §2.2).
+    # (`EVENT_LOG.md` §12.2).
     policy = await advisory_policy(
         storage, warning_policy if warning_policy is not None else WarningPolicy()
     )
@@ -4754,7 +4751,7 @@ async def reflect(
         # Reflect **scans** the whole active graph and the agent sees only the
         # nominees, so a reflect record dims everything except them. That is
         # accurate rather than a special case: `retrieved` is what the response
-        # carried, never what the tool looked at (§2, corrected).
+        # carried, never what the tool looked at (§2).
         retrieved=_declare(_ids_within(result)),
     )
     return result, meta
@@ -4897,11 +4894,10 @@ async def apply_reflection(
         the same defect: a declined pair was recorded nowhere, so `reflect`
         re-offered it for ever. ``distinct`` is different relationships that
         look alike; ``synonymous`` is one relationship written two ways.
-        **Neither rewrites anything** — a verdict is a record, which is the
-        whole of what this tier does since `relation_merges` was removed, and
-        what a label means here is settled with ``describe_relation``. **Both
-        stop the pair being nominated, and that suppression is permanent by
-        design.** ``because`` is required, and
+        **Neither rewrites anything**: a verdict is a record, which is the
+        whole of what this tier does, and what a label means here is settled
+        with ``describe_relation``. **Both stop the pair being nominated**
+        until ``reopen`` puts it back. ``because`` is required, and
         so is ``kind`` — copy it from the nomination; there is no default, so
         an entry omitting it is refused rather than judged against a kind the
         agent never stated.
@@ -4982,10 +4978,10 @@ async def apply_reflection(
     from epimemer.pipelines.reflection.topic_enrichment import described, reembedded
 
     # 0. Nothing is applied until the whole batch is known to be applicable.
-    #    The nine steps below share no transaction and their order is the
-    #    anchoring rule, so a raise part-way down leaves everything above it
-    #    committed under an error that cannot say what landed — and a similarity
-    #    verdict, being permanently suppressing, then refuses the retry.
+    #    The steps below share no transaction and their order is the anchoring
+    #    rule, so a raise part-way down leaves everything above it committed
+    #    under an error that cannot say what landed, and a similarity verdict,
+    #    which suppresses its pair, then refuses the retry.
     #    Structural only: judgments the graph can evaluate are still refused one
     #    at a time, into the `*_refused` lists.
     malformed = malformed_entries(
@@ -5066,11 +5062,9 @@ async def apply_reflection(
             else:
                 await journal(storage, DecisionKind.SIMILARITY, [pair[0], pair[1]], judge=judge)
 
-    # 1b. Record what was decided about nominated **label** pairs, and before
-    #     step 9 relabels any of them. A verdict is about the vocabulary as the
-    #     agent saw it, so a merge earlier in the same batch would make one side
-    #     of a pair vanish and the verdict would land on a label the agent never
-    #     judged — step 1's anchoring rule, applied to the tier below it.
+    # 1b. Record what was decided about nominated **label** pairs, early, by
+    #     step 1's anchoring rule applied to the tier below it: a verdict is
+    #     about the vocabulary as the agent saw it.
     relation_verdicts_recorded = 0
     relation_verdicts_confirmed = 0
     relation_verdicts_refused: list[dict] = []
@@ -5369,9 +5363,9 @@ async def apply_reflection(
             continue
 
         # The gate facts have had since dedup, arriving late here because topic
-        # merge grew its own path: `merge_nodes` migrates every source's edges
-        # onto the survivor, `has_metacontext` among them, so merging across
-        # metacontexts leaves one topic asserted in both worlds. Exact set equality,
+        # merge grew its own path: `merge_nodes` migrates the sources' edges onto
+        # the survivor and re-states the union of their metacontexts on it, so
+        # merging across metacontexts leaves one topic asserted in both worlds. Exact set equality,
         # not overlap — `shared_metacontext_set` carries the reasoning.
         # An all-tag merge is exempt because names take the union: two spellings
         # of one name were used from whatever worlds their nodes were claimed
@@ -6066,12 +6060,11 @@ async def review(
     change goes through `apply_review`, `rejudge` and the decision tools that
     already exist.
 
-    **Three separate questions, and the first draft ran them together.** *Which*
-    decisions (`mode`, `agent_id`, `since`/`until`), *what order* they arrive in
-    (always the same — see below), and *whether* the list is narrowed further
-    (`certainty_ceiling`). A mode names the selection; every argument narrows
-    whatever it selected, which is how §6.1's *"`by_agent` **and** `since`"*
-    composes without a second vocabulary.
+    **Three separate questions.** *Which* decisions (`mode`, `agent_id`,
+    `since`/`until`), *what order* they arrive in (always the same, see below),
+    and *whether* the list is narrowed further (`certainty_ceiling`). A mode
+    names the selection; every argument narrows whatever it selected, which is
+    how `by_agent` **and** `since` composes without a second vocabulary (§6.1).
 
     **Ordering is two tiers that never mix** (§6.2, `pipelines/review/`). A
     declared `certainty` comes first, ascending; everything unrated follows,
@@ -6244,7 +6237,7 @@ async def review(
 
     if agent_id is not None:
         # What the handle turned out to name. A handle that resolves to
-        # nothing used to return an empty page indistinguishable from a judge
+        # nothing would otherwise return an empty page indistinguishable from a judge
         # that has decided nothing, which is the failure a rename or a typo
         # produces — so the two are told apart here, and the judges that do
         # exist are listed, since no tool enumerates them.
@@ -6305,10 +6298,9 @@ async def apply_review(
     a decision whose effect still stands (§4.2). Say in `because` what should
     happen, then make that call.
 
-    **Not one transaction, and the design said it should be.** §10.7 asked for
-    one, written when this tool was imagined as performing the reversals. It
-    performs nothing, so there is no multi-step change to make atomic — and each
-    entry is an independent judgment about an unrelated decision that happens to
+    **Not one transaction, by design** (REVIEW_MODE.md §6.4). This tool
+    performs no reversal, so there is no multi-step change to make atomic, and
+    each entry is an independent judgment about an unrelated decision that happens to
     be batched, which is exactly the shape `apply_reflection` refuses per item.
 
     Each entry: `{decision_id, because, subject_ids?, certainty?,
@@ -6464,11 +6456,12 @@ async def reassign_metacontext(
 ) -> tuple[dict, ResponseMeta]:
     """Withdraw a metacontext from a node, optionally putting another in its place.
 
-    A metacontext assignment used to be one-way, so a fact wrongly assigned to
-    a fiction metacontext stayed there for ever, and that is not cosmetic. It
-    becomes permanently unmergeable with its own twin, it stops corroborating
-    the real copy, and a metacontext-scoped search misses it where it belongs
-    while returning it where it does not. All three fail silently.
+    Without this, a metacontext assignment would be one-way, and a fact wrongly
+    assigned to a fiction metacontext would stay there for ever. That is not
+    cosmetic: it would be permanently unmergeable with its own twin, it would
+    stop corroborating the real copy, and a metacontext-scoped search would miss
+    it where it belongs while returning it where it does not. All three fail
+    silently.
 
     **Use `assign` whenever the claim belongs in another metacontext.**
     Withdrawing and then linking passes through a state where the node states no
@@ -8757,9 +8750,8 @@ class ApprovalOutcome(BaseModel):
       that approval *is* the user's involvement (§2.3) and refusing it would
       leave such a client unable to judge at all.
 
-    The two were one value until 2026-08-25 and the conflation was harmless
-    while an approved id skipped the question entirely. Asking on every bind is
-    what made them have to be told apart.
+    The two have to be told apart because the server asks on every bind: if an
+    approved id skipped the question, one value would do.
     """
 
     chosen: str | None = None
@@ -8827,7 +8819,7 @@ async def judge_is_approved(storage: StorageBackend, judge: JudgeRef) -> bool:
     Approval is per graph, so a session that switches graphs carries a binding
     the new graph never made. One declaration of the rule, called both at
     `use_graph` and again at write time — the second is cheap, and is what keeps
-    the first from being a single point of failure (§10.3).
+    the first from being a single point of failure.
     """
     return judge.agent_id in await storage.get_approved_agent_ids()
 
@@ -8857,7 +8849,8 @@ def judge_required_reason(approved: Sequence[str]) -> str:
         else (
             "**No judge has been approved in this graph**, so no write can "
             "succeed until one is — set EPIMEMER_APPROVED_AGENTS, or run "
-            "`epimemer agents confirm <name>` against a served SurrealDB or a SQLite graph."
+            "`epimemer agents confirm <name>` against a served SurrealDB, a SQLite graph "
+            "or Postgres."
         )
     )
     return (
@@ -8904,9 +8897,9 @@ class JudgeChoice(BaseModel):
 def _roster_title(name: str, agent: Agent | None) -> str:
     """One picker line: who this judge is, and when it last judged.
 
-    The **name**, never the id — the id is a key and is not shown to anybody
-    . A record written before the split has no name and reads as its own
-    id, which is what it always was.
+    The **name**, never the id: the id is a key and is not shown to anybody. A
+    record written before the split has no name and reads as its own id, which
+    is what it always was.
     """
     if agent is None:
         return f"{name} · approved, never claimed"
@@ -9099,7 +9092,8 @@ def _retired_reason(agent: Agent) -> str:
         f"decisions are all still there and review still answers for it, but "
         f"nothing new may be judged as it. Ask the user which judge you should "
         f"be instead. If this one should come back, they can run "
-        f"`epimemer agents reinstate {name}` on a served SurrealDB or a SQLite graph, or choose "
+        f"`epimemer agents reinstate {name}` on a served SurrealDB, a SQLite graph or "
+        f"Postgres, or choose "
         f"*A retired judge…* in the prompt this call raises; you cannot, and "
         f"that is deliberate."
     )
@@ -9417,13 +9411,13 @@ async def claim_agent(
     response as `agent_id` and the handle is in `name`; the key is not for
     showing to anybody.
 
-    **The gate guards assuming an identity, not only minting one** (revised
-    2026-08-25). It used to ask only where `agent_id` was not already approved,
-    which guarded the wrong act: an approved id then bound with no user
-    involvement at all, and the refusal names what this graph approves — so a
-    rejected guess returned the list that would have worked. Asking on every
-    bind is what closes that, and it is affordable only because the question is
-    a pick from a list rather than a name to type.
+    **The gate guards assuming an identity, not only minting one.** Asking only
+    where `agent_id` was not already approved would guard the wrong act: an
+    approved id would bind with no user involvement at all, and the refusal
+    names what this graph approves, so a rejected guess would return the list
+    that would have worked. Asking on every bind is what closes that, and it is
+    affordable only because the question is a pick from a list rather than a
+    name to type.
 
     **What the user answers with is a handle too**, so choosing an existing
     judge and typing the name of one land in the same place. That matters most
@@ -9437,8 +9431,8 @@ async def claim_agent(
     the binding itself. It suppresses the question only while that judge is
     still approved; a different judge, graph or session is a different question.
     A **changed description** is still put to the user, because the memo records
-    an identity rather than a wording. Since 2026-09-28 it applies only where
-    the seat is incomplete; a complete seat is decided by the persisted
+    an identity rather than a wording. It applies only where the seat is
+    incomplete; a complete seat is decided by the persisted
     confirmations below, which is what the memo becomes once it can outlive the
     process.
 
@@ -9614,8 +9608,8 @@ async def claim_agent(
         "name": name,
         "also_recorded_as": list(updated.former_ids),
         "digest": version.digest,
-        # Stated rather than left to be inferred from `description_versions: 1`
-        # . *This judge has no history* is what tells an agent it has just
+        # Stated rather than left to be inferred from `description_versions: 1`.
+        # *This judge has no history* is what tells an agent it has just
         # created one instead of joining one, and an implication nobody reads
         # is not a signal.
         "new_agent": existing is None,
@@ -9701,7 +9695,7 @@ async def use_graph(
     leave that binding standing over a graph that never made it. Where it does,
     the result says so and the caller drops the binding — silently carrying a
     judge approved for graph A into every write on graph B is how attribution
-    starts recording something nobody approved (§10.3).
+    starts recording something nobody approved.
     """
     invalid = _reject_invalid_graph_name(name)
     if invalid is not None:

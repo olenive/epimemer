@@ -7,7 +7,9 @@ replaced in `history`, oldest first (`dev-docs/SEGMENTATION.md` §5.4):
     {"strategy": "paragraph" | "semantic" | "agent",
      "passages": <count>,
      "history": [{"strategy": "paragraph", "passages": 1,
-                  "replaced_at": "...", "replaced_by": <judge or null>}]}
+                  "replaced_at": "...", "replaced_by": <judge>}]}
+
+`replaced_by` is absent when no judge was claimed.
 
 No journal row goes with it. A document and its passages carry no judge, and
 a cut is not a verdict about the world, so it stays out of `review`.

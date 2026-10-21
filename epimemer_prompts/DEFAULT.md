@@ -177,9 +177,9 @@ than in one: `list_graphs`, `use_graph`, `delete_graph`, `viz_status`.
 ### Source nodes, topic nodes, and relations (all nodes and edges, not strings)
 
 Provenance and "aboutness" are modelled as **nodes and edges**, not string
-fields, so a source node or a topic node can carry its own facts, relate to
-siblings, and sit in a metacontext. All are separate from metacontexts, which
-change retrieval scope; these do not.
+fields, so a topic node, the publisher a source names included, can carry its
+own facts, relate to siblings, and sit in a metacontext. All are separate
+from metacontexts, which change retrieval scope; these do not.
 
 - **Source**: *where* knowledge came from. Pass `source` and `source_type` to
   `segment`; every node decomposed from it gets a `sourced_from` edge to the
@@ -188,7 +188,8 @@ change retrieval scope; these do not.
   itself accrue facts.
 - **A tag becomes a topic node.** Pass `tags=[...]` to `store_decomposition`
   (document level) or per node via `{"content": ..., "tags": [...]}`. A *tag*
-  is the name you pass; it becomes (or reuses, by exact name) a **Topic**, the
+  is the name you pass; it becomes (or reuses, by name up to case and
+  separators, reported in `tags_resolved_to`) a **Topic**, the
   topic node created from that tag, and a `tagged_with_topic` edge links the
   node to it. That topic node joins the metacontext you are ingesting into, so
   a name ends up standing in every metacontext it is used from and a scoped
@@ -196,8 +197,7 @@ change retrieval scope; these do not.
   retrieval index
   for `find_nodes` and carries no evidential weight: `supports` is the edge
   corroboration reads. There are no `key=value` tags: a relationship
-  dimension is an **edge** (`link(a, b, relation="spoken_by")`); a scalar
-  like sensitivity belongs in node metadata.
+  dimension is an **edge** (`link(a, b, relation="spoken_by")`).
 - **Relations are open vocabulary.** `link(src, dst, relation="published_by",
   kind="attribution")` coins any relationship you need. `kind` is
   `relationship` (followed in retrieval) or `attribution` (where it came from
@@ -230,11 +230,11 @@ Discovery and lookup:
   shared across worlds, which a topic node created from a tag often is: it
   stands in every metacontext it is used from and gathers everything tagged
   with that name, so an unscoped walk from one hands you a novel's claims
-  beside real ones. The
-  node you named comes back either way, because you named it; its neighbours
-  are filtered, and the edges returned are only those between nodes you were
-  shown. Each of the three labels every node it returns with the
-  `metacontexts` that node stands in.
+  beside real ones. `query_graph` and `topic_tree` return the node you named
+  either way, because you named it, and `find_nodes` returns only what points
+  at it; neighbours are filtered, and the edges `query_graph` returns are only
+  those between nodes you were shown. Each of the three labels every node it
+  returns with the `metacontexts` that node stands in.
 - **`list_sources`** / **`list_relations`**: discover the sources and the
   user-defined relationship labels present before filtering or coining new
   ones. `list_relations` carries each label's `description`; an empty one
@@ -532,7 +532,9 @@ if useful.
 - **Check `truncated`.** The lists built out of *pairs* grow quadratically
   where every other list grows with the node count. Each is capped to its
   highest-scoring `max_nominations` (200 by default), and any that was cut
-  is named in `truncated`. An empty `truncated` means you saw everything.
+  is named in `truncated`. An empty `truncated` means no pair list was cut;
+  `archival_candidates` is a worklist with its own bound, never named there,
+  that refills on the next reflect.
   **When a list is named there, act on what came back and reflect again**
   rather than raising the number: what was dropped is the weakest end of the
   ranking, and a graph dense enough to hit the cap wants repeated passes,
@@ -550,7 +552,8 @@ if useful.
   date you happen to know; the prohibition on world knowledge applies here
   exactly as it does at ingest. **Decline the ones you disagree with** via
   `apply_reflection(boundaries_declined=[{node_id, source_id, endpoint, at,
-  timeline_id, reason}])`, copying the first five from the proposal and saying
+  timeline_id, reason}])`, copying `node.id` from the proposal as `node_id`
+  and the other four as they are, and saying
   in `reason` why that date is not when the period ended or began. A decline
   is what stops a proposal returning: an unanswered one comes back on every
   reflect. It leaves the period open and writes nothing between the two
@@ -599,7 +602,9 @@ if useful.
   newest first, each saying which of the three happened and when. `changed_count`
   and `material_count` say how many there were in all and how much the
   description stands over, so you can see what the cap of twenty hid. A topic
-  nobody has described yet has no moment to measure from, so it comes with
+  whose description nobody has yet written or confirmed through reflection
+  (a description minted with a tag counts) has no moment to measure from, so
+  it comes with
   `since: null` and a `sample` of its material instead: that one is the
   first-time question, *what is this topic about*.
 - **Answer every nomination, one way or the other.**
@@ -621,9 +626,11 @@ if useful.
   does, and the topic is not offered for splitting again until its material
   moves.
 - Apply your decisions with `apply_reflection`. To resolve flagged nodes in
-  batch, pass `supersessions=[{old_id, by_id}]`. Resolving a loser
-  automatically clears the winner's `contested` and `superseded_candidate`
-  labels. Escalate anything you shouldn't decide alone to the user.
+  batch, pass `supersessions=[{old_id, by_id, because}]`, `because` being
+  `it_was_wrong` or `the_world_changed` as on `supersede_by`. Retiring the
+  loser clears the supersession proposals pointing at it, and the winner's
+  `contested` label, since a contest with a retired partner is resolved.
+  Escalate anything you shouldn't decide alone to the user.
 - **Record the pairs you decline, or they come back for ever.** A nominated
   pair you take no other action on needs `apply_reflection(similarities=[{pair,
   verdict, because}])`; otherwise nothing records that you looked, and the
@@ -666,9 +673,9 @@ if useful.
   exists, beside a corporation that *employs* a consultant who does very
   little), `synonymous` for one relationship written two ways. A pair you
   simply skip is re-offered on **every** reflect, for ever, to an agent who
-  cannot see that you already considered it, while merging removes a label
-  and quietly suppresses itself, so skipping pushes the graph toward the
-  answer that tidies the list. Both verdicts stop the nomination. A verdict
+  cannot see that you already considered it. Both verdicts stop the
+  nomination, and neither rewrites an edge or removes a label: what a label
+  means here is settled with `describe_relation`. A verdict
   that later looks wrong is put back with `reopen(relation_labels=[a, b],
   reason=...)`, which appends a row saying the pair is open again and asserts
   nothing about which answer is right.
@@ -678,8 +685,9 @@ Trivial knowledge is the counterpart to *wrong* knowledge, and it is handled
 by the same loop: nomination proposes, you judge, the **user approves**.
 - `reflect` returns `archival_candidates`, each with a `reason`: `retired`
   (long superseded or merged and unimportant), `evidence_stale` (an inference
-  whose basis changed), `never_retrieved` (an active node no search has ever
-  returned, judged or depended on since it was created), and
+  whose basis changed), `never_retrieved` (an active node, other than an
+  inference, that no search has ever returned, nothing depends on, and no
+  judgment has raised), and
   `stale_judgment` (a node held above the importance ceiling by an upward
   judgment nobody has revisited in months).
 - **`stale_judgment` is not an archival proposal.** It asks you to re-confirm
@@ -874,7 +882,8 @@ the graph learned it.
 - **A write refused because the seat changed means claim again**, and the user
   will be asked. The message names what changed, such as a new model since the
   claim; do not retry the write before claiming.
-- **Carry the `judge_token` the claim returns on every write.** It names your
+- **Carry the `judge_token` the claim returns on every write that takes
+  one.** It names your
   claim, so the write is credited to the judge you claimed even where another
   agent has claimed on the same connection since. Several agents can share one
   connection, a subagent beside the agent that spawned it, and each claims its

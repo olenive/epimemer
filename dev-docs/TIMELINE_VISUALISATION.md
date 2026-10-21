@@ -1,10 +1,13 @@
 # Timeline visualisation
 
+A design, built: the panel is `timeline-panel.ts` beside pure modules for the
+scale, the filters, the marks, the labels and the validity lanes.
+
 A timeline panel in the dashboard: a vertical axis with events as marks,
-hover detail, filtering, zoom, and a split pane beside the graph. The panel
-is built, including extraction proposing timepoints (§7), the band for a point
-the order places, the mark for a disputed order, the beads for a rule's
-occurrences (§12.6), and the valid-time grammar (§13).
+hover detail, filtering, zoom, and a split pane beside the graph, fed by
+extraction proposing timepoints (§7) and drawing validity intervals by the
+valid-time grammar (§13). The rules it shares with the other panels are
+`VISUALISATION.md`, *Rules every panel follows*.
 
 ---
 
@@ -31,25 +34,22 @@ occurrences (§12.6), and the valid-time grammar (§13).
 
 ## 2. Two modes, one panel
 
-The panel plots marks on an axis. What the axis *means* is the mode. Mode is
-a toggle in the panel header; zoom, filter and selection state are kept per
-mode, so switching back restores what you were looking at.
+The panel plots marks on an axis. What the axis *means* is the mode, a selector
+in the panel header. Switching mode resets the zoom and the selection; the
+filters are shared by both modes.
 
 ### 2.1 Record time: "when did the graph learn this?"
 
-Derived entirely from fields already on `NodeView`: `created_at` and
-`retrieved_at`. A node is drawn as an interval from its creation to its last
-retrieval, the span over which it stayed in use, collapsing to a point when
-no search has ever returned it. This mode needs no backend data beyond the
-snapshot, which is why it was built first: it exercised the whole rendering
-design against data that always exists.
+Derived entirely from `created_at` and `retrieved_at` on each node. A node is
+drawn as an interval from its creation to its last retrieval, the span over
+which it stayed in use, collapsing to a point when no search has ever returned
+it.
 
-**What it cannot show.** `viz_list_nodes` returns active nodes, so the
-snapshot has no retired ones and record mode plots no retirements. Widening
-the snapshot would change what the graph panel draws too, which is a
-separate decision. Status changes that arrive live during a session are
-applied, so the status filter is not inert, but a node retired before the
-browser connected is simply absent.
+**What it cannot show.** The snapshot carries active nodes only, so record mode
+plots no retirements. Widening the snapshot would change what the graph panel
+draws too, which is a separate decision. Status changes that arrive live during
+a session are applied, so the status filter is not inert, but a node retired
+before the browser connected is simply absent.
 
 Session activity is bursty (a graph sits untouched for days, then takes 200
 nodes in three minutes), which makes record mode the ideal case for a broken
@@ -57,28 +57,20 @@ axis.
 
 ### 2.2 Content time: "when did this happen?"
 
-The `Timeline` / `Timepoint` model. Marks are timepoints, drawn as points
-when `end is None` and as bars when it is set. Needs the read path and events
-in §6.
+The `Timeline` / `Timepoint` model. Marks are timepoints, drawn as points when
+`end is None` and as bars when it is set.
 
 ---
 
 ## 3. Scale model
 
-Each timeline's scale is **piecewise linear**: a list of segments, each with
-a time domain and a position range, separated by fixed-width breaks.
-
-```
-segments: {t0, t1, p0, p1}[]     breaks: {after: segmentIndex, span: Duration}[]
-```
-
-Available length is `L - breaks.length * BREAK_PX`, divided among segments in
-proportion to each segment's own span, so dense regions are not compressed by
-the sparse ones. With zero breaks this degenerates to an ordinary linear
-scale, which is the common case. Both directions exist: `timeToPos` for
-rendering, `posToTime` for pointer hit-testing and zoom anchoring. Zoom
-state is `{t0, t1}` per timeline, not a scale factor, so it survives the data
-changing underneath it.
+Each timeline's scale is **piecewise linear**: segments, each with a time
+domain and a position range, separated by fixed-width breaks. The length left
+after the breaks is divided among segments in proportion to each segment's own
+span, so dense regions are not compressed by the sparse ones; with no breaks
+this is an ordinary linear scale, the common case. Zoom state is a time domain
+per timeline, not a scale factor, so it survives the data changing underneath
+it.
 
 Each timeline owns its domain: one graph can hold 1400 AD and last Tuesday,
 and a common domain across those is unreadable at any zoom level.
@@ -87,33 +79,27 @@ and a common domain across those is unreadable at any zoom level.
 
 ## 4. Break heuristic
 
-Inputs: the sorted concrete timepoints of one timeline, and the current
-visible domain.
+A gap breaks the axis when it is anomalous against the local spacing, a large
+multiple of the median non-zero gap, **and** would waste a real share of the
+visible span. Without the second test, breaking a gap that costs 8px gains
+nothing and adds noise. The reasons behind the rest:
 
-1. Compute the gap between consecutive marks as
-   `start[i+1] - (end[i] ?? start[i])`, so intervals do not manufacture a gap
-   that is not there.
-2. Take `m` = median of the non-zero gaps. If every gap is zero or there are
-   fewer than three marks, do not break: there is no local spacing for a gap
-   to be anomalous against.
-3. A gap is a candidate if both hold: `gap > GAP_FACTOR * m` (anomalous
-   relative to local spacing; `GAP_FACTOR = 10`) and `gap / visibleSpan >
-   GAP_MIN_FRACTION` (it would actually waste screen; `GAP_MIN_FRACTION =
-   0.12`). Without the second, breaking a gap that costs 8px gains nothing
-   and adds noise.
-4. Take at most `MAX_BREAKS = 5` candidates, largest first. Beyond a handful
-   of breaks the axis stops being an axis.
-5. Render each break as a fixed-width hatched marker labelled with the
-   elapsed span in human units ("~600 years", "3 days").
+- A gap is measured from the furthest end any earlier mark reached, so
+  intervals, and intervals that overlap, do not manufacture a gap that is not
+  there.
+- Fewer than three marks never break, with no special case: two marks give one
+  gap, which is its own median.
+- At most a handful of breaks, largest first. Beyond that the axis stops being
+  an axis.
+- Each break is a fixed-width plate labelled with the elapsed span in human
+  units ("~600 years", "3 days").
+- Breaks are recomputed on zoom from the visible domain only, so zooming into a
+  cluster dissolves the break that was hiding the space around it. Hysteresis
+  stops flicker during a zoom drag: a break persists until its gap falls well
+  below the threshold that created it.
 
-Recompute on zoom, from the visible domain only: zooming into a cluster
-dissolves the break that was hiding the space around it. Hysteresis stops
-flicker during a zoom drag: once a break exists it persists until its gap
-falls below `GAP_FACTOR * m * 0.7`.
-
-All of this is pure, `(marks, visibleDomain, length) → {segments, breaks}`,
-in `timeline-scale.ts` with no DOM access. The constants are named there so
-they can be retuned against real data without hunting through render code.
+The constants are named in `timeline-scale.ts` so they can be retuned against
+real data without hunting through render code.
 
 ---
 
@@ -123,7 +109,8 @@ All filters are client-side predicates over the in-memory snapshot, composed
 with AND:
 
 - **Linked node type**: topic, fact, inference.
-- **Node status**: hide marks whose only linked nodes are retired.
+- **Node status**: one status, or any; *Active* hides marks whose only linked
+  nodes are retired.
 - **Metacontext**: keeps fictional and factual events visually separate.
 - **Date range**: restricts visible marks independently of zoom. Range and
   zoom are different things: one hides data, the other magnifies.
@@ -132,7 +119,7 @@ with AND:
   name, stringified metadata values). `field:value` prefixes make
   origin-style queries expressible (`source:BBC`, `mc:fiction`, `type:fact`,
   `label:war`), a bare term matches any field, multiple terms AND together,
-  quoted terms match a phrase. Parsing is pure, in `timeline-filter.ts`.
+  quoted terms match a phrase.
 
 A mark is retained if **any** of its linked nodes passes the node-level
 filters, so a timepoint linked to one live and one retired fact stays visible
@@ -144,63 +131,50 @@ under "active only".
 
 ### 6.1 Read path
 
-```python
-async def viz_list_timelines(self, database: str) -> Sequence[Timeline]: ...
-```
-
-`query_timelines()` cannot be reused: it has no database argument and reads
-the session's active graph, while the hub must read any graph of a session
-without switching the connection. Implemented on both backends as a real
-method. `viz_*` methods are never registered as MCP tools or imported under
-`epimemer/mcp/`. `assemble_snapshot` carries a `timelines` key, and
-`TimelineView` / `TimepointView` mirror the shape in `types.ts`. Timepoints
-ship embedded in their timeline, as they are stored.
+The hub reads timelines through `viz_list_timelines(database)` on every
+backend, because it must read any graph of a session without switching the
+connection, and `query_timelines()` reads the active graph. `viz_*` methods
+are never registered as MCP tools or imported under `epimemer/mcp/`.
+Timepoints ship embedded in their timeline, as they are stored
+(`VIZ_CONTRACT.md` §5).
 
 ### 6.2 Events
 
-One event, `TimelineStored`, carrying the whole `TimelineView`. `store_timeline`
-is an upsert and the only write path (adding a timepoint re-stores the
-timeline), so telling creation from extension would require a read before
-every write to learn something the viewer can see for itself. Timelines are
-small; sending the current state is cheaper and cannot drift from storage.
-The receiver replaces its copy rather than merging. Published from
-`instrumented_storage.store_timeline`. `TIMELINK` edge creation already emits
-`EdgeStored`.
+One event, `timeline_stored`, carrying the whole timeline. Every timeline write
+is an upsert of the whole record (adding a timepoint re-stores the timeline),
+so telling creation from extension would need a read before every write to
+learn something the viewer can see for itself. Timelines are small; sending the
+current state is cheaper and cannot drift from storage. The receiver replaces
+its copy rather than merging.
 
 ### 6.3 Metacontexts in the snapshot
 
 `has_metacontext` edges carry only ids, so without the metacontexts
-themselves the metacontext filter could offer nothing but UUIDs.
-`viz_list_metacontexts(database)` mirrors `viz_list_timelines`, and
-`assemble_snapshot` carries a `metacontexts` key. Where a metacontext is still
-unresolvable the panel falls back to the raw id rather than dropping the
-association.
+themselves the metacontext filter could offer nothing but UUIDs; the snapshot
+carries them. Where one is still unresolvable the panel falls back to the raw
+id rather than dropping the association.
 
 ### 6.4 `reference_time`: a timeline's own "now"
 
-`Timeline.reference_time: datetime | None`, round-tripped on both backends
+`Timeline.reference_time: datetime | None`, round-tripped on every backend
 inside the record like every other `Timeline` field.
 
 **`None` means "follow the wall clock", and is deliberately not the same as
 storing the current instant at creation.** A real-world timeline written with
 today's date would have its present frozen at the moment it was first saved.
-Unset resolves to `now` at read time instead.
+Unset resolves to `now` at read time instead, and the browser resolves it at
+render rather than on arrival, so a long-lived session does not pin the
+present to whenever the snapshot was assembled.
 
 **It lives in the graph, not in the browser.** A fictional timeline's present
 moment is a fact about that world ("the novel opens in May 1897"), so an
 agent that reads the source should be able to record it, every client should
 see the same answer, and it should survive a new machine. `localStorage`
 would have satisfied the renderer and none of that. (Colour preferences make
-the opposite call, for the opposite reason: `VISUALISATION.md` C.3.)
-
-Reachable three ways: `create_timeline(name, reference_time=…)` when it is
-known up front; `set_reference_time(timeline_id, reference_time=…)`, separate
-because a fiction's anchor is usually learned after ingesting enough of the
-source to say, and is often read wrong first (passing nothing clears it);
-and `query_timeline` reports it on every call. `TimelineView` carries it as
-`reference_time: string | null`, resolved to real `now` at render rather than
-substituted on arrival, so a long-lived browser session does not pin the
-present to whenever the snapshot was assembled.
+the opposite call, for the opposite reason: `VISUALISATION.md` C.3.) Setting
+it is a tool of its own, `set_reference_time`, because a fiction's anchor is
+usually learned after ingesting enough of the source to say, and is often read
+wrong first.
 
 ---
 
@@ -211,35 +185,23 @@ During decomposition, temporal expressions in node content become
 `label` only where it is not. "During the Renaissance" resolves to nothing
 and stays vague rather than being guessed into 1500-01-01. Each proposing
 node gets a `TIMELINK` to the timepoint, which is what puts a mark on the
-axis.
-
-`detect_temporal_expressions` (`pipelines/timeline/temporal.py`) is a pure
-function over text, and `propose_timepoints` (`pipelines/timeline/functions.py`)
-turns its output into a timeline and edges. Neither touches storage.
+axis. The detector and the proposer are pure functions in
+`pipelines/timeline/`; neither touches storage.
 
 ### 7.1 Timelines travel in the write batch
 
 `write_batch_tx` takes `timelines` beside `nodes`, `edges` and `embeddings`,
 because ingestion is atomic only if everything goes through it: a timeline
-written outside the batch meant a mid-document failure could leave `TIMELINK`
-edges pointing at a timeline that was never stored, and the read path
-resolves a dangling `TIMELINK` to an empty row rather than an error, so that
-failure was silent.
+written outside the batch could leave `TIMELINK` edges pointing at a timeline
+that was never stored after a mid-document failure, and the read path resolves
+a dangling `TIMELINK` to an empty row rather than an error, so that failure
+would be silent.
 
 Timelines are the one **upsert** in an otherwise insert-only batch. A
 timeline is a single record holding a list of timepoints, so appending a
-timepoint *is* a replacement of that record. The consequence is in the
-rollback path: undoing an upsert means restoring the row's previous content,
-which the in-memory backend does explicitly and SurrealDB gets from its
-transaction.
-
-Testing that is asymmetric. SurrealDB builds every statement before running
-any, so a failure injected from Python aborts before the transaction opens:
-the parity test proves the observable ("the old timeline is intact") on both
-backends but only exercises the in-memory restore.
-`test_write_batch_tx_rolls_back_a_timeline_upsert` in
-`test_surrealdb_storage.py` collides inside the transaction, after the upsert
-in statement order, which is what proves the database rolls it back.
+timepoint *is* a replacement of that record, and undoing it on rollback means
+restoring the row's previous content: the in-memory backend does that
+explicitly, and SQLite, SurrealDB and Postgres get it from their transactions.
 
 ### 7.2 Two rules
 
@@ -285,56 +247,33 @@ dates. And the preposition needs a word boundary in front of it, or
 
 ## 8. Modules
 
-| File | Contents | DOM? |
-|---|---|---|
-| `timeline-scale.ts` | gap heuristic, piecewise scale, `timeToPos`/`posToTime`, zoom domain maths | no |
-| `timeline-filter.ts` | query parsing, mark predicates | no |
-| `timeline-model.ts` | snapshot → marks, for both modes; side per mark; facet gathering | no |
-| `timeline-labels.ts` | label layout and text wrapping (§12.10, §12.11) | no |
-| `timeline-validity.ts` | validity intervals → lanes, strip geometry, endpoint marks, succession order (§13) | no |
-| `timeline-panel.ts` | SVG rendering, pointer handling, wiring to the event router | yes |
-| `split-pane.ts` | the graph/timeline divider (§12.7) | yes |
-
-The pure/impure split is the point: the parts most likely to be wrong (break
-placement, zoom anchoring, query parsing, mark linkage, label layout) need no
-browser to test. `timeline-model.ts` exists because deciding *which marks
-there are* (resolving `TIMELINK` edges to nodes, naming metacontexts, splitting
-dated from undated) is as error-prone as the geometry and just as testable
-without a DOM.
-
-Backend: `protocol.py`, `memory.py`, `surrealdb_adapter.py`,
-`instrumented_storage.py`, `snapshot.py`, `events.py`.
-
-`assemble_snapshot` in `snapshot.py` filters retired edges out before the
-snapshot is built, so `timeline-model.ts` never sees a `TIMELINK` that a
-timepoint split or merge moved. That filter is what keeps a moved fact off two
-dates at once, the one its original link gave it and the one a judge moved it
-to, and it belongs on the server rather than in the model: the dashboard draws
-what the graph currently says.
+The scale, the filters, the marks, the labels and the validity lanes are pure
+modules with no DOM access, beside the one panel module that draws and handles
+the pointer (`VISUALISATION.md`, *Rules every panel follows*). Deciding *which
+marks there are*, resolving `TIMELINK` edges to nodes, naming metacontexts and
+splitting dated from undated, is as error-prone as the geometry and just as
+testable without a browser, so it is a module of its own.
 
 ---
 
 ## 9. Interaction
 
-- **Hover** shows the timepoint's label, resolved dates and linked nodes in
-  the detail drawer rather than a tooltip.
-- **Click** selects, expands the mark in place (§12.10), and emits through the
-  event router so the graph panel highlights the linked nodes. Timepoints
-  have no node id in the graph, so the bridge is the `TIMELINK` edge's
-  `timepoint_id` metadata.
-- **Esc** clears selection.
+- **Hover** highlights the mark's linked nodes in the graph panel and shows the
+  timepoint's label, resolved dates and linked nodes in the detail drawer. The
+  mark also carries the same text as a native tooltip, except where the label
+  itself is the text being read.
+- **Click** does the same, and also selects the mark and expands it in place
+  (§12.10). Timepoints have no node id in the graph, so the bridge is the
+  `TIMELINK` edge's `timepoint_id` metadata.
 
 ---
 
 ## 10. Testing
 
-Failing test first, storage additions through the parameterised `storage`
-fixture, frontend pure modules under vitest. The break heuristic and the
-label layout were **mutation-tested**, because both are exactly the shape of
-code where a behavioural test passes while the logic is wrong: an inverted
-comparison still produces *an* axis. The sweeps found real gaps the
-behavioural tests had missed, and dead guards, which were removed rather than
-kept as untestable insurance.
+The break heuristic and the label layout were **mutation-tested**, because
+both are exactly the shape of code where a behavioural test passes while the
+logic is wrong: an inverted comparison still produces *an* axis. A change to
+either deserves the same.
 
 ---
 
@@ -360,47 +299,22 @@ trades a scarce dimension for an abundant one. Time gets the scroll
 direction, which is unbounded, and text gets the width, which is what it
 needed.
 
-```
-┌─ GRAPH ─────────────────┬─│─ TIMELINE  [History of AI ▾] [⌕] [content ▾] ─┐
-│                         │ │                                              │
-│                         │ │   1950 ┬                                     │
-│      (cytoscape)        │ │        │                                     │
-│                         │ │  Dartmouth workshop ●                        │
-│                         │ │  coins "AI"         │                        │
-│                         │ │                     │                        │
-│                         │ │                     ╪  ~40y                  │
-│                         │ │                     │                        │
-│                         │ │                     ●  the field had already │
-│                         │ │                     │  split by then         │
-│                         │ │                     │                        │
-│                         │ │  AlphaGo beats  ▐███████▌  a decisive result │
-│                         │ │  Lee Sedol          │      for deep learning │
-│                         │ │ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┼ ─ ─ ─ ─ ─  now  ─ ─ ─ ─│
-│                         │ │                     │                        │
-│                         │ │   2030 ┴                                     │
-│                         │ │  ┄ undated ┄  [during the boom] [later]      │
-└─────────────────────────┴─│──────────────────────────────────────────────┘
-        facts & topics ──────┘└────── inferences        ▐███▌ straddles both
-```
-
 ### 12.1 Direction: past at the top
 
 Earlier time is higher on screen; scrolling down moves into the future. This
 is the chat-log convention, and it reads with the page rather than against
 it. It is also the cheaper option: position along the axis increases with
-time exactly as the scale computes it, so the renderer maps `y = pos` and
-nothing inverts anywhere. Future-at-the-top was tried first, needed a flip at
-render time, and gained nothing.
+time exactly as the scale computes it, so nothing inverts anywhere.
+Future-at-the-top needed a flip at render time and gained nothing.
 
 ### 12.2 One timeline at a time
 
 The panel shows a single timeline, chosen from a selector in its header.
-`buildContentRows` returns one row per timeline and feeds the selector; the
-renderer narrows. Record mode has a single row holding every node, since
-node type is carried by the side a mark sits on (§12.3); rows per type would
-mean choosing one type at a time from the selector, hiding two thirds of the
-graph to say something the layout already says. Comparing two timelines
-against each other is a different feature.
+Record mode has a single entry holding every node, since node type is carried
+by the side a mark sits on (§12.3); an entry per type would mean choosing one
+type at a time, hiding two thirds of the graph to say something the layout
+already says. Comparing two timelines against each other is a different
+feature.
 
 ### 12.3 Sides carry node type
 
@@ -435,34 +349,35 @@ transform (§3). Wheel events adjust the domain.
 
 ### 12.5 Reference time
 
-The backend half is §6.4. The panel opens centred on the reference time
+The backend half is §6.4. The panel opens centred on a stated reference time
 rather than at either end (a timeline holding future events has no
-meaningful edge to start at), draws a labelled dashed neutral rule across the
-axis so past and future are readable without arithmetic, and offers a "jump
-to now" control. The reference time is folded into the extent computation,
-because the domain is clamped to the data extent and a reference time
-outside the data (an empty timeline, or one whose events are all past) could
-not otherwise be centred on. Record mode ignores it: record time is
-wall-clock, so record mode always marks real `now` and the control is
-hidden.
+meaningful edge to start at), and fitted to the data when none is stated. It
+draws a labelled dashed neutral rule across the axis so past and future are
+readable without arithmetic, and offers a "jump to now" control. A stated
+reference time is folded into the extent computation, because the domain is
+clamped to the data extent and a reference time outside the data (one whose
+events are all past) could not otherwise be centred on; the wall clock is not
+folded in, since stretching an 1897 timeline to today would bury the data.
+Record mode ignores a stated time: record time is wall-clock, so there the
+control stays visible and goes to real `now`.
 
 ### 12.6 The undated tray
 
 A timepoint with no `start` and nothing constraining it gets no coordinate;
 placing it anywhere on the axis would assert something false. "Below the axis"
 means "later" on a vertical axis, so such chips sit in a visually separate tray,
-a bordered, labelled block outside the scrolling axis. Order is authored order within the
-timeline, which is what `reorder_timepoints` establishes (concrete points
-sorted by start, vague ones appended in their original sequence), so the
-panel and the backend agree on what "the order of a timeline" means. Chips
-are interactive on the same terms as marks and obey the same filters.
+a bordered, labelled block outside the scrolling axis. Order is authored order
+within the timeline, which is what `reorder_timepoints` establishes (concrete
+points sorted by start, vague ones appended in their original sequence), so the
+panel and the backend agree on what "the order of a timeline" means. Chips are
+interactive on the same terms as marks and obey the same filters.
 
 **What leaves the tray.** A point with no `start` can still have a position, if
 a source stated that it came after one dated point and before another. The
 snapshot carries the derived `earliest` and `latest` for it (`TIMELINES.md`
-§3.3), computed by the same `bounds_for` that answers `query_timeline`, and such
-a point is drawn on the axis as §13.1's hatched band spanning the two, with its
-label written on it word for word. §13.2's rule 3 still holds: resolution adds a
+§3.3), computed by the function that answers `query_timeline`, and such a point
+is drawn on the axis as §13.1's hatched band spanning the two, with its label
+written on it word for word. §13.2's rule 3 still holds: resolution adds a
 position and never replaces the words. With only one bound known the band runs a
 short way past it and dissolves, which is §13.1's unknown endpoint: "after the
 fire, we do not know when" is fog below a known edge, not a bar stopping
@@ -484,41 +399,30 @@ hairline dotted spine, in a lane left of the axis, one lane per rule. The spine
 means "same rule, nothing asserted in between". A materialised occurrence gets
 no bead: materialising turns it into an ordinary timepoint, which is already on
 the axis as a full mark, and a bead as well would draw one date twice. A moved
-occurrence's bead sits at the date it moved to.
-
-**The window a snapshot enumerates.** Occurrences are computed and never stored,
-and a snapshot is not a query, so nobody named a window. It takes one from the
-timeline: the span of the dated points, widened by one period of the rule on
-each side, so the occurrence either side of the data is drawn and the spine
-visibly carries on past it. A calendar rule has no period to widen by and gets a
-year. A timeline with no dated points falls back to its stated present, and with
-neither there is no window and no beads, because enumerating from the wall clock
-would put occurrences at a place the graph never spoke about. The per-rule cap
-is `OCCURRENCE_CAP`, the one `query_timeline` uses.
+occurrence's bead sits at the date it moved to. The window the snapshot
+enumerates is `VIZ_CONTRACT.md` §5; it never falls back to the wall clock,
+because enumerating from today would put occurrences at a place the graph never
+spoke about.
 
 ### 12.7 Split pane
 
 The panel is the right half of a split pane with a draggable vertical
 divider; either half can be collapsed so the graph or the timeline takes the
-full width. `split-pane.ts` holds the split as a fraction rather than pixels
-(so a window resize keeps the proportion instead of stranding a panel),
-supports arrow-key resizing on the focused divider, persists in
-`localStorage`, and refuses to collapse the last visible half, which would
-leave an empty window with no way back.
+full width. The split is held as a fraction rather than pixels, so a window
+resize keeps the proportion instead of stranding a panel; the focused divider
+resizes with the arrow keys; the split persists per viewer; and the last
+visible half cannot be collapsed, which would leave an empty window with no way
+back.
 
 ### 12.8 Tick labels in the mark column
 
-SVG has no z-index, so the later sibling wins. `renderAxis` returns its tick
-labels in a group that the caller appends last, after every mark, and each
-label carries an opaque plate (a pill, `rx` at half its height) in
-`surfaceChrome`, the same colour the break marker and the expanded card use,
-because all three are axis chrome that has to overwrite what is behind it.
-The plate hides marks landing at a tick's exact time, a real cost since
-position means time, but the gutter between the mark column and the text
-columns is too narrow for any other placement. Neither panel uses
-`font-weight`; hierarchy is carried by hue and opacity, and chrome stays
-subordinate to data (§13.3), so the tick labels are not bold. Guarded by the
-*tick labels* tests in `timeline-panel.test.ts`.
+Tick labels are drawn after every mark, on an opaque pill in `surfaceChrome`,
+the same colour the break marker and the expanded card use, because all three
+are axis chrome that has to overwrite what is behind it. The plate hides marks
+landing at a tick's exact time, a real cost since position means time, but the
+gutter between the mark column and the text columns is too narrow for any other
+placement. The tick labels are not bold: hierarchy is carried by hue and
+opacity, and chrome stays subordinate to data (`VISUALISATION.md` C.6).
 
 ### 12.9 Label layout
 
@@ -542,54 +446,36 @@ timestamps do not, and moves them relative to the reference-time rule. (A
 break is not a counter-example: it is labelled with the span it removed, so
 it states a fact about the data rather than about UI state.)
 
-`timeline-labels` was built for exactly this: a `LabelRequest` carries its own
-height, and the layout's job is sliding labels apart without touching marks.
-The card is passed to the layout first, which makes it the highest priority,
+The card goes to the label layout first, which makes it the highest priority,
 so the one label the reader asked for is never the one dropped. A straddling
-mark emits two requests: the immovable block on the axis, and a card in the
-left column with a leader line tying it back. `wrapText` lives in
-`timeline-labels.ts` because the layout needs a label's height before it can
-place it, and the height is however many lines the text wraps to; existing
-newlines are kept as hard breaks. The hover drawer stays for text longer than
+mark keeps its immovable block on the axis and gets a card in the left column
+with a leader line tying it back. The hover drawer stays for text longer than
 five lines.
 
 ### 12.11 The label layout's contract
 
-Labels that do not fit are **dropped and reported, never spilled**. A first
-version let an oversized stack spill out of its space on the reasoning that
-crowded text beats absent text; every hand-written test passed, and a seeded
-randomised property check (300 cases, asserting only "no overlaps, no
-reordering") failed on its first run, with a stack crammed between two
-straddling blocks landing on a label sixty pixels away. What is dropped is a
-label, not a mark: the tick is still drawn, and the count of suppressed
-labels is shown. **The caller's order is the priority order.** The module
-holds no opinion about which labels matter; the panel hands them over in axis
-order, and a caller that wants something else can sort first.
-
-A mutation sweep found that the "shares the displacement" test used identical
-anchors, so it could not tell a mean from a first or a last, and that nothing
-forced a label into the second free range. A 5,000-case run showed the outer
-repeat-until-stable loop was dead, because the inner merge loop already
-converges; it was removed.
+Labels that do not fit are **dropped and reported, never spilled**. Letting an
+oversized stack spill out of its space, on the reasoning that crowded text
+beats absent text, passes every hand-written test and fails a seeded
+randomised check asserting only "no overlaps, no reordering": a stack crammed
+between two straddling blocks lands on a label sixty pixels away. What is
+dropped is a label, not a mark: the tick is still drawn, and the count of
+suppressed labels is shown. **The caller's order is the priority order.** The
+module holds no opinion about which labels matter; the panel hands them over
+in axis order, and a caller that wants something else can sort first.
 
 ---
 
 ## 13. Valid-time grammar
 
-How the panel draws **validity intervals**, per `VALIDITY_DESIGN.md`. The
-validity model is built, the snapshot carries per-source intervals on each
-`sourced_from` edge (`EdgeView.validity` is a list of `ValidityInterval`, in
-the snapshot payload and on the live `edge_stored` event, with
-`ValidityIntervalView` in `types.ts` as its wire shape), and the grammar below
-is built on top of it: `timeline-validity.ts` decides what each interval is and
-where it goes, `timeline-panel.ts` draws it. It was designed early because it
-exposed two rendering decisions (gaps, the now-line) that would otherwise have
-been made by accident in code.
+How the panel draws **validity intervals**, per `VALIDITY_DESIGN.md`: the
+per-source intervals each `sourced_from` edge carries in the snapshot and on
+the live `edge_stored` event. `timeline-validity.ts` decides what each interval
+is and where it goes; `timeline-panel.ts` draws it.
 
-Two of the marks below were built first for the other thing each was right for:
-the hatched band draws a point the order places, and the beads on a dotted
-spine draw a rule's occurrences (§12.6). Both are in `timeline-panel.ts`, and
-the valid-time marks reuse the shapes.
+Two of the shapes below also serve another feature: the hatched band draws a
+point the order places, and beads on a dotted spine draw a rule's occurrences
+(§12.6).
 
 **A rendered mock of every mark in this section is checked in at
 `dev-docs/mockups/valid-time-grammar.html`**: self-contained, theme-aware, no
@@ -601,38 +487,33 @@ that the data does not assert.** If two things are different in the model
 they must be different on screen; if the model refuses to claim something
 (open-world gaps, unknown endpoints), the pixels must refuse too.
 
-Provenance of the idea: Priestley's *Chart of Biography* (1765) drew certain
-lifespans as solid lines and uncertain ones as dots. The witness dot below is
-that idea; the overall register (muted bands, one accent, annotation over
-ornament) is the Information-is-Beautiful school.
-
 ### 13.1 The marks
 
 | Concept | Mark |
 |---|---|
-| Endpoint: **point** (stated) | Crisp bar cap with a short perpendicular tick; date label in the mono face |
+| Endpoint: **point** (stated) | Crisp bar cap: a short perpendicular tick |
 | Endpoint: **unknown** | The bar **dissolves**: a linear gradient to fully transparent over roughly 24px. "The edge is somewhere in this fog" |
-| Endpoint: **unbounded** | The bar keeps **full weight and exits the metacontext**. "There is no edge" |
+| Endpoint: **unbounded** | The bar keeps **full weight and runs off the edge of the drawing**. "There is no edge" |
 | **Witness point** | Solid dot on the bar with a faint halo ring. A claim with no endpoints and one witness, the commonest real record, is a dot with the bar fading **symmetrically** away from it in both directions |
-| **Vague label, resolved** ("during the Renaissance" with explicit approximate bounds) | **Hatched** band (45° line pattern), soft `c.` date labels, the stored label rendered verbatim on the band |
+| **Vague label, resolved** ("during the Renaissance" with explicit approximate bounds) | **Hatched** band (45° line pattern), the stored label rendered verbatim on the band |
 | **Vague label, unresolved**, nothing else placing the interval | Never placed on the axis. Goes to the undated tray (§12.6) as a chip, label intact |
 | **Labelled edge**: a named endpoint on an interval whose other endpoint or witness has a date | The placed part draws as usual. Towards the named side the bar keeps full weight for a short stub, the length of a fade, and ends square with the stored label sitting at its end, verbatim, in the mono face. No tick, no date, no fade: the edge is a word, and the word is drawn where the edge would be |
-| **Per-source validity** | One thin strip per source, stacked under the fact, each **direct-labelled** with its source. No filled union bar, ever. An optional summary is a **hollow dashed envelope** labelled "any source asserts", outline-only so it cannot be read as a claim |
+| **Per-source validity** | One thin strip per source, stacked under the fact, each **direct-labelled** with its source. No filled union bar, ever. An optional summary is a **hollow dashed envelope** whose tooltip reads "any source asserts", outline-only so it cannot be read as a claim |
 | Interval marked **stated** | Solid fill |
 | Interval marked **inferred** | Hollow fill (soft tint) with a dashed outline; squinting performs the stated-only filter the API offers |
 | Reflect-**proposed** boundary: an unknown edge reflect has offered a date for, taken from the claim on the other side of a succession | The solid body stops where the record's own dates stop. From there a hollow dashed extension in the pending colour runs to the proposed date and ends in a dashed cap of the same colour, with a chip beside it, "proposed · review". The extension replaces the fade that edge would otherwise wear, so an endpoint still carries one mark. Accepting rewrites the interval with that date and `inferred` basis, so the same stretch turns into an ordinary hollow dashed bar in the claim hue and the chip goes |
-| **Recurrence** (one node, several intervals) | Beads on a **hairline dotted claim spine**; the spine says "same claim, nothing asserted here" |
+| **Several periods** (one claim, one source, more than one interval) | One bar per period in the source's lane, joined by a **hairline dotted spine**; the spine says "same claim, nothing asserted here". A recurrence *rule*'s occurrences are beads on a dotted spine instead (§12.6) |
 | **`temporally_followed_by`** | A small elbow connector from the end of one claim's bar to the start of the next, with a terminal dot: order, not replacement. The renderer must be cycle-safe, since recurrence makes cycles legal for this edge |
-| Status **`HISTORICAL`** | Desaturated bar, **never hidden**: still true of its period |
+| Status **`HISTORICAL`** | Fainter bar (lower opacity), **never hidden**: still true of its period |
 | Status **`CORRECTED`** | Hidden by default, mirroring `include_corrected=off`; struck-through when summoned |
-| The **now-line** | A dashed **neutral** rule across the axis, labelled "now — this timeline's clock". It is the timeline's `reference_time`, never wall-clock |
+| The **now-line** | A dashed **neutral** rule across the axis, labelled "now". It is the timeline's `reference_time`, never wall-clock |
 
 ### 13.2 Rules: places a reasonable rendering would lie
 
 1. **A gap is never styled as "false".** Open world: outside a stated
    interval is *no assertion*. A red or shaded gap draws a claim nobody made.
 2. **Unknown and unbounded never share a treatment.** They are different
-   values in the model, so fade for one, metacontext-exit for the other.
+   values in the model, so fade for one, running off the edge for the other.
 3. **A label-only interval never sits on the axis.** Tray until resolved;
    resolution *adds* a position, it never replaces the words. An interval
    with a date at one end and a label at the other is not label-only: the
@@ -648,63 +529,46 @@ ornament) is the Information-is-Beautiful school.
    asserts an endpoint. Currency is a reading against the timeline's
    reference clock, not a stored boundary.
 8. **Soundness flags sit on the inference, not on its premises.** The
-   premises are not what is unsound.
+   premises are not what is unsound. No panel draws a soundness flag yet; the
+   rule is pinned by a test that no premise carries the pending colour.
 9. **A proposal never thickens the body.** The solid part ends at the last
    date the source gave. What reflect offers is drawn in the pending colour
    and hollow, which is the reading it would get once accepted, since an
    accepted boundary makes the interval `inferred`; until then it is not the
    record and is not coloured as if it were.
 
+
 ### 13.3 Colour tokens
 
-Validated in both themes with a perceptual checker (OKLCH lightness band,
-chroma floor, colour-vision-deficiency ΔE separation, contrast against the
-surface). This set became the **shared semantic palette for both panels**,
-`SemanticPalette` in `theme.ts`; `VISUALISATION.md` C.6 is the source of
-truth.
+The hues are the shared `SemanticPalette`, whose values, validation and
+reasons are `VISUALISATION.md` C.6. How this panel uses them:
 
-| Token | Light | Dark | Role |
-|---|---|---|---|
-| `claim` | `#2a78d6` | `#3987e5` | active claim bars, witness dots; also the graph's fact nodes |
-| `inference` | `#4a3aa7` | `#9085e9` | inference cards and marks; also the graph's inference nodes |
-| `topic` | `#1baf7a` | `#199e70` | the shared topic hue |
-| `historical` | `#8095aa` | `#5d6d7e` | HISTORICAL bars |
-| `pending` | `#9a6b00` on `#f6ecd4` | `#fab219` on `#33290e` | proposals, soundness flags |
+| Token | Role here |
+|---|---|
+| `fact` | fact and topic marks; the timeline draws topics in `fact` |
+| `inference` | inference cards and marks |
+| `pending` | proposals, on the `pendingSurface` ground |
+| contradiction | the contested zigzag |
 
-There is no `now` token. Red belongs to contradiction, which appears in both
-panels; the now-line is chrome, not data, and is a dashed neutral rule
-(`--text-secondary` stroke, `--text-strong` label). Chrome stays subordinate
-to data throughout: no bold, no semantic hue on axis furniture.
-
-**Source strips do not draw from this table.** A strip is always
-direct-labelled, so its hue carries no meaning and must not compete with one
-that does. They take a plain rotation whose only requirement is that adjacent
-strips in a stack differ; it is `stripHue` in `theme.ts`, deliberately outside
-`SemanticPalette`.
+The now-line is chrome, not data: a dashed neutral rule, with no token of its
+own. A historical strip keeps its strip hue at lower opacity, so the
+`historical` token is not drawn here. Source strips do not draw from the
+palette at all (`VISUALISATION.md` C.6).
 
 ### 13.4 Implementation notes
 
-- **Fits the existing panel.** Vertical axis, past at top; facts left,
-  inferences right; the undated tray absorbs unresolved labels and cross-clock
-  chips; the reference-time marker *is* the now-line. Bars are vertical spans
-  in lanes beside the axis, and the side text steps out past however many lanes
-  a side is using.
-- **Gradients and hatching** are plain SVG `linearGradient` / `pattern` fills
-  referencing the CSS variables; the mock has working markup.
-- **Every `temporally_followed_by` walk must be cycle-safe.** `successionOrder`
-  draws each step once and stops on a step it has already drawn, so a chain
-  that returns to its own lane terminates.
+- **Every `temporally_followed_by` walk must be cycle-safe.** Each step is
+  drawn once, and a walk stops on a step it has already drawn, so a chain that
+  returns to its own lane terminates.
 - **The tooltip layer** carries what the mark compresses: the `(source,
   interval)` pairs verbatim, endpoint kinds by name, `stated`/`inferred`, and
   the witness date. The mark is the summary; the tooltip is the record.
 - **Content time only.** These are periods the world was in, so they belong on
   the axis that measures when things happened. Plotting them against
   `created_at` would put a date on the wrong clock.
-- **Historical is dimmed rather than desaturated.** The table above says
-  desaturated, and the rule that has since settled across both panels gives
-  saturation to focus and opacity to status (`RETRIEVAL_PROVENANCE.md` §4.1).
-  A strip follows the later rule, so a claim the retrieval missed and a claim
-  that is history never arrive at the same appearance.
+- **Historical is dimmed rather than desaturated**, the panels' shared rule
+  (`VISUALISATION.md`, *Rules every panel follows*), so a claim the retrieval
+  missed and a claim that is history never arrive at the same appearance.
 - **Lanes are reused down the axis**, since column position carries no meaning:
   a lane is free again once the period above it has ended. A side draws three
   lanes at once and counts the rest, the way the label layout counts the labels
@@ -713,46 +577,26 @@ strips in a stack differ; it is `stripHue` in `theme.ts`, deliberately outside
   selecting a mark is the gesture this panel already uses for detail on demand
   (§12.10), so it needed no control of its own. It is drawn for a selected fact
   with more than one source, where there is a disagreement to summarise.
-- **A named endpoint keeps the rest of its interval on the axis.** The first
-  build sent the whole interval to the tray whenever either endpoint was a
-  label, because the only soft edge it had was the fade, and a fade on a named
-  thing reads as "we do not know where this edge is" when the source said
-  exactly where: it said "the Renaissance". The labelled edge removes that
-  objection, so the rule is now the one a dated edge already follows: an
+- **A named endpoint keeps the rest of its interval on the axis.** The source
+  said where that edge is ("the Renaissance"), so a fade, which says "we do not
+  know where", would be false; the labelled edge of §13.1 is the mark. An
   interval draws when a date or a witness places it, and each endpoint wears
-  its own mark. An unbounded edge still anchors an unknown neighbour at the
-  panel edge but not a named one, since a stub a fixed distance from that
-  edge would read as a date the data does not hold. The stub asserts no extent, the way a fade asserts none; it is
-  a fixed length in pixels, counted into the strip's `top`/`bottom` so lanes
-  and the envelope make room for it. The word itself is rotated into the lane's
-  own column and reads away from the body, the way a lane wears its source
-  name: a horizontal word would cross whatever the neighbouring lanes draw.
-  The tooltip still says `(named, no date)`. Only an interval nothing places,
-  two labels, or a label beside an unknown or unbounded edge with no witness,
-  still goes to the tray.
-- **A proposed boundary is derived, never stored.** Reflect already works
-  proposals out from a `temporally_followed_by` edge plus a located date on
-  the other claim (`pipelines/reflection/boundaries.py`), and writes nothing;
-  a stored "proposed" field would be a snapshot of that derivation that goes
-  stale the moment either claim changes. So the snapshot carries
-  `boundary_proposals`, computed inside the same guard turn from the same
-  reads that produce the strips, which keeps the strips and the proposals
-  describing one instant. The rule stays in one place: the derivation is
-  split into a pure core over nodes, succession edges and per-source
-  validity, and both `reflect` and `assemble_snapshot` call it, so the
-  browser never re-derives a server rule. A proposal names its node, source,
-  endpoint, clock and date, and the claim and source it was read from, which
-  is what the tooltip shows. The chip is passive: the dashboard is the read
-  side, and accepting goes through `apply_reflection(boundaries=…)` exactly
-  as it does today. Nothing needs to withdraw a proposal once accepted,
-  because a closed edge is not one reflect offers a date for. A declined
-  proposal is not drawn either: the snapshot reads the graph's
-  `boundary_declined` and `reopened` rows (`viz_list_decisions`) and hands
-  them to the same pure core, so the endpoint wears the mark it would
-  without the proposal. An interval
-  nothing dates, one whose only date would be the proposal, stays in the
-  tray with a pending badge on its chip: the graph holds no date for it yet,
-  and the proposal cannot place what the record does not.
+  its own mark. The stub asserts no extent, the way a fade asserts none: it is
+  a fixed length in pixels, and its word is rotated into the lane's own column
+  so it cannot cross what the neighbouring lanes draw. Only an interval nothing
+  places, two labels, or a label beside an unknown or unbounded edge with no
+  witness, still goes to the tray.
+- **A proposed boundary is derived, never stored.** Reflect works proposals out
+  from a `temporally_followed_by` edge plus a located date on the other claim,
+  and writes nothing; a stored "proposed" field would be a snapshot of that
+  derivation that goes stale the moment either claim changes. So the snapshot
+  carries `boundary_proposals`, worked out by the same pure core `reflect`
+  calls, from the same reads that produce the strips, and the browser never
+  re-derives a server rule. The chip is passive: the dashboard is the read
+  side, and accepting goes through `apply_reflection(boundaries=…)`. A declined
+  proposal is not drawn, so the endpoint wears the mark it would without it. An
+  interval whose only date would be the proposal stays in the tray with a
+  pending badge on its chip: the graph holds no date for it yet.
 - **A timeline with a stated `reference_time` keeps its own clock.** An
   interval naming no clock is measured against the default wall-clock timeline,
   which is the one that states no present (`VALIDITY_DESIGN.md` §2.5), so it

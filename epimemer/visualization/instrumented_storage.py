@@ -1089,6 +1089,19 @@ class InstrumentedStorage:
     ) -> Sequence[NodeEdge]:
         return await self._inner.viz_list_edges(database)
 
+    async def viz_list_embeddings(
+        self,
+        database: str,
+        *,
+        item_ids: Sequence[str] | None = None,
+        model_id: str | None = None,
+    ) -> Sequence[EmbeddingRecord]:
+        return await self._inner.viz_list_embeddings(
+            database,
+            item_ids=item_ids,
+            model_id=model_id,
+        )
+
 
 def instrument_storage(
     inner: object, bus: InProcessEventBus, default_threshold: int = 10

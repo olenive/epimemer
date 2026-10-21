@@ -558,8 +558,8 @@ class TestReflectCatchesRecurrenceItsOwnWay:
     ):
         """Widening what is compared must not mean scoring the matrix twice.
 
-        This phase is the one that crosses the tool timeout as a graph grows
-        . The pairs are quadratic; splitting the scored set into
+        This phase is the one that crosses the tool timeout as a graph grows.
+        The pairs are quadratic; splitting the scored set into
         contradictions and recurrences is free, and computing it twice is not.
         """
         sizes: list[int] = []

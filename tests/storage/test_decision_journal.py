@@ -1,4 +1,4 @@
-"""The journal, on both backends (REVIEW_MODE.md §4, §10.5).
+"""The journal, on every backend (REVIEW_MODE.md §4).
 
 Attribution on the rows answers *who judged this node*. This table answers the
 inverse — *what did this agent judge* — which over fields scattered across
@@ -11,8 +11,8 @@ And **`reviewed` is derived** from a row pointing back, never stored as a flag �
 the mutable-copy-in-two-places shape that per-edge-type migration and the
 drifted lookup tables both were.
 
-Both backends, because a nullable field one store keeps and the other drops is
-the divergence `tests/conftest.py` exists for — and here it would be invisible
+Every backend, because a nullable field one store keeps and another drops is
+the divergence `tests/conftest.py` exists for, and here it would be invisible
 until somebody asked who decided something months later.
 """
 
@@ -125,7 +125,7 @@ class TestWhatDidThisAgentJudge:
     async def test_no_ids_at_all_matches_nothing(self, storage):
         """Not everything. An empty list is a caller that named a judge with no
         keys, which is not the same as a caller that named no judge — and the
-        two backends have to agree, because a `WHERE … IN []` and a Python `in`
+        backends have to agree, because a `WHERE … IN []` and a Python `in`
         over an empty set are two implementations of one promise."""
         await storage.record_decision(_record(judged_by=CRITIC))
 
@@ -292,7 +292,7 @@ class TestOrder:
     async def test_a_batch_sharing_one_timestamp_is_ordered_the_same_way_by_both(self, storage):
         """Rows written in one call share a timestamp to the microsecond. The
         tiebreak is arbitrary — the point is that it is the *same* arbitrary on
-        both backends, or a parity test passes or fails on the clock."""
+        every backend, or a parity test passes or fails on the clock."""
         records = [_record(decided_at=AT) for _ in range(5)]
         for record in records:
             await storage.record_decision(record)

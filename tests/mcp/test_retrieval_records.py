@@ -34,12 +34,12 @@ def _record(record_id: str = "000000000001", **over) -> RetrievalRecord:
 class TestProvenance:
     def test_a_tool_that_does_not_rank_says_direct(self):
         """§3: `find_nodes`, `graph_as_of`, `query_changes` and `topic_tree` return
-        nodes without ranking them. `LEXICAL_SEARCH.md` §6 left room for this
+        nodes without ranking them. `docs/RETRIEVAL.md` §4 left room for this
         fifth value rather than pretending they were vector hits."""
         assert SeedProvenance.DIRECT.value == "direct"
 
     def test_an_unranked_node_carries_no_score(self):
-        """§9: showing a blank is honest; showing 1.0 would be a lie."""
+        """`docs/RETRIEVAL.md` §4: showing a blank is honest; showing 1.0 would be a lie."""
         node = RetrievedNode(node_id="n1", provenance=SeedProvenance.DIRECT)
         assert node.score is None
 

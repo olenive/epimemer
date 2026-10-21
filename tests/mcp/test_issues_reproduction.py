@@ -1,17 +1,11 @@
-"""Regression tests for the defects documented in ISSUES.md.
+"""Regression guards for five defects found in an early empirical walkthrough.
 
-Each test reconstructs the scenario from the empirical walkthrough described in
-ISSUES.md. They began life as ``xfail(strict=True)`` reproductions — failing
-against the buggy code to confirm each defect was present. The defects have
-since been fixed (embed-on-supersession, status-filtered vector search, and
-edge migration in ``supersede_node``), so the markers are gone and these now
-assert the corrected behaviour as permanent regression guards.
-
-Issues 4 and 5 were classified minor / by-design; their tests document the
-behaviour that was deliberately kept (history edges are hidden from default
-traversal; ``link`` resolves epistemic nodes only).
-
-References are to ISSUES.md (discovered 2026-06-25).
+Each test reconstructs one scenario from that walkthrough, numbered as it
+numbered them. The first three were fixed (embed-on-supersession,
+status-filtered vector search, and edge migration in ``supersede_node``), and
+their tests assert the corrected behaviour. The last two were classified minor
+or by design, and their tests pin the behaviour that was kept: history edges are
+hidden from default traversal, and ``link`` resolves epistemic nodes only.
 """
 
 from datetime import UTC, datetime
@@ -240,8 +234,8 @@ class TestIssue5LinkCannotTargetDocument:
 
 
 class TestCombinedUpdateRetrieval:
-    """ISSUES.md intro: after `update`, the correction is findable and the stale
-    version no longer ranks. Requires Issue 1 (embed) and Issue 2 (status filter)."""
+    """The headline failure: after `update`, the correction is findable and the
+    stale version no longer ranks. Requires Issue 1 (embed) and Issue 2 (status filter)."""
 
     async def test_update_makes_correction_findable_and_hides_stale(
         self, storage, embedding_provider

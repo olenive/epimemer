@@ -99,7 +99,7 @@ class TestVocabulary:
         assert actions[0].verb is ActionVerb.WORLD_CHANGED
 
     def test_there_is_no_superseded_verb(self):
-        """The one thing §3.1 rules out by name: "superseded 123 → 124" flattens
+        """The one thing §11 rules out by name: "superseded 123 → 124" flattens
         the distinction the validity model exists to record. The legacy `SUPERSEDED` status —
         rows that genuinely do not say which act they were — reads as the
         unclassified `undetermined`, not as a guess at one of the two."""
@@ -109,9 +109,9 @@ class TestVocabulary:
         assert verb_for_status(NodeStatus.SUPERSEDED) is ActionVerb.UNDETERMINED
 
     def test_an_unrecognised_status_does_not_claim_the_node_was_retired(self):
-        """§11.1 amended (2026-08-19). The fall-through used to answer `retired`,
-        on the reasoning that "it left the active set" is the only part that can
-        be relied on. That is an assumption, not a fact: `ACTIVE → restored` is
+        """§11.1. A fall-through answering `retired` would rest on the reasoning
+        that "it left the active set" is the only part that can be relied on.
+        That is an assumption, not a fact: `ACTIVE → restored` is
         already a non-retirement flowing through the same transaction, so a
         status added later need not be a retirement either. The default names
         the absence of a determination instead of inventing one."""

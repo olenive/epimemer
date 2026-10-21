@@ -5,9 +5,9 @@ to the hub (`hub_client.py`), registers, publishes events, and answers snapshot
 / graph-list RPCs against its own storage. Browsers connect to the hub, pick a
 session from a selector, and view that session's graph live.
 
-This replaces the old embedded per-process viz server (`ws_server.py`): the MCP
-process never binds the port, so stale MCP orphans become dead sessions rather
-than a stray server answering on the port with the wrong (empty) graph.
+The MCP process never binds the port, so a stale MCP orphan becomes a dead
+session rather than a stray server answering on the port with the wrong (empty)
+graph.
 
 Run it:
 
@@ -35,6 +35,7 @@ from typing import Any
 from uuid import uuid4
 
 import uvicorn
+from pydantic import ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, PlainTextResponse
@@ -42,7 +43,15 @@ from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from epimemer.visualization.protocol import RpcRequest, SessionInfo
+from epimemer.core.types import NodeType
+from epimemer.visualization.protocol import (
+    INGEST_MAX_MESSAGE_BYTES,
+    VIZ_SCHEMA_VERSION,
+    Register,
+    RpcRequest,
+    SessionInfo,
+    spoken_schema_version,
+)
 from epimemer.visualization.ring import (
     LOG_RING_CAPACITY,
     RETRIEVAL_RING_CAPACITY,
@@ -66,7 +75,7 @@ ACTION_EVENT_TYPE = "graph_action_recorded"
 # The warnings the log reads, in the same ring as the acts and never a second
 # one. Replay has to reproduce arrival order, and two rings replayed one after
 # the other would put every warning after every act
-# (`WARNINGS_DASHBOARD.md` §3).
+# (`EVENT_LOG.md` §12.3).
 ADVISORY_EVENT_TYPE = "advisory_raised"
 
 # Retrieval records, mirrored here so the selector, focus mode and the Response
@@ -124,8 +133,8 @@ def create_hub_app() -> Starlette:
     State lives in two dicts captured by the route closures (single event loop,
     so no locks beyond what each await naturally serializes):
 
-    - ``sessions``: session_id -> {ws, info, pending_rpcs, connected,
-      last_event_at, drop_handle, actions}
+    - ``sessions``: session_id -> {ws, info, schema_version, pending_rpcs,
+      connected, last_event_at, drop_handle, actions, retrievals}
     - ``browsers``: WebSocket -> {seq, session, graphs}  (per-connection seq +
       subscription to one session and an optional graph set)
 
@@ -149,9 +158,10 @@ def create_hub_app() -> Starlette:
     async def _send(ws: WebSocket, st: dict[str, Any], message: dict) -> bool:
         """One message to one browser, stamped with that browser's own `seq`.
 
-        `seq` is per connection and starts at 0, so it detects a drop on this
-        socket and says nothing about position in any stream — which is why a
-        log entry carries its own `action_id` (§4.1).
+        `seq` is per connection, and the first message on a connection carries
+        1. It detects a drop on this socket and says nothing about position in
+        any stream, which is why a log entry carries its own `action_id`
+        (EVENT_LOG.md §4.1).
         """
         st["seq"] += 1
         try:
@@ -196,9 +206,9 @@ def create_hub_app() -> Starlette:
 
         The same subscription test the live path uses, so a replayed entry can
         never reach a browser a live one would not have — an entry from graph A
-        must not highlight into graph B (EVENT_LOG.md §6). Per-session by
-        construction: the ring hangs off the session, so records from two
-        sessions cannot mix however they interleave in time.
+        must not highlight into graph B (VISUALISATION.md, Rules every panel
+        follows). Per-session by construction: the ring hangs off the session,
+        so records from two sessions cannot mix however they interleave in time.
         """
         sess = sessions.get(st["session"] or "")
         if sess is None:
@@ -213,6 +223,10 @@ def create_hub_app() -> Starlette:
         info: SessionInfo = sess["info"]
         return {
             **info.model_dump(mode="json"),
+            # The contract this session speaks, so a client can tell before it
+            # asks; `protocol.UNVERSIONED_SCHEMA`, 0, for one whose Register
+            # predates the field.
+            "schema_version": sess["schema_version"],
             "connected": sess["connected"],
             "last_event_at": sess["last_event_at"].isoformat() if sess["last_event_at"] else None,
         }
@@ -249,8 +263,13 @@ def create_hub_app() -> Starlette:
         if first.get("type") != "register":
             await ws.close(code=1002)
             return
+        try:
+            register = Register.model_validate(first)
+        except ValidationError:
+            await ws.close(code=1002)
+            return
 
-        info = SessionInfo.model_validate(first["info"])
+        info = register.info
         sid = info.session_id
 
         # Reconnect of a known session: cancel any pending drop and reuse the slot.
@@ -261,6 +280,7 @@ def create_hub_app() -> Starlette:
         sessions[sid] = {
             "ws": ws,
             "info": info,
+            "schema_version": spoken_schema_version(register),
             "pending_rpcs": {},
             "connected": True,
             "last_event_at": existing["last_event_at"] if existing else None,
@@ -302,8 +322,9 @@ def create_hub_app() -> Starlette:
 
                 elif mtype == "register":
                     # active_graph (or other info) changed — update registry.
-                    new_info = SessionInfo.model_validate(msg["info"])
-                    sessions[sid]["info"] = new_info
+                    again = Register.model_validate(msg)
+                    sessions[sid]["info"] = again.info
+                    sessions[sid]["schema_version"] = spoken_schema_version(again)
                     await _broadcast_system(
                         {
                             "type": "session_connected",
@@ -387,6 +408,7 @@ def create_hub_app() -> Starlette:
                 "service": HUB_SERVICE,
                 "pid": os.getpid(),
                 "version": VERSION,
+                "schema_version": VIZ_SCHEMA_VERSION,
                 "sessions": len(sessions),
             }
         )
@@ -406,7 +428,7 @@ def create_hub_app() -> Starlette:
         Read-only, and the dashboard's panel is too: a write from the browser
         would be the first write into a graph with no author, and every change
         today is journalled against a session and a judge
-        (`WARNINGS_DASHBOARD.md` §2.4).
+        (`EVENT_LOG.md` §12.4).
         """
         session_id = request.query_params.get("session")
         if not session_id:
@@ -421,6 +443,31 @@ def create_hub_app() -> Starlette:
                 {"error": "Missing 'session' or 'graph' query parameter"}, status_code=400
             )
         return await _rpc_endpoint(session_id, "snapshot", {"graph": graph})
+
+    async def api_embeddings(request: Request) -> JSONResponse:
+        """The vectors of one graph's active nodes, of one type when asked.
+
+        Its own route rather than part of the snapshot, which would grow
+        several times over to carry them (`snapshot.assemble_embeddings`).
+        The type is checked here, so a misspelt one is a 400 naming the values
+        rather than a round trip to the session.
+        """
+        session_id = request.query_params.get("session")
+        graph = request.query_params.get("graph")
+        if not session_id or not graph:
+            return JSONResponse(
+                {"error": "Missing 'session' or 'graph' query parameter"}, status_code=400
+            )
+        node_type = request.query_params.get("node_type")
+        allowed = [kind.value for kind in NodeType]
+        if node_type is not None and node_type not in allowed:
+            return JSONResponse(
+                {"error": f"Invalid 'node_type' query parameter; allowed: {', '.join(allowed)}"},
+                status_code=400,
+            )
+        return await _rpc_endpoint(
+            session_id, "embeddings", {"graph": graph, "node_type": node_type}
+        )
 
     async def api_retrievals(request: Request) -> JSONResponse:
         """This session's retrieval records, payloads included.
@@ -469,6 +516,7 @@ def create_hub_app() -> Starlette:
         Route("/api/graphs", api_graphs),
         Route("/api/warnings", api_warnings),
         Route("/api/snapshot", api_snapshot),
+        Route("/api/embeddings", api_embeddings),
         Route("/api/retrievals", api_retrievals),
         WebSocketRoute("/ws", handle_browser),
         WebSocketRoute("/ingest", handle_ingest),
@@ -610,7 +658,12 @@ def run() -> int:
 
     _write_pidfile()
     logger.info("Visualization hub listening on http://%s:%d", host, port)
-    config = uvicorn.Config(create_hub_app(), log_level="warning", lifespan="off")
+    config = uvicorn.Config(
+        create_hub_app(),
+        log_level="warning",
+        lifespan="off",
+        ws_max_size=INGEST_MAX_MESSAGE_BYTES,
+    )
     server = uvicorn.Server(config)
     try:
         asyncio.run(server.serve(sockets=[sock]))

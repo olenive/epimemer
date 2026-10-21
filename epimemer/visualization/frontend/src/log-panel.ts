@@ -12,7 +12,7 @@
  *
  * A warning is a line in the story of a session beside the act it accompanied,
  * which is why it is a row here rather than a panel of its own
- * (WARNINGS_DASHBOARD.md §2.3). It carries a `warned` verb, so the chip row
+ * (EVENT_LOG.md §12.3). It carries a `warned` verb, so the chip row
  * can show warnings alone or leave them out with no special case.
  */
 
@@ -214,7 +214,7 @@ export const initLogPanel = (
   /**
    * Fold one entry in, whichever stream it came from.
    *
-   * An entry from graph A must never highlight into graph B (§6). The
+   * An entry from graph A must never highlight into graph B (VISUALISATION.md, Rules every panel follows). The
    * subscription already scopes this; the check stays because the panel is what
    * would show the mistake.
    */

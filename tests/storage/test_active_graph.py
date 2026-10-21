@@ -137,9 +137,9 @@ async def _mover(guard) -> str:
 
 class TestNesting:
     async def test_a_move_inside_a_move_is_one_turn(self):
-        """`assemble_snapshot` takes a turn for its four reads so the snapshot is
-        of one instant, and each read takes one of its own so a direct caller is
-        safe without knowing that."""
+        """A dashboard snapshot request takes one turn for every read behind it
+        so the snapshot is of one instant, and each read takes one of its own so a
+        direct caller is safe without knowing that."""
         guard = make_graph_guard()
 
         async with guard.moving():
@@ -212,9 +212,10 @@ class TestTheBackendsTakeTheirOwnTurn:
 
 
 class TestOnlyTheBorrowerPaysForTheBorrow:
-    """The two backends read another graph by different means, and only one of
-    them touches the active graph to do it. The asymmetry is deliberate, and
-    testing it is what stops somebody 'tidying' the backends into agreement."""
+    """SurrealDB and the in-memory store read another graph by different means,
+    and only SurrealDB touches the active graph to do it: it borrows its one
+    connection. The asymmetry is deliberate, and testing it is what stops
+    somebody 'tidying' the backends into agreement."""
 
     async def test_surrealdb_defers_a_snapshot_to_the_call_in_flight(self):
         store = SurrealDBStorage(url="mem://")

@@ -7,8 +7,8 @@ import { semanticPaletteFor, stripHue, type Theme } from "./theme";
 
 const THEMES: Theme[] = ["light", "dark"];
 
-// #56: the two panels are the halves of one split pane, and they disagreed
-// about what colour a fact is — graph green, timeline blue. A user watching a
+// The two panels are the halves of one split pane, and they once disagreed
+// about what colour a fact is: graph green, timeline blue. A user watching a
 // fact appear in one and move in the other saw it change kind. These assert the
 // agreement rather than the values, so re-picking a hue stays a one-line change
 // and drifting apart again does not.

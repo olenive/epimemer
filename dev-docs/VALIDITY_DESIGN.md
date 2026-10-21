@@ -1,10 +1,15 @@
 # Temporal validity: the design
 
+A design, built: the model is `epimemer/core/temporal.py`, read back by
+`epimemer/pipelines/query/validity.py` and checked at reflect by
+`epimemer/pipelines/reflection/soundness.py` and `boundaries.py`.
+
 The graph records **when** a claim was true, per source, so that a claim that
 was right of its period is never filed as an error and an inference cannot
 silently combine claims that were never simultaneously true. `docs/VALIDITY.md`
 describes the behaviour a caller sees; this document holds the model and the
-reasons. Three decisions are lettered T1, T2 and T3 throughout the codebase:
+reasons. Three decisions are lettered T1, T2 and T3 throughout the codebase,
+and code cites T1's parts as `T1 §N`, which is §2.N here:
 
 - **T1, what a validity interval is and where it lives.** Validity is carried
   on the **`sourced_from` edge**, per source, measured against a named
@@ -141,11 +146,11 @@ explicitly.
 
 **No consumer branches on the endpoint kind.** Everything downstream asks the
 comparison question and consumes the answer, so adding a kind touches one
-module. `instant_kind` is read in exactly two files, `core/temporal.py` and
-the ingest guidance that has to name the shapes an agent writes; a
-structural test fails the moment a third appears. The imprecise-instant type
-is named generally rather than for validity, because `published_at` uses it
-too (§2.7).
+module. A structural test holds this: only the definition and the ingest
+guidance that names the shapes an agent writes read `instant_kind`. The
+dashboard reads it too, because giving each kind its own mark is its job. The
+imprecise-instant type is named generally rather than for validity,
+because `published_at` uses it too (§2.7).
 
 **A self-contradictory interval is refused at construction**, on definite
 violations only: a start at or after its end, or a witness its own endpoints
@@ -226,9 +231,9 @@ what is ingested, not by what the model knows.
 But judging **tense** (whether *"the city is called X"* leaves an interval
 open) is already reading rather than copying, so every interval is marked
 `stated` (dates present in the text) or `inferred` (from tense, context, or
-two sources jointly), and world knowledge is forbidden rather than marked. A
-caller can filter to stated-only, which is what makes the discipline
-auditable.
+two sources jointly), and world knowledge is forbidden rather than marked.
+Every interval carries its basis, so a caller can keep only the stated ones,
+which is what makes the discipline auditable.
 
 ### 2.9 When it is written: ingest extracts, reflect proposes
 
@@ -254,8 +259,9 @@ declined (`apply_reflection(boundaries_declined=…)`), and the decline is a
 journal row keyed on the question (claim and source as subjects, endpoint,
 date and clock in `covers`), never an edge: the two claims in a succession
 are often also nominated as a similar or contradictory pair, and an
-`assessed` edge between them would silence those nominations too. The soundness check and the boundary proposals each cost about 10% of a
-`reflect` call, linear (`BENCHMARKS.md`).
+`assessed` edge between them would silence those nominations too. On a graph
+with no intervals, the soundness check and the boundary proposals each cost
+about 10% of a `reflect` call, linear in the graph (`BENCHMARKS.md`).
 
 ### 2.10 Comparison: four values, `unknown` among them
 
@@ -318,9 +324,7 @@ that `because` asks for.
 That split also answers an objection: marking a node `HISTORICAL` does not
 violate "the agent is not a source". That rule governs assertions about the
 world; a status is bookkeeping about the graph's own answer, the same tier as
-`archived`. And the two can disagree in a checkable way: an interval closed
-in 1991 on a node still marked current is a defect the graph can find in
-itself.
+`archived`.
 
 ### 3.1 Why status cannot be derived from intervals
 
@@ -402,14 +406,13 @@ A claim retired `HISTORICAL` and asserted again by a later document is
   `HISTORICAL` nodes, and candidates carry their `status`, because an agent
   cannot otherwise tell an active twin from a historical one, which is the
   entire basis for choosing between `redundant` and `recurs`.
-- **`vector_search` takes `statuses: frozenset[NodeStatus]`**, defaulting to
-  active only, on the protocol and both backends. Both seed routes take the
-  set, not a singular status; while `text_search` took one, the lexical half
-  of a hybrid search was the half that could not see historical nodes. A
-  second retired-only lookup method was rejected because it would duplicate
-  the SurrealDB over-fetch machinery, the only difficult part of that adapter.
+- **Both seed routes, `vector_search` and `text_search`, take `statuses:
+  frozenset[NodeStatus]`**, defaulting to active only. A route taking a single status would leave its half of a
+  hybrid search unable to see historical nodes. A second retired-only lookup
+  method was rejected because it would duplicate the SurrealDB over-fetch
+  machinery, the only difficult part of that adapter.
 - **`recurs` is a verdict of its own.** `redundant` assumes an active twin
-  and `succeeds` assumes a different claim following; `recurs` means *the same
+  and `supersedes` assumes a different claim following; `recurs` means *the same
   claim, previously retired `HISTORICAL`, asserted true again*. Its action is
   reactivation: `restore` to `ACTIVE` plus a new `sourced_from` edge carrying
   the new document's interval, in one transaction, because a node back to
@@ -427,7 +430,7 @@ A claim retired `HISTORICAL` and asserted again by a later document is
 holiday period" is a recurrence *rule*: it never stops being true, so it
 never retires, never restores, and enumerating its occurrences as validity
 intervals is the wrong representation even though the lists could hold them.
-That is the `CyclicalTimeline` case (`PROPOSED_FEATURES.md`). Individual
+It is a recurrence rule on a timeline (`TIMELINES.md` §2.4). Individual
 occurrences ("Christmas 2025 in Berlin") are event facts, which are never
 interval-unioned into the rule.
 
@@ -460,15 +463,19 @@ fact and merely lacks a date. **A filter converts missing metadata into a
 false negative, silently.**
 
 The rule, stated once: **wherever open-world data meets a boolean question,
-the answer has three values, and squeezing it into two is where the lie
-enters.** Derived status (T2), interval comparison (§2.10) and retrieval are
-three instances.
+the answer needs an *unknown*, and squeezing it into yes or no is where the
+lie enters.** Derived status (T2), interval comparison (§2.10) and retrieval
+are three instances.
 
-So `search(valid_as_of=…)` answers with groups: **provably valid at `t`**
-(intervals cover it), **unknown** (the claim is held; its validity cannot be
-determined), and excluded (provably not valid). Nothing is dropped silently
-and the shape of the ignorance is visible. This is `before | after | overlap
-| unknown` applied at retrieval rather than between two intervals.
+So `search(valid_as_of=…)` answers with two groups: **provably valid at `t`**
+(some source's interval covers it) and **unknown** (the claim is held; its
+validity cannot be determined). Nothing is dropped and the shape of the
+ignorance is visible. There is no group for *provably not valid*: under §2.6
+an interval asserts nothing about the outside, so nothing can prove a claim
+was false at a moment, and a group nothing can fill would be a dead branch in
+every caller. If closed-world assertions are ever marked, that group arrives
+with them. This is `before | after | overlap | unknown` applied at retrieval
+rather than between two intervals.
 
 ### 4.2 Reachability: two parameters, the asymmetry in the defaults
 
@@ -514,9 +521,11 @@ wrong axis. So transaction-time lookup is `graph_as_of`, and the bucketed query 
 T1 keys intervals by timeline, and `Timeline.reference_time` is that
 timeline's *now*. So *is this claim current?* must be asked against the
 relevant clock: a claim in a fictional metacontext is current when its interval
-contains that timeline's reference time, not wall-clock now. The first
-implementation of any "is it current" reader will reach for
-`datetime.now()`, which is why this is written down.
+contains that timeline's reference time, not wall-clock now. Nothing in the
+server answers "is it current" on its own: a caller asks
+`search(valid_as_of=…, timeline_id=…)` with that timeline's reference time.
+Any reader that does answer it must resolve the timeline's clock rather than
+reach for `datetime.now()`, which is why this is written down.
 
 ---
 
@@ -533,55 +542,3 @@ implementation of any "is it current" reader will reach for
 - **A `succeeded_by` lineage relation as the whole answer.** Recurrence makes
   cycles, and a lineage chain cannot hold them; its cheap half survived as
   the status split.
-- **Deriving status from intervals** (§3.1).
-- **A node-level validity set** (§2.2).
-- **A default collapse rule** (§2.3).
-- **A boolean `asserted_as_current`** (§2.7).
-- **A fallback from `created_at` to `published_at`** (§2.7).
-- **A valid-time filter** (§4.1).
-- **`CORRECTED` unreachable from search** (§4.2).
-- **A second retired-only lookup method** (§3.3).
-
----
-
-## 6. Tests
-
-`tests/pipelines/test_validity.py`, `test_supersession_kind.py` and the
-storage parity suite pin, among others:
-
-- a fact superseded because the world changed stays retrievable as
-  true-of-its-period, and is distinguishable from one superseded because it
-  was wrong;
-- a claim that holds over two disjoint periods is one node carrying both;
-- an inference whose premises' asserted intervals do not intersect is
-  flagged, and one whose premises are merely `unknown` is not; adding one
-  wider source interval that bridges them clears the flag;
-- a claim with no intervals is distinguishable from one asserted always-true;
-- overlap against a label-only interval reports `unknown`, not disjoint;
-- `unknown` and `unbounded` endpoints are distinguishable through storage and
-  back;
-- two sources asserting different periods for one fact are readable
-  separately;
-- intervals measured on different timelines compare as `unknown`;
-- a document with no `published_at` yields no witness point;
-- `inferred` and `stated` are distinguishable, and a caller can filter to
-  stated-only;
-- validity edges survive a node merge with their attribution intact;
-- a `Topic` has nowhere to put an interval;
-- a world-change writes `temporally_followed_by`, a correction writes
-  `superseded_by`, and neither writes the other;
-- a `HISTORICAL` node can be restored; a `CORRECTED` node cannot;
-- similarity nomination surfaces a `HISTORICAL` twin as a candidate for a
-  paraphrased re-assertion;
-- a `recurs` resolution reactivates the twin and attaches the new source's
-  edge and interval, leaving the prior intervals and the
-  `temporally_followed_by` record untouched;
-- `temporally_followed_by` does not migrate on a later supersession; a cycle
-  terminates every walker; two same-direction transitions between one pair
-  coexist as two edges;
-- a `HISTORICAL` node is returned by a default `search`, a `CORRECTED` node is
-  not, and both are reachable when their parameter is set;
-- when a historical node and its successor both match, the result holds one
-  slot with the historical node attached;
-- `graph_as_of` answers about transaction time, and nothing named `as_of`
-  remains to be misread.

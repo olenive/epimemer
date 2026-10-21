@@ -24,7 +24,11 @@ from epimemer.core.types import (
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
-from epimemer.mcp.config import ServerConfig, create_storage
+from epimemer.mcp.config import ServerConfig, create_storage, load_config
+from epimemer.storage.memory import InMemoryStorage
+from epimemer.storage.sqlite_adapter import SQLiteStorage
+from epimemer.storage.surrealdb_adapter import SurrealDBStorage
+from tests.storage.test_storage_parity import HOSTILE_GRAPH_NAMES
 
 
 async def _fact(storage, embedder, content: str) -> Fact:
@@ -90,6 +94,82 @@ class TestWhichGraphAServerOpens:
         second = create_storage(config)
 
         assert first.current_database == second.current_database == "field-notes"
+
+    def test_the_in_memory_backend_opens_the_graph_epimemer_graph_names(self, monkeypatch):
+        """It used to open "default" whatever the variable said, unlike every
+        other backend."""
+        monkeypatch.setenv("EPIMEMER_STORAGE_BACKEND", "memory")
+        monkeypatch.setenv("EPIMEMER_GRAPH", "field-notes")
+
+        storage = create_storage(load_config())
+
+        assert storage.current_database == "field-notes"
+
+    def test_the_in_memory_backend_without_epimemer_graph_opens_the_default(self, monkeypatch):
+        monkeypatch.setenv("EPIMEMER_STORAGE_BACKEND", "memory")
+        monkeypatch.delenv("EPIMEMER_GRAPH", raising=False)
+
+        storage = create_storage(load_config())
+
+        assert storage.current_database == "default"
+
+
+def _created(backend: dict, name: str):
+    """The configured backend, made by its own constructor on graph `name`."""
+    kind = backend["storage_backend"]
+    if kind == "memory":
+        return InMemoryStorage(database=name)
+    if kind == "sqlite":
+        return SQLiteStorage(backend["sqlite_dir"], database=name)
+    if kind == "surrealdb":
+        return SurrealDBStorage(database=name)
+    # Imported here because the driver is an optional extra.
+    from epimemer.storage.postgres_adapter import PostgresStorage
+
+    return PostgresStorage(backend["postgres_dsn"], database=name)
+
+
+class TestEveryBackendOpensTheSameGraph:
+    """One rule whichever backend is configured: `EPIMEMER_GRAPH`, else
+    "default". Construction connects to nothing, so the persistent backends
+    need no server here."""
+
+    @pytest.fixture(params=["memory", "sqlite", "surrealdb", "postgres"])
+    def backend(self, request, tmp_path) -> dict:
+        if request.param == "postgres":
+            pytest.importorskip("psycopg", reason="the postgres extra is not installed")
+        return {
+            "storage_backend": request.param,
+            "sqlite_dir": str(tmp_path / "graphs"),
+            "postgres_dsn": "postgresql://epimemer@db.example.org:5432/epimemer",
+        }
+
+    def test_epimemer_graph_names_the_graph(self, backend):
+        storage = create_storage(ServerConfig(**backend, graph="field-notes"))
+
+        assert (storage.backend_name, storage.current_database) == (
+            backend["storage_backend"],
+            "field-notes",
+        )
+
+    def test_nothing_named_lands_on_the_default(self, backend):
+        storage = create_storage(ServerConfig(**backend))
+
+        assert (storage.backend_name, storage.current_database) == (
+            backend["storage_backend"],
+            "default",
+        )
+
+    @pytest.mark.parametrize("name", [*HOSTILE_GRAPH_NAMES, "../escape"])
+    def test_a_bad_name_is_refused_when_the_backend_is_created(self, backend, name):
+        """By the constructor, so the rule holds for every caller and not only
+        `create_storage`, which reads an empty `EPIMEMER_GRAPH` as unset."""
+        with pytest.raises(ValueError, match="Invalid graph name"):
+            _created(backend, name)
+
+    def test_a_bad_epimemer_graph_is_refused_at_startup(self, backend):
+        with pytest.raises(ValueError, match="Invalid graph name"):
+            create_storage(ServerConfig(**backend, graph="../escape"))
 
 
 class TestIngestSaysWhereItLanded:

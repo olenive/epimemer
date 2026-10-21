@@ -167,10 +167,8 @@ const WHEEL_STEP = 0.85;
 const PAN_STEP = 0.12;
 
 /**
- * Mark hues, from the palette the graph panel also draws from (#56).
- *
- * Facts and inferences used to be named here, and differently — the two panels
- * sit side by side and disagreed about what colour a fact is. `kind` is a node
+ * Mark hues, from the palette the graph panel also draws from, so the two
+ * panels, side by side, agree about what colour a fact is. `kind` is a node
  * type, so anything that is not an inference is drawn as a claim.
  */
 export const markColor = (kind: string, theme: Theme): string => {
@@ -181,8 +179,8 @@ export const markColor = (kind: string, theme: Theme): string => {
 /**
  * A mark's fill, focus included — the timeline's half of `nodeFill`.
  *
- * Dim only the graph and the two panels disagree about what came back, which
- * is the class of bug #56 fixed for colour (RETRIEVAL_PROVENANCE.md §4.2). Both
+ * Dim only the graph and the two panels disagree about what came back
+ * (RETRIEVAL_PROVENANCE.md §4.2). Both
  * sides desaturate through `theme.ts`, so there is one dimming rule rather than
  * two that drift.
  */
@@ -1558,7 +1556,7 @@ export const initTimelinePanel = (
     if (at < scale.domain.t0 || at > scale.domain.t1) return;
     const y = timeToPos(scale, at);
     // Neutral, not amber: the rule is chrome — an annotation on the axis — and
-    // a semantic hue here competes with the things that are data (#56).
+    // a semantic hue here competes with the things that are data.
     const palette = currentPalette();
     group.appendChild(
       svg("line", {

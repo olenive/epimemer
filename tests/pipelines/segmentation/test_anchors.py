@@ -2,7 +2,7 @@
 
 `segments_from_anchors` turns a list of anchors, each the text a passage begins
 with, into passages, or refuses the whole list and names every problem in it.
-The contract is `dev-docs/SEGMENTATION.md` §4: each anchor is found at its
+The contract is `docs/INGEST.md` §4: each anchor is found at its
 first occurrence after the end of the one before, a passage runs to the next
 anchor, and text before the first anchor is refused rather than dropped.
 
@@ -358,7 +358,7 @@ class TestTheMinimum:
         assert any("too short" in p for p in problems)
 
 
-# The shapes the guide tells an agent to cut by hand (`SEGMENTATION.md` §7),
+# The shapes the guide tells an agent to cut by hand (`docs/INGEST.md` §5),
 # with the anchors an agent would write by copying the first words of each
 # passage.
 TRANSCRIPT = (

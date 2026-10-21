@@ -284,8 +284,8 @@ def _scaling(vectors: np.ndarray, threshold: float, *, seed: int = 1) -> list[di
     only sound if the rate does not itself move with size. It might: as a graph
     fills in one domain its facts grow more mutually similar, and a rate rising
     with n would make the projection an underestimate by an unknown factor.
-    Three sizes rather than two, for the reason ISSUES.md already records about
-    fitting exponents — the short fit reads fixed effects as curvature.
+    Three sizes rather than two, because a fit over two short sizes reads fixed
+    effects as curvature.
     """
     rng = np.random.default_rng(seed)
     n = len(vectors)

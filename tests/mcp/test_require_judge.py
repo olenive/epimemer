@@ -1,6 +1,6 @@
 """Ingest attribution, and the graph's answer to *must a write name a judge?*
 
-Two halves of step 4 (REVIEW_MODE.md §3.3.1, §10.4). The first makes a fact's own
+Two halves (REVIEW_MODE.md §3.1, §3.3.1). The first makes a fact's own
 wording carry its author — where the unreviewable priors live, since nothing
 downstream re-reads the material. The second lets a user insist on it.
 
@@ -355,8 +355,7 @@ class TestTheGateAtTheBoundary:
 class TestAClaimReachesTheNextWrite:
     """The binding lives in the connection state on the lifespan, so the write
     after a claim finds it. Were it lost between calls, a strict graph would
-    refuse every write from a client that had correctly claimed an identity:
-    the approval gap of §10.3, one layer over."""
+    refuse every write from a client that had correctly claimed an identity."""
 
     async def test_a_bound_judge_satisfies_a_strict_graph(self, storage, config):
         from epimemer.mcp.server import _bind_judge, _judge_for_write

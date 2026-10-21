@@ -1,11 +1,11 @@
 """What an agent decided about a nominated pair (`REVIEW_MODE.md` §1).
 
-`reflect` nominates pairs and the agent classifies each one. Six of the seven
-verdicts had an action; the seventh — *compatible*, these merely look alike —
-had none, by omission rather than by design. So a decline was recorded nowhere,
-and `already_linked` in `contradiction_detection` re-offered the same pair on
-every pass. Measured 2026-08-21: of eighteen pairs nominated on `memory`, five
-merged and **thirteen were declined and vanished.**
+`reflect` nominates pairs and the agent classifies each one. A pair that is not
+merged still gets a verdict here, `one_claim` or `distinct`, so
+`already_linked` in `contradiction_detection` stops offering a pair somebody has
+answered. Without that record a decline went nowhere: on 2026-08-21, of eighteen
+pairs nominated on the development graph, five merged and **thirteen were
+declined and vanished.**
 
 **A decline is two populations, not one, and that is the whole design.** The
 obvious fix — one `similarity` edge per decline — has two readers that want
@@ -28,11 +28,11 @@ So the verdict picks the edges:
 | `distinct`   | different claims that look alike     | `assessed` only           |
 | `distinct`, over a standing `one_claim` | **withdrawn**   | `retracted_similarity` + `assessed` |
 
-**The third row is a retraction, and it is the only conditional write here**
-. `distinct` on a pair that already carries a `similarity` edge used to be
-*refused*, because nothing could unmake a `one_claim` and writing `assessed`
-beside a standing `similarity` would have reported success while the pair went
-on corroborating. The edge is still not deleted — nothing here deletes — so the
+**The third row is a retraction, and it is the only conditional write here.**
+Refusing `distinct` on a pair that already carries a `similarity` edge would
+leave a wrong `one_claim` with no way back, and writing only `assessed` beside a
+standing `similarity` would report success while the pair went on
+corroborating. The edge is still not deleted — nothing here deletes — so the
 retraction is a second edge that disqualifies the first, which is the mechanism
 `corroboration.py` already runs for `contradiction` and for exactly this reason:
 *"the `similarity` edge written before the verdict stays in the graph"*.
@@ -52,7 +52,7 @@ nothing else.
 
 `assessed` is a denormalised suppression index, and it is legitimate as one
 because it is immutable and append-only: it cannot drift from the decision
-journal that will also record it (§3.4). The journal is the audit record; this
+journal that also records it (§3.4). The journal is the audit record; this
 edge is what the sweep reads without a journal query.
 
 **A suppression can be taken back, and only by `reopen`.** It retires the

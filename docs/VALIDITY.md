@@ -84,11 +84,10 @@ claims, and a single `NULL` cannot tell them apart.
 ### Timelines, not metacontexts
 
 Validity is measured against a named **timeline**. A fictional date and a
-real one are not comparable, and there is no conversion between them, so
-`compare_intervals` refuses to place periods on different clocks against
-each other. A timeline also carries its own `reference_time`, that clock's
-*now*, which is why *"is this claim current?"* must be asked against the
-relevant timeline rather than against `datetime.now()`.
+real one are not comparable, and there is no conversion between them. A
+timeline also carries its own `reference_time`, that clock's *now*, which is
+why *"is this claim current?"* must be asked against the relevant timeline
+rather than against `datetime.now()`.
 
 ### `basis`: stated or inferred
 
@@ -100,10 +99,6 @@ is neither, and must not be supplied at all.** That is the whole content of
 the rule: provenance means the graph can say who asserted what, and a date
 smuggled in from the agent's own knowledge is attributed to a source that
 never said it.
-
-`basis` is per **interval**, not per endpoint. That is an accepted cost:
-accepting an inferred boundary on one end makes a stated start unreportable
-as stated (§8). Per-endpoint basis is the recorded future option.
 
 ### Comparison
 
@@ -149,8 +144,7 @@ through the status, the edge, and the edge migration together:
 
 The caller must say which; there is no default, because filing a change in
 the world as an error is how a graph forgets its own history. `because` is
-required on `supersede_by`, and `lineage_edge_type_for(status)` pairs with
-`superseded_status_for(because)` so the node and the edge cannot disagree.
+required on `supersede_by`.
 
 **The succession edge never claims adjacency.** Saint Petersburg to Petrograd
 to Leningrad to Saint Petersburg is three separately observed transitions, so
@@ -184,17 +178,10 @@ Because a world-change is reversible, a claim can become true again.
 
 ### Lifecycle episodes
 
-`(status, superseded_at)` is a single slot, and a node can leave the active
-set more than once. The pair cannot express *retired, then came back*: clear
-`superseded_at` on the return and the retirement vanishes from every time
-window; keep it and the retirement reports the node's current status, which
-by then is `active`.
-
-So the history is an **append-only list** of episodes (`retired_at`,
-`because`, `counterpart`, `restored_at`), with `(status, superseded_at)` kept
-on the node as the current-state snapshot the fast paths read.
-`query_changes` reads the episodes, which is why a node that retired,
-returned and retired again reports three events rather than one.
+A node can leave the active set more than once, so its history is an
+**append-only list** of episodes. `query_changes` reads the episodes, which is
+why a node that retired, returned and retired again reports three events
+rather than one.
 
 ---
 
@@ -207,11 +194,9 @@ The short form:
 - Results carry `validity`, per source, uncollapsed.
 - `valid_as_of` answers in **two buckets**, `valid` and `unknown`, and
   excludes nothing.
-
-There is deliberately no third bucket for *provably not valid*. An interval
-asserts what a source says and nothing about the outside, so no moment is
-provably *not* valid without a closed-world marking nobody has proposed. A
-value nothing can produce would earn a dead branch in every caller.
+- The dashboard's timeline panel draws each source's periods in a lane of its
+  own; the marks are `dev-docs/TIMELINE_VISUALISATION.md` §13, with a visual
+  reference at `dev-docs/mockups/valid-time-grammar.html`.
 
 ---
 
@@ -249,11 +234,9 @@ clear of each other, can be asked of a survivor that does not exist yet, and
 it is: `inference_merge_candidates` carries the answer as a warning, and so
 does the merge's own response.
 
-The two are one computation with one implementation, and the reason for
-going to the trouble is that the finding is only recoverable beforehand. Once
-the merge lands, the `derived_from` edges have migrated and nothing
-distinguishes *these premises arrived from two inferences* from *this one
-was drawn on both*.
+The finding is only recoverable beforehand. Once the merge lands, the
+`derived_from` edges have migrated and nothing distinguishes *these premises
+arrived from two inferences* from *this one was drawn on both*.
 
 It is a warning rather than a refusal because the honest response is
 usually to narrow the merged claim's wording or period, which the agent does
@@ -321,9 +304,10 @@ because)`.
 
 **It is not a supersession.** The claim is unchanged and the world has not
 moved, so `because` in the `update` sense has no honest value. This is the
-same category as a mislabelled `claim_kind`, and `dev-docs/VALIDITY_DESIGN.md`
-is where the split between it and `rejudge` is argued. Nothing is retired
-and no lineage moves.
+same category as a mislabelled `claim_kind`, and it has a tool of its own
+rather than a field on `rejudge` because of how it is addressed: `rejudge`
+names a node, and an interval belongs to a (node, source) pair
+(`dev-docs/REVIEW_MODE.md` §6.5). Nothing is retired and no lineage moves.
 
 **The whole list for that (node, source) pair is replaced**, because an
 interval is a position in a list on one `sourced_from` edge and has no id of
@@ -336,13 +320,13 @@ which is forced to `inferred`. A correction is often restoring what the
 document actually said, and calling that inferred would understate it.
 
 Refused where the graph cannot back the change: a blank `because`, no node, a
-source no `sourced_from` edge names, or a replacement identical to what is
-already there (a restatement is not a revision). The prior list is kept in
-the edge's `interval_corrections` trail. That matters because corroboration
-reads intervals to decide whether a look-alike witnesses the same period or
-is the neighbouring truth: a wrong interval has been moving counts for as
-long as it stood, and the trail plus the journal row's timestamp is what
-bounds which answers were affected.
+source that is not named by exactly one `sourced_from` edge from that node, or
+a replacement identical to what is already there (a restatement is not a
+revision). The prior list is kept in the edge's `interval_corrections` trail.
+That matters because corroboration reads intervals to decide whether a
+look-alike witnesses the same period or is the neighbouring truth: a wrong
+interval has been moving counts for as long as it stood, and the trail plus
+the journal row's timestamp is what bounds which answers were affected.
 
 ---
 
@@ -363,6 +347,3 @@ bounds which answers were affected.
   computed from them separates the cases: the judgment is made at ingest,
   where the document is still readable, and stored as `Fact.claim_kind`. A
   fact ingested without one never merges.
-- **Valid-time rendering is designed and not built.** The timeline panel does
-  not yet draw intervals; the grammar is `dev-docs/TIMELINE_VISUALISATION.md`
-  §13, with a visual reference at `dev-docs/mockups/valid-time-grammar.html`.

@@ -12,14 +12,10 @@ see `dev-docs/LEXICAL_SEARCH.md` and `dev-docs/RETRIEVAL_PROVENANCE.md`.
 
 ## 1. Two arms, because they fail in opposite directions
 
-Embedding similarity has no notion of **term rarity**. The default model
-(`all-MiniLM-L6-v2`, 384 dimensions) splits an identifier like `JIRA-4417`
-into word pieces and mean-pools them with every other token in the sentence,
-so the query embeds to roughly *"short alphanumeric string"*, which sits close
-to every other ticket id in the graph. The failure is not that the right node
-ranks low. It is that the wrong ticket ids rank about equally high.
-
-BM25 supplies exactly the missing statistic. So `search` runs two independent
+Embedding similarity has no notion of **term rarity**: an identifier like
+`JIRA-4417` embeds close to every other ticket id in the graph, so the wrong
+ids rank about as high as the right one. BM25 supplies exactly the missing
+statistic (`dev-docs/LEXICAL_SEARCH.md` §1). So `search` runs two independent
 arms over the same query:
 
 | Arm | Finds | Blind to |
@@ -27,8 +23,7 @@ arms over the same query:
 | **Vector** | paraphrase, related phrasing, conceptual neighbours | rare exact tokens |
 | **Lexical (BM25)** | identifiers, error codes, names, filenames | anything reworded |
 
-Neither is a fallback for the other. They run concurrently as two transitions
-off the same place in the query net, and neither can change what the other
+Neither is a fallback for the other, and neither can change what the other
 computes.
 
 ### Declaring terms
@@ -53,27 +48,18 @@ path**, and it is the only one that carries the survival guarantee below.
 
 ## 2. Fusion is by rank, never by score
 
-Cosine similarity and BM25 are on incomparable scales with no calibration
-between them, so any weighted sum is a magic number that gets re-tuned for
-ever. **Reciprocal Rank Fusion** uses only ranks:
-
-```
-score(id) = Σ over lists  1 / (60 + rank)      # rank is 1-based
-```
-
-`k = 60` is the conventional value and nothing here departs from it. Ranks
-are also the only thing that may cross a corpus boundary: BM25's IDF term is
-computed per index, so scores from the node table and the segment table are
-not comparable, while their ranks are. Fusion therefore consumes one vector
-list, one list per node table, and one segment list.
+Cosine similarity and BM25 are on incomparable scales, so the arms are fused
+by **Reciprocal Rank Fusion**, which uses only ranks. Keyword scores are not
+comparable across corpora either, so topics, facts, inferences and segments
+each contribute their own ranked list. `dev-docs/LEXICAL_SEARCH.md` §3.1 has
+the formula and the reasoning.
 
 ### The one deliberate departure
 
-Pure RRF does not guarantee that an exact match survives. A node present in
-*both* lists scores at least `1/70 + 1/71 ≈ 0.0284`, beating a lexical-only
-rank-1 at `1/61 ≈ 0.0164`, and list overlap peaks in precisely the scenario
-the feature exists for, where every ticket id embeds alike. So the guarantee
-is made explicit rather than assumed:
+Pure RRF does not guarantee that an exact match survives: a node both arms
+rank modestly outscores one the keyword arm alone ranks first, and that
+overlap is greatest where every ticket id embeds alike. So the guarantee is
+made explicit rather than assumed:
 
 > **Each declared term's best hit survives to the final result**, even where
 > rank fusion would have cut it.
@@ -114,7 +100,7 @@ thing hybrid retrieval produces. When a search disappoints, the question you
 are asking is *this matched at 0.82; that one was dragged in by an edge from
 it; this third came back on an exact token match*.
 
-Each returned node carries `provenance`:
+Each node `search` returns carries `provenance`:
 
 | Value | Meaning |
 |---|---|
@@ -122,14 +108,18 @@ Each returned node carries `provenance`:
 | `segment` | a term matched the passage the node was extracted from |
 | `vector` | embedding similarity |
 | `expanded` | reached by an edge from one of the above |
-| `direct` | returned unranked: `find_nodes`, `graph_as_of`, `topic_tree`, and so on |
 
 A node reached by more than one route gets the **most specific** label, in
 that order: an exact token match is a rarer and more diagnostic fact about a
 result than similarity, which is the default expectation. So a node both arms
-found is reported as `lexical`. `direct` never appears on a `search` result,
-because the query pipeline always knows which arm reached a node, and it
-carries no score: a blank is honest where `1.0` would be a lie.
+found is reported as `lexical`.
+
+The retrieval record (§9) uses the same labels for every tool, plus a fifth,
+`direct`, for a node a tool returned without ranking it: what `find_nodes`,
+`graph_as_of` and `topic_tree` return, the node a `query_graph` walk started
+from, and so on. `direct` never appears on a `search` result, because the
+query pipeline always knows which arm reached a node, and it carries no
+score: a blank is honest where `1.0` would be a lie.
 
 ---
 
@@ -152,14 +142,15 @@ by default:
   `kind` is `attribution`. Expanding into these would return the publisher of
   everything that matched.
 
-A caller can replace those two default families with its own list, by passing
-`exclude_edge_types`. One skip is not a default and cannot be turned off: a
-**retired edge** is never followed. An edge with `retired_at` set is one a
-judge decided should stop counting, which today means a `timelink` a timepoint
-split or merge moved, or an `assessed` edge `reopen` withdrew, and expansion
-checks that before it looks at `exclude_edge_types` at all. So a fact whose
-date moved to a new point is reached through its new link and never through
-the old one, while the old one is still in the record saying what was once
+`search` always expands with those defaults. `query_graph` walks the same
+expansion and takes `edge_types`, the edge types to follow, and a list given
+there replaces both default families. One skip is not a default and cannot be
+turned off: a **retired edge** is never followed. An edge with `retired_at`
+set is one a judge decided should stop counting: a `timelink` that a timepoint
+split or merge moved, or an `assessed` edge that `reopen` withdrew. Expansion
+checks that before it looks at the caller's list at all. So a fact whose date
+moved to a new point is reached through its new link and never through the
+old one, while the old one is still in the record saying what was once
 asserted.
 
 `tagged_with_topic` and relationship-kind user edges *are* followed,
@@ -173,7 +164,8 @@ something else: which inference a fact is evidence for.
 
 **Knowledge that is not current is still knowledge.** A claim retired because
 the world moved on (`historical`) is returned by default and says so in its
-`status`. A claim retired for being *wrong* (`corrected`) is off by default,
+`status`; `include_historical=False` leaves it out when only what holds now is
+wanted. A claim retired for being *wrong* (`corrected`) is off by default,
 since it is kept for the audit trail rather than for reading, but reachable
 via `include_corrected=True`: *"what did we believe about X that turned out
 wrong?"* is a fair question for an epistemic memory, and walling it off would
@@ -202,8 +194,8 @@ Three rules of the fold:
 ## 7. Valid time answers in groups, never as a filter
 
 `valid_as_of` asks *what was true then*. It never excludes anything. Every
-result carries `valid_at`, and the response carries the same information as
-buckets:
+result carries `valid_at`, and the response repeats the split as id lists
+under a top-level `valid_at`:
 
 | Bucket | Meaning |
 |---|---|
@@ -215,12 +207,13 @@ There is no third bucket. An interval asserts what a source says and
 *unknown*, not false. That makes a valid-time filter unimplementable rather
 than merely misleading: a filter would convert missing metadata into a silent
 false negative, which is the one failure this system is built to refuse.
+A claim provably valid at that moment also keeps its own slot rather than
+folding into a later version of itself (§6).
 
 Nodes whose sources dated them also carry `validity`: one entry per source,
-with the periods that source asserts, **uncollapsed**. Union takes one
-careful source and one sloppy one and yields a period neither claims;
-intersection turns two separate episodes into "never". See
-[VALIDITY.md](VALIDITY.md).
+with the periods that source asserts, uncollapsed, for the reason
+[VALIDITY.md](VALIDITY.md#2-validity-lives-on-the-provenance-edge-per-source)
+§2 gives.
 
 `valid_as_of` is named apart from `graph_as_of` on purpose. They are different
 clocks, when a claim was true against what the graph held at an instant, and
@@ -244,15 +237,15 @@ the unmarked name would inherit the default reading.
   claim stands and only its position in time is in dispute. An agent reading
   "the treasury was empty at the coronation" needs to know when the
   coronation's place in time is disputed, and must not take that for doubt
-  about the treasury. The cost is one read of each timeline a returned node
-  actually links to, which for most result sets is none.
+  about the treasury.
 - **Hierarchy neighbours** on topics that sit in a split hierarchy
   (`parents` and `subtopics`, as id plus preview), so a caller can drill via
   `topic_tree` rather than be handed the whole subtree.
 - **`retrieved_at` is stamped** on every returned node. Being retrieved is
   what tells a used node from a merely old one, and it is what the
-  `never_retrieved` archival class reads. Ranking is unaffected.
-  `record_retrieval=False` disables it.
+  `never_retrieved` archival class reads. Ranking is unaffected. The server
+  setting `EPIMEMER_RECORD_RETRIEVAL=false` turns the stamp off, which leaves
+  `never_retrieved` unable to tell a used node from a stale one.
 - **Corroboration**, but only if asked. See below.
 
 ### Corroboration: how many independent sources back this
@@ -320,21 +313,12 @@ cost of every other annotation here, and its price rises with the density of
 most. `dev-docs/BENCHMARKS.md` has the table, measured against edges assigned
 at a fixed degree.
 
-`apply_reflection(similarities=[…])` is what writes `similarity` edges, and
-only on an agent's explicit `one_claim` verdict about a pair `reflect`
-nominated. The companion `assessed` edge, written for **both** verdicts, is
-deliberately not read here: it records that somebody judged a pair, which is
-not a claim that they agreed. See [REFLECTION.md](REFLECTION.md) §6. So the
-number rises as judgments accumulate, and only ever on fact pairs somebody
-said were one claim. On a graph nobody has judged yet, the count is the distinct
-publishers behind that node's own documents.
-
-**And it can come back down.** An agent that withdraws a `one_claim` verdict
-leaves the `similarity` edge in place (nothing here deletes) and a
-`retracted_similarity` edge beside it stops the pair counting, exactly as a
-`contradiction` or a `variant_of` between two facts already does. A
-withdrawal is final: nothing re-asserts the verdict afterwards, because
-getting *that* wrong manufactures support rather than merely withholding it.
+The neighbourhood is the `similarity` edges `apply_reflection` writes on an
+explicit `one_claim` verdict, so the number rises only as judgments
+accumulate: on a graph nobody has judged yet, the count is the distinct
+publishers behind that node's own documents. A withdrawn verdict stops the
+pair counting again, for good.
+[REFLECTION.md](REFLECTION.md#6-what-apply_reflection-writes) §6 has both.
 
 ### Metacontext scoping
 
@@ -409,43 +393,22 @@ applied in.
   cannot read.
 
 All three label every node they return with the `metacontexts` it stands in,
-as `search` does. Without that, `query_graph` answered *here is what this
+as `search` does. Without that, `query_graph` would answer *here is what this
 connects to* while leaving out which world each answer was a claim about.
 
 ---
 
 ## 9. The retrieval record
 
-Every tool whose response carries node ids also writes a **retrieval
-record**, a bounded ring in the session process, holding what was returned,
-with what provenance and score, plus the exact response text. The dashboard
-reads these to dim everything the last retrieval did *not* return.
+Every tool call that succeeds writes a **retrieval record** into a bounded
+ring in the server process: the node ids the response carried, with their
+provenance and score, and the response text. The id list and the text are
+both capped, and the record says when a cap cut them. The dashboard reads
+these: pick one and it dims everything that retrieval did *not* return. A
+record from a tool that declared no ids is listed as *not declared*, and
+picking one dims every node, the same as a retrieval that returned nothing.
 
-The rule that keeps coverage from drifting is semantic rather than an
-enumeration of tools: `retrieved` is the set of node ids **present in the
-response**. Not what the tool looked at: `reflect` scans the whole active
-graph and the agent sees only the nominees, so a reflect record correctly
-dims everything except them.
-
-The panel is labelled **"Response"**, not "Context". What lands in the
-model's context is the MCP client's rendering of what we returned, possibly
-truncated by the client, inside a tool-result block we never see. A panel
-captioned *"what the agent saw"* would be making a claim the system cannot
-verify.
-
----
-
-## 10. Cost
-
-`search` is the hottest path in the system and the furthest from its
-ceiling: roughly 1.5M nodes in-memory and 2.9M on SurrealDB against the 30 s
-default tool timeout. Two optimisations hold it there, and the naive form of
-each is what a reader would otherwise expect:
-
-- in-memory edge lookups go through endpoint indexes rather than scanning the
-  edge set;
-- SurrealDB's `vector_search` **ranks before filtering by status** rather
-  than filtering inside the ranking query. SurrealDB re-runs such a subquery
-  per row, which cost `search` two orders of magnitude.
-
-Measurements: [dev-docs/BENCHMARKS.md](../dev-docs/BENCHMARKS.md).
+`retrieved` is the set of node ids **present in the response**, for every
+tool, rather than what the tool looked at: `reflect` scans the whole active
+graph and the agent sees only the nominees, so a reflect record dims
+everything except them. `dev-docs/RETRIEVAL_PROVENANCE.md` has the design.

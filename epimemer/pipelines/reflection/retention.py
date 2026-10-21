@@ -36,10 +36,10 @@ when the node's current reasons are not all covered:
 | `evidence_merged` | the absorbed phrasings named in the label |
 | `never_retrieved` | nothing: `covers` is empty |
 
-`evidence_merged` joined the table on 2026-09-05. It had been the one label
-with no writer: the docstrings said *re-read it*, and an agent that did had
-nowhere to say so, so the treadmill this module was written to end came back
-one label over. A re-read is a keep, anchored to the wording that went away,
+`evidence_merged` is in the table because every label needs a writer: the
+docstrings say *re-read it*, and an agent that did would otherwise have nowhere
+to say so, so the treadmill this module was written to end would come back one
+label over. A re-read is a keep, anchored to the wording that went away,
 and a later absorption is a reason nobody covered, exactly as a later
 supersession is.
 

@@ -20,6 +20,7 @@ from epimemer.core.types import (
     Topic,
 )
 from epimemer.storage.memory import InMemoryStorage
+from tests.storage.test_storage_parity import HOSTILE_GRAPH_NAMES
 
 
 @pytest.fixture
@@ -235,7 +236,7 @@ class TestEmbeddingStorage:
         assert results[0][0] == t.id
 
     # Excluding inactive nodes is protocol-level and lives in
-    # test_storage_parity.py, where both backends must satisfy it.
+    # test_storage_parity.py, where every backend must satisfy it.
 
 
 class TestTimelineStorage:
@@ -338,6 +339,21 @@ class TestMultiGraphContract:
     async def test_delete_nonexistent_database_raises(self, store):
         with pytest.raises(KeyError):
             await store.delete_database("no-such-graph")
+
+    async def test_a_named_starting_graph_is_the_only_one(self):
+        """As SQLite and Postgres open the graph they are given, so this
+        backend starts on it, with no "default" beside it."""
+        store = InMemoryStorage(database="field-notes")
+
+        assert store.current_database == "field-notes"
+        assert await store.list_databases() == ["field-notes"]
+
+    @pytest.mark.parametrize("name", [*HOSTILE_GRAPH_NAMES, "../escape"])
+    def test_an_illegal_starting_graph_is_refused(self, name):
+        """Refused at construction, by the rule `switch_database` applies and
+        the way the SQLite and Postgres constructors refuse it."""
+        with pytest.raises(ValueError, match="Invalid graph name"):
+            InMemoryStorage(database=name)
 
 
 class TestAtomicOperations:

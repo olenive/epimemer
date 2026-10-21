@@ -4,7 +4,7 @@ Given `cuts`, the programmatic strategy does not run: the passages are the
 ones the anchors state, the document records `agent` as its strategy, and no
 doubt is raised, because the agent chose the cut. A malformed list, or `cuts`
 beside `segmentation_strategy`, refuses the call before anything is written
-(`dev-docs/SEGMENTATION.md` §5.1). Run on every backend through `storage`.
+(`docs/INGEST.md` §5). Run on every backend through `storage`.
 """
 
 import pytest

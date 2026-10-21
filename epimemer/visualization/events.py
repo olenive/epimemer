@@ -254,7 +254,9 @@ class TimelineView(BaseModel):
 # --- Conversion helpers ---
 
 
-def _node_type_label(node: EpistemicNode) -> str:
+def node_type_label(node: EpistemicNode) -> str:
+    """The `node_type` a viewer is told, shared by every payload that names one
+    so the snapshot and the embeddings route cannot disagree about a node."""
     match node:
         case Topic():
             return "topic"
@@ -270,7 +272,7 @@ def node_to_view(node: EpistemicNode, graph: str) -> NodeView:
     """Convert a storage EpistemicNode to a NodeView for the frontend."""
     return NodeView(
         node_id=node.id,
-        node_type=_node_type_label(node),
+        node_type=node_type_label(node),
         content=node.content,
         description=node.description if isinstance(node, Topic) else "",
         status=node.status.value,
@@ -539,7 +541,7 @@ class ActionVerb(str, Enum):
     a log line reading "superseded 123 → 124" flattens exactly the distinction
     the graph records. These names match the terminal statuses and what
     `events_in_window` emits, so the live log and the durable history speak one
-    vocabulary (EVENT_LOG.md §3.1, revised).
+    vocabulary (EVENT_LOG.md §11).
 
     `UNDETERMINED` is the absence of a determination, and it serves two cases
     that share exactly that. The legacy `NodeStatus.SUPERSEDED` is one: rows
@@ -618,7 +620,7 @@ class AdvisoryRaised(Event):
     `RetrievalRecorded` is. A warning is computed one layer above storage, a
     single call can produce several acts so there is no one act to hang it on,
     and `reflect` produces warnings with no act at all
-    (`WARNINGS_DASHBOARD.md` §2.1).
+    (`EVENT_LOG.md` §12.1).
 
     **Everything computed is published, muted or not.** The dashboard is where a
     person looks at what the agent was *not* told, so hiding a muted warning
@@ -687,11 +689,11 @@ class TimelineStored(Event):
     """A timeline was created or updated.
 
     One event carrying the whole timeline rather than separate created/appended
-    events: `store_timeline` is an upsert and the only write path — adding a
-    timepoint re-stores the timeline — so telling creation from extension would
-    mean reading before every write to learn something the viewer can see for
-    itself. Timelines are small; sending the current state is cheaper and cannot
-    drift from storage.
+    events: a timeline is stored whole, by `store_timeline` and by every
+    transaction that writes one, so adding a timepoint re-stores the timeline
+    and telling creation from extension would mean reading before every write to
+    learn something the viewer can see for itself. Timelines are small; sending
+    the current state is cheaper and cannot drift from storage.
     """
 
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH

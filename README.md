@@ -58,6 +58,12 @@ uv tool install "epimemer[sentence-transformers]"
 | Extra | Adds | When you need it |
 |-------|------|------------------|
 | `sentence-transformers` | Local embeddings via [sentence-transformers](https://www.sbert.net) (pulls in PyTorch) | Always, for real use: it is the only embedding provider apart from `mock`, which exists for tests. Without it the server refuses to start and names the extra to install |
+| `postgres` | The Postgres driver, `psycopg` with its compiled libpq | With `EPIMEMER_STORAGE_BACKEND=postgres`. Without it the server refuses to start and names the extra |
+| `gcs` | `gcsfs` | Backups to a `gs://` URL |
+| `s3` | `s3fs` | Backups to an `s3://` URL |
+
+Extras combine in one install, for example
+`uv tool install "epimemer[sentence-transformers,postgres]"`.
 
 The embedding model (`all-MiniLM-L6-v2`, about 80 MB) downloads on first run.
 
@@ -74,10 +80,8 @@ exits**. See [Persistence](#persistence) for the setup that keeps a graph.
 Any other MCP client works the same way: the server speaks stdio, and
 `epimemer serve` is the command. The
 [integration guide](https://github.com/olenive/epimemer/blob/main/INTEGRATION.md)
-has the full configuration, the canonical tool table, and how the agent
-guidance reaches the agent: the server sends the per-call rules on connect and
-serves the full guide as the MCP prompt `guide`, so nothing is pasted into an
-agent's instructions.
+has the full configuration, the canonical tool table, and how the server hands
+the agent its guidance, so nothing is pasted into an agent's instructions.
 
 ## Persistence
 
@@ -114,9 +118,7 @@ claude mcp add epimemer \
 ```
 
 `root`/`root` are SurrealDB's local-development credentials; set
-`EPIMEMER_SURREALDB_USER` and `EPIMEMER_SURREALDB_PASS` for anything else. Set
-`EPIMEMER_GRAPH` per server: the active graph is process state, so a client
-that reconnects lands back on whatever the server opened.
+`EPIMEMER_SURREALDB_USER` and `EPIMEMER_SURREALDB_PASS` for anything else.
 
 ### SQLite: one file per graph, no server
 
@@ -143,7 +145,7 @@ loses everything when it closes. An existing graph moves over with
 A graph can also live in a Postgres database you already run:
 
 ```bash
-pip install "epimemer[postgres]"
+uv tool install "epimemer[sentence-transformers,postgres]"
 
 claude mcp add epimemer \
   -e EPIMEMER_STORAGE_BACKEND=postgres \
@@ -154,9 +156,9 @@ claude mcp add epimemer \
 
 Shared means several Epimemer servers, on one machine or many, reading and
 writing one graph at once. Each server keeps its own active graph and its own
-judge claims; the graph, its journal, its counters and its settings live in
-Postgres and are read on every call, so one server sees another's writes as
-soon as they are made, and the `epimemer agents` commands work against it too.
+judge claims; everything else lives in Postgres, so one server sees another's
+writes as soon as they are made, and the `epimemer agents` commands work
+against it too.
 Each graph is a schema of its own name in the database the DSN names, created
 on first use, so the database must exist and the role must be allowed to create
 schemas in it. The DSN is a URL or `key=value` pairs, so `sslmode` and a
@@ -181,15 +183,14 @@ All configuration is via `EPIMEMER_` environment variables:
 | `EPIMEMER_SURREALDB_USER` | `root` | SurrealDB username |
 | `EPIMEMER_SURREALDB_PASS` | `root` | SurrealDB password |
 | `EPIMEMER_SURREALDB_NAMESPACE` | `epimemer` | SurrealDB namespace |
-| `EPIMEMER_SURREALDB_DATABASE` | `default` | SurrealDB database name, one database per graph. A name only: whether storage is in memory is decided by `EPIMEMER_STORAGE_BACKEND` here and by the `[PATH]` argument on the server |
+| `EPIMEMER_SURREALDB_DATABASE` | `default` | The graph a SurrealDB server opens when `EPIMEMER_GRAPH` is unset; SurrealDB keeps one database per graph |
 | `EPIMEMER_SQLITE_DIR` | `~/.epimemer/graphs` | For the `sqlite` backend: the directory holding one `<graph>.sqlite` file per graph, created on first use |
 | `EPIMEMER_POSTGRES_DSN` | (empty) | For the `postgres` backend: the database holding one schema per graph, as a URL or `key=value` pairs. Required with that backend: the server refuses to start without it |
-| `EPIMEMER_GRAPH` | (empty) | The graph this server opens, overriding the database name above. **Set it per server.** The active graph is process state, so `use_graph` lasts only as long as the process, and a client reconnect lands back here. See [which graph a server opens](https://github.com/olenive/epimemer/blob/main/INTEGRATION.md#which-graph-a-server-opens) |
+| `EPIMEMER_GRAPH` | (empty) | The graph this server opens, on any backend. Unset, the server opens `default`, or `EPIMEMER_SURREALDB_DATABASE` on SurrealDB. **Set it per server**: see [which graph a server opens](https://github.com/olenive/epimemer/blob/main/INTEGRATION.md#which-graph-a-server-opens) |
 | `EPIMEMER_EMBEDDING_PROVIDER` | `sentence-transformers` | `sentence-transformers` or `mock` |
 | `EPIMEMER_EMBEDDING_MODEL_ID` | `all-MiniLM-L6-v2` | Embedding model name |
-| `EPIMEMER_EMBEDDING_DIMENSION` | `384` | Embedding vector dimension |
-| `EPIMEMER_SEGMENTATION_STRATEGY` | `paragraph` | `paragraph` or `semantic` |
-| `EPIMEMER_SIMILARITY_THRESHOLD` | `0.75` | Similarity threshold for search |
+| `EPIMEMER_EMBEDDING_DIMENSION` | `384` | Vector dimension for the `mock` provider. `sentence-transformers` takes its dimension from the model |
+| `EPIMEMER_SEGMENTATION_STRATEGY` | `paragraph` | How `segment` cuts a document when the call names no strategy: `paragraph` or `semantic` |
 | `EPIMEMER_REFLECT_THRESHOLD` | `10` | Stores into a graph before the server suggests a reflect. Counted per graph in storage and reported by `graph_stats`; a graph can override it with `configure_reflection` |
 | `EPIMEMER_BACKUP_THRESHOLD` | `50` | Stores into a graph before the server suggests a backup. Counted per graph, reported by `graph_stats`, and overridable per graph with `configure_backup`. A separate count from the reflect one: reflecting clears that one, a successful backup clears this |
 | `EPIMEMER_BACKUP_DESTINATION` | (empty) | Where `backup_graph` writes: a local path, a `gs://` URL or an `s3://` URL. The tool takes no path of its own, so this is the only thing that says where a graph goes. Empty means the tool refuses and names this variable rather than inventing somewhere. Credentials come from each provider's own chain |
@@ -197,7 +198,7 @@ All configuration is via `EPIMEMER_` environment variables:
 | `EPIMEMER_RECORD_RETRIEVAL` | `true` | Whether `search` stamps `retrieved_at` on what it returns. `false` disables it, which blinds the `never_retrieved` nomination; ranking is unaffected either way |
 | `EPIMEMER_IMPORTANCE_STEP` | `0.25` | How much of the gap to its bound one `judge_importance` call closes, up or down. Nothing moves importance automatically |
 | `EPIMEMER_TOOL_TIMEOUT_SECONDS` | `30.0` | Timeout per tool operation |
-| `EPIMEMER_APPROVED_AGENTS` | (empty) | Comma-separated agent ids the user admits as judges in every graph this server opens. Read when the backend connects and when the server lands on a graph. The approval channel for clients without an approval prompt of their own, and the only one that reaches an embedded store. See [ATTRIBUTION.md](https://github.com/olenive/epimemer/blob/main/docs/ATTRIBUTION.md) |
+| `EPIMEMER_APPROVED_AGENTS` | (empty) | Comma-separated agent ids the user admits as judges in every graph this server opens. The approval channel for clients without an approval prompt of their own, and the only one that reaches an embedded store. See [ATTRIBUTION.md](https://github.com/olenive/epimemer/blob/main/docs/ATTRIBUTION.md) |
 | `EPIMEMER_CLIENT_SESSION_ID` | `CLAUDE_CODE_SESSION_ID`, else unset | The client conversation this server serves, part of the seat a judge is confirmed in. Claude Code sets `CLAUDE_CODE_SESSION_ID` for every stdio server and keeps it across a reconnect, so there it needs no setting. See [INTEGRATION.md](https://github.com/olenive/epimemer/blob/main/INTEGRATION.md) |
 | `EPIMEMER_CLIENT_STATE_DIR` | `~/.epimemer/client-state` | Where the `epimemer client-state record` hook records which model is behind each conversation. Give the hook the same directory with `--dir` if you change it |
 | `EPIMEMER_REQUIRE_JUDGE` | `false` | Refuse any write that names no judge, on every graph this server opens. Off by default: a blank judge means *unknown*, and many graphs have no reason to care. A graph can override it with `epimemer agents require`; no MCP tool can set it |
@@ -206,42 +207,21 @@ All configuration is via `EPIMEMER_` environment variables:
 | `EPIMEMER_VIZ_PORT` | `8765` | Visualization hub port |
 | `EPIMEMER_VIZ_AUTOSPAWN` | `true` | Spawn a hub automatically if none is running |
 | `EPIMEMER_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `EPIMEMER_LOG_FILE` | (stderr) | Path to log file. A server that cannot start writes the reason here before it exits, and a server that starts logs its version, storage backend and embedding provider |
+| `EPIMEMER_LOG_FILE` | (stderr) | Path to log file (see below) |
 
 **Set `EPIMEMER_LOG_FILE`.** When a client reports nothing beyond a connection
 that failed, this file is where the reason is: a server that dies during
 startup has nowhere else to put it, since everything on stderr goes with the
-process. `python scripts/check_server_starts.py` asks the same question from a
-shell, and prints what the server wrote.
+process. `scripts/check_server_starts.py`, in the repository, asks the same
+question from a shell: run it with the interpreter the server uses, and it
+prints what the server wrote. A server that starts logs its version, storage
+backend and embedding provider.
 
 ## MCP Tools
 
-Tools exposed via the Model Context Protocol (Claude Code prefixes each as
-`mcp__epimemer__<name>`), grouped by purpose:
-
-- **Core memory**: `segment`, `resegment`, `store_decomposition`, `search`, `link`, `update`, `rename_topic`, `supersede_by`, `judge_importance`
-- **Discovery & stats**: `query_graph`, `topic_tree`, `find_nodes`, `list_sources`, `list_relations`, `describe_relation`, `graph_stats`
-- **Conflict handling**: `check_conflicts`, `record_contradiction`, `record_variant`, `merge_facts`, `merge_inferences`, `reverse_merge`, `configure_merge`, `configure_warnings`
-- **Reflection**: `reflect`, `configure_reflection`, `apply_reflection`, `reopen`
-- **Temporal access**: `graph_as_of`, `query_changes`
-- **Archival**: `archive`, `restore`
-- **Timelines**: `create_timeline`, `set_reference_time`, `add_timepoint`, `order_timepoints`, `resolve_temporal_contradiction`, `merge_timepoints`, `add_recurrence`, `end_recurrence`, `record_recurrence_exception`, `query_timeline`, `create_timelink`
-- **Metacontexts**: `create_metacontext`, `get_metacontexts`
-- **Graph management**: `list_graphs`, `use_graph`, `delete_graph`, `backup_graph`, `configure_backup`
-- **Agents**: `claim_agent` says which judge you are. The user picks the
-  judge, and can rename it later without disturbing any decision. The claim
-  returns a `judge_token` to pass on every write, so two agents sharing one
-  connection each keep their own judge
-- **Review**: `review` lists the decisions this graph has recorded, least
-  certain first; `apply_review` records that you checked one, and whether you
-  agree; `rejudge` revises a judgment made at ingest without touching the
-  claim; `reassign_metacontext` withdraws a metacontext from a node, or moves it to
-  another; `correct_interval` replaces what one source is recorded as
-  asserting about when a claim held
-- **Visualization**: `viz_status`
-
 The [integration guide](https://github.com/olenive/epimemer/blob/main/INTEGRATION.md#available-tools)
-has the canonical table with one-line descriptions and the authoritative tool count.
+lists every tool, grouped by purpose, with a one-line description of each.
+Claude Code prefixes each as `mcp__epimemer__<name>`.
 
 ## Visualization
 
@@ -261,34 +241,16 @@ be watched from one page.
   the hub URL, whether the hub can see this session, and the `session_id` to
   pick in the selector. This answers "I opened the visualizer but can't find
   my graph".
-- **Activity log**: one entry per transaction, saying what the agent stored,
-  corrected, world-changed, merged, archived or restored, filterable by verb,
-  node id, text and time. A timeline decision and a `reopen` each carry their
-  own verb, the one the decision journal files them under. Click an entry to
-  highlight the nodes it acted on; click a node to filter the log to it.
-- **Warnings in the log**: every warning a tool computed appears as a `warned`
-  row beside the act it accompanied, saying which tool raised it, what it said
-  and whether the agent was asked to raise it with you. A warning this graph
-  has muted is shown too, dimmed and labelled *not shown to the agent*, because
-  the dashboard is where you find out what the agent was not told. Filter to
-  `warned` to read them alone.
-- **Warning settings**: the **warnings** button beside the reflect badge shows
-  what this graph does about each kind, and whether that answer is the process
-  default or something set on this graph. It is a view, not a control: use the
-  `configure_warnings` tool to change one, so the change is recorded against a
-  session and a judge the way every other change is.
+- **Activity log**: one entry per transaction, filterable by verb, node,
+  text and time; click an entry to highlight the nodes it acted on.
+- **Warnings in the log**: every warning a tool computed is a `warned` row
+  beside its act, muted ones included, dimmed and labelled *not shown to the agent*.
+- **Warning settings**: the **warnings** button shows what this graph does
+  about each kind; `configure_warnings` is the tool that changes one.
 - **Retrieval focus**: pick a recent tool call and everything it did *not*
-  return is dimmed. Dimmed nodes stay clickable, since the interesting click
-  is on one that did not come back, and the drawer's **Response** tab shows
-  exactly what Epimemer returned.
-- **Timeline**: one timeline at a time on a vertical axis, in *record time*
-  (when the graph learned each node) or *content time* (when the described
-  events happened). Large gaps collapse to a labelled break; vague timepoints
-  sit in an *undated* tray rather than being given an invented date. A point
-  only the stated order places is drawn as a hatched band across the bounds it
-  has, a point whose order is disputed carries a mark beside it, and a
-  recurrence rule's occurrences are beads on a dotted spine in a lane of their
-  own, computed for the window on screen and never stored.
+  return is dimmed; the drawer's **Response** tab shows what Epimemer returned.
+- **Timeline**: one timeline at a time, in *record time* or *content time*,
+  with undated points in a tray and recurrence occurrences computed for the window.
 
 > **`EPIMEMER_VIZ_HOST` is a privacy setting as well as a network one.** On
 > the default loopback bind the hub keeps whole retrieval records, so they
@@ -307,33 +269,32 @@ agents require on|off|default` decides whether writes to that graph must
 name one. No MCP tool can do any of this: a tool the agent calls cannot prove
 the user asked for it, so these acts are reserved for a person at the CLI.
 
-`epimemer agents retire <handle>` takes a judge out of use. It keeps its name,
-its history and every decision, and review still answers for it; what changes
-is that `claim_agent` refuses it and the picker stops offering it beside the
-live ones. `epimemer agents reinstate <handle>` brings one back, as does the
-picker's *A retired judge…* entry. `epimemer agents delete <handle>` removes a
-judge that has never judged anything: it scans the graph, shows what it found,
-and refuses with the counts if anything names the judge, since a deleted record
-would leave rows carrying a key nothing resolves to a name.
+`epimemer agents retire <handle>` takes a judge out of use: its name, history
+and decisions stay, and `claim_agent` refuses it. `epimemer agents reinstate
+<handle>` brings it back. `epimemer agents delete <handle>` removes a judge that
+has never judged anything, and refuses with the counts if anything names it.
 
-`epimemer relations backfill` gives every relationship label already in use a
-record, in one go. It is idempotent and never touches a label that has one.
+`epimemer relations backfill` gives every relationship label in use a record;
+it is idempotent.
 
-`epimemer tags repair` puts back the names an old enrichment overwrote. It is
-for graphs written before enrichment learned to describe a topic instead of
-renaming it, and it asks about each node before touching it, since only a person
-can say which of two sentences was the tag's name. Idempotent: on a graph that
-never held the damage it finds nothing.
+`epimemer metacontexts declare` gives every node that names no metacontext
+one, `the-real` unless `--metacontext` names another, after asking.
 
-All of these work only against a **served** SurrealDB. An embedded store lives
-inside the server process, so a CLI writing to it would write to a separate
-copy the running server never reads. For the two settings, use
+`epimemer tags repair` finds topic nodes whose name was replaced by a
+description and puts the name back, asking about each node, since only a person
+can say which sentence was the name.
+
+All of these work against a served SurrealDB, a SQLite graph or Postgres, each
+of which a second process reaches as the server does. An embedded store (the
+in-memory backend, or a `mem://`, `file://` or `surrealkv://` SurrealDB URL)
+lives inside the server process, so a CLI writing to it would write to a
+separate copy the running server never reads. For the two settings, use
 `EPIMEMER_APPROVED_AGENTS` and `EPIMEMER_REQUIRE_JUDGE` instead; the command
 refuses and names the right variable rather than appearing to succeed.
 
 ### Backup and restore
 
-Three commands, and they are the same code the `backup_graph` tool runs:
+Four commands, writing the same bundles as the `backup_graph` tool:
 
 ```bash
 epimemer graphs export <graph> --to <path>     # a bundle of the whole graph
@@ -342,11 +303,9 @@ epimemer graphs verify <bundle>                # check one, then drop the copy
 epimemer graphs convert <graph> --to postgres  # rebuild it on another backend, in one step
 ```
 
-A bundle is one JSON Lines file per section (metacontexts, judges, nodes,
-edges, the decision journal, the relation vocabulary, timelines, documents and
-segments, and the graph's own settings), plus a manifest, compressed into
-`<graph>-<YYYY-MM-DD>.epimemer.tar.gz`. `--plain` writes the directory
-uncompressed for reading or diffing, and import accepts either.
+A bundle is one JSON Lines file per section of the graph, plus a manifest,
+compressed into `<graph>-<YYYY-MM-DD>.epimemer.tar.gz`. `--plain` writes the
+directory uncompressed for reading or diffing, and import accepts either.
 
 `--to` takes a local path, which covers an external drive, a synced folder or a
 repository you commit yourself, or a cloud URL. `gs://` needs
@@ -364,39 +323,19 @@ different model says so.
 override: replacing a graph is `delete_graph` and then import, two acts you
 already have. A failed import drops the partial graph and says why.
 
-The `graphs` commands run against whatever store the configuration names, so
-unlike the commands above they are not refused on an embedded one. They do warn:
-an embedded store opened from outside the server is an empty one, so exporting
-it writes an empty bundle and importing into it throws the graph away when the
-command exits.
+The `graphs` commands run against whatever store the configuration names, an
+embedded one included, and warn there: opened from outside the server it is
+empty, so an export writes an empty bundle and an import is lost on exit.
 
-Nothing runs on a schedule. Instead, `store_decomposition` and
-`apply_reflection` report `stores_since_backup` against `backup_threshold`, and
-when `backup_suggested` is true the agent raises it with you. Say yes and it
-calls `backup_graph`, which writes to `EPIMEMER_BACKUP_DESTINATION` and takes no
-path of its own, so an agent can act on the prompt without choosing where your
-graph goes. `EPIMEMER_BACKUP_THRESHOLD` sets how often it asks.
-
-## Architecture
-
-- **Dual-space**: vector embeddings as the primary representation, with a typed graph derived on top
-- **Three node types**: Topics (themes), Facts (atomic statements), Inferences (provisional derivations)
-- **Timelines**: one record holding timepoints, the ordering constraints sources have asserted between them, the temporal contradictions those constraints opened, and recurrence rules whose occurrences are computed per query
-- **Metacontexts**: they separate fiction from fact, and one source or perspective from another
-- **Petri nets**: segmentation, edge creation and retrieval run as executable, typed Petri nets via [Petritype](https://github.com/olenive/petritype), and the dashboard draws them as they fire
-- **Immutable history**: a node's *content* is never mutated; an update creates a new version joined to the old one by a history edge. Lifecycle metadata such as `status` and value signals is mutated in place
-- **Sources and topics are nodes**: a fact reaches its source document by a `sourced_from` edge and a tag by a `tagged_with_topic` edge, not by a string field. A *tag* is a name passed in at ingest; it resolves to a Topic node, the topic node created from that tag. That edge is a retrieval index and carries no evidential weight; `supports` is the evidential edge
-- **Relations**: relationships between nodes are open-vocabulary, user-labelled edges
+Nothing runs on a schedule: when a response says `backup_suggested`, the agent
+asks you, and on a yes calls `backup_graph`, which writes to
+`EPIMEMER_BACKUP_DESTINATION`. `EPIMEMER_BACKUP_THRESHOLD` sets how often it asks.
 
 ## Documentation
 
 - [SUMMARY.md](https://github.com/olenive/epimemer/blob/main/SUMMARY.md): the architecture, its concepts and the reasons for them
 - [INTEGRATION.md](https://github.com/olenive/epimemer/blob/main/INTEGRATION.md): Claude Code integration, agent guidance and the canonical tool table
-- [docs/RETRIEVAL.md](https://github.com/olenive/epimemer/blob/main/docs/RETRIEVAL.md): how `search` is answered: the two arms, rank fusion, result provenance, lineage collapse
-- [docs/VALIDITY.md](https://github.com/olenive/epimemer/blob/main/docs/VALIDITY.md): when a claim was true: intervals per source, correction versus world-change, recurrence, the soundness check
-- [docs/TIMELINES.md](https://github.com/olenive/epimemer/blob/main/docs/TIMELINES.md): when something happened and in what order: dated points, the order a source states between undated ones, temporal contradictions and their verdicts, recurrence rules
-- [docs/REFLECTION.md](https://github.com/olenive/epimemer/blob/main/docs/REFLECTION.md): the review loop: verdicts, what `reflect` nominates, what `apply_reflection` writes
-- [docs/ATTRIBUTION.md](https://github.com/olenive/epimemer/blob/main/docs/ATTRIBUTION.md): who judged this: the agent registry, why the user assigns the id, how approval reaches an agent, the append-only journal of every decision, and reading it back with `review`, `apply_review` and `rejudge`
+- [docs/](https://github.com/olenive/epimemer/blob/main/docs/README.md): how each part behaves for a caller, one page each: ingest, retrieval, valid time, timelines, reflection and attribution
 
 ## Contributing
 

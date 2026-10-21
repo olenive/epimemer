@@ -2,8 +2,7 @@
 
 The feature's core invariant, asserted end to end rather than through
 internals: a live hub, a live session client, real tool calls, and then the
-records fetched over the `retrievals` RPC exactly as a browser fetches them
-(`RETRIEVAL_PROVENANCE.md` §7).
+records fetched over the `retrievals` RPC exactly as a browser fetches them.
 """
 
 import asyncio

@@ -7,6 +7,7 @@ here directly, against storage.
 """
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,6 +20,7 @@ from epimemer.core.temporal import (
 )
 from epimemer.core.types import (
     EdgeType,
+    EmbeddingRecord,
     Fact,
     Inference,
     IntervalBasis,
@@ -43,7 +45,12 @@ from epimemer.storage.surrealdb_adapter import SurrealDBStorage
 from epimemer.visualization.event_bus import create_event_bus
 from epimemer.visualization.events import EdgeStored, edge_to_view, node_to_view
 from epimemer.visualization.instrumented_storage import instrument_storage
-from epimemer.visualization.snapshot import assemble_snapshot, list_graphs_result
+from epimemer.visualization.protocol import VIZ_SCHEMA_VERSION
+from epimemer.visualization.snapshot import (
+    assemble_embeddings,
+    assemble_snapshot,
+    list_graphs_result,
+)
 
 
 @pytest.fixture
@@ -207,6 +214,11 @@ class TestSnapshotAssembly:
         assert view["description"] == "Retained counsel, not employment."
         assert view["graph"] == "default"
 
+    async def test_assemble_snapshot_names_the_contract_it_speaks(self, storage):
+        data = await assemble_snapshot(storage, "default")
+
+        assert data["schema_version"] == VIZ_SCHEMA_VERSION
+
     async def test_assemble_snapshot_empty_graph(self, storage):
         data = await assemble_snapshot(storage, "default")
         assert data["nodes"] == []
@@ -220,6 +232,104 @@ class TestSnapshotAssembly:
         assert storage.current_database == "default"
 
         await assemble_snapshot(storage, "other")
+        assert storage.current_database == "default"
+
+
+# --- Vectors for a layout by meaning, beside the snapshot ---
+
+
+class TestEmbeddingsAssembly:
+    """`assemble_embeddings` answers with the vectors of a graph's active nodes,
+    one type at a time when asked, in the snapshot's words."""
+
+    async def _graph(self, storage):
+        """Two topic nodes and a fact embedded under one model, a topic node with
+        no vector, and a superseded topic node that has one."""
+        topics = [Topic(content=f"topic {i}", source_id="s1") for i in range(2)]
+        fact = Fact(content="a fact", source_id="s1")
+        bare = Topic(content="never embedded", source_id="s1")
+        retired = Topic(content="retired", source_id="s1", status=NodeStatus.SUPERSEDED)
+        for node in (*topics, fact, bare, retired):
+            await storage.store_node(node)
+        for i, node in enumerate((*topics, fact, retired)):
+            await storage.store_embedding(
+                EmbeddingRecord(item_id=node.id, model_id="model-a", vector=[float(i), 0.5, 0.25])
+            )
+        return SimpleNamespace(topics=topics, fact=fact, bare=bare, retired=retired)
+
+    async def test_every_active_node_with_a_vector_when_no_type_is_named(self, storage):
+        g = await self._graph(storage)
+
+        data = await assemble_embeddings(storage, "default", None)
+
+        assert data["graph"] == "default"
+        assert data["schema_version"] == VIZ_SCHEMA_VERSION
+        assert data["node_type"] is None
+        assert data["models"] == {"model-a": 3}
+        assert [(e["node_id"], e["node_type"]) for e in data["embeddings"]] == [
+            (g.topics[0].id, "topic"),
+            (g.topics[1].id, "topic"),
+            (g.fact.id, "fact"),
+        ]
+
+    async def test_a_named_type_restricts_the_answer(self, storage):
+        g = await self._graph(storage)
+
+        topics = await assemble_embeddings(storage, "default", "topic")
+        facts = await assemble_embeddings(storage, "default", "fact")
+
+        assert topics["node_type"] == "topic"
+        assert [e["node_id"] for e in topics["embeddings"]] == [t.id for t in g.topics]
+        assert [e["node_id"] for e in facts["embeddings"]] == [g.fact.id]
+        assert facts["embeddings"][0] == {
+            "node_id": g.fact.id,
+            "node_type": "fact",
+            "model_id": "model-a",
+            "vector": [2.0, 0.5, 0.25],
+        }
+
+    async def test_a_node_without_a_vector_is_absent(self, storage):
+        g = await self._graph(storage)
+
+        data = await assemble_embeddings(storage, "default", "topic")
+
+        assert g.bare.id not in {e["node_id"] for e in data["embeddings"]}
+
+    async def test_a_retired_node_is_absent_although_it_has_a_vector(self, storage):
+        """The snapshot draws active nodes, and a vector for a node it does not
+        draw has nowhere to go."""
+        g = await self._graph(storage)
+
+        data = await assemble_embeddings(storage, "default", None)
+
+        assert g.retired.id not in {e["node_id"] for e in data["embeddings"]}
+
+    async def test_a_type_with_nothing_embedded_answers_with_empty_lists(self, storage):
+        await self._graph(storage)
+
+        data = await assemble_embeddings(storage, "default", "inference")
+
+        assert data["embeddings"] == []
+        assert data["models"] == {}
+
+    async def test_an_unknown_type_is_an_error_rather_than_an_empty_answer(self, storage):
+        await self._graph(storage)
+
+        with pytest.raises(ValueError):
+            await assemble_embeddings(storage, "default", "topics")
+
+    async def test_it_reads_the_graph_asked_for_and_leaves_the_active_one(self, storage):
+        await storage.switch_database("other")
+        elsewhere = Topic(content="elsewhere", source_id="s1")
+        await storage.store_node(elsewhere)
+        await storage.store_embedding(
+            EmbeddingRecord(item_id=elsewhere.id, model_id="model-a", vector=[1.0])
+        )
+        await storage.switch_database("default")
+
+        data = await assemble_embeddings(storage, "other", "topic")
+
+        assert [e["node_id"] for e in data["embeddings"]] == [elsewhere.id]
         assert storage.current_database == "default"
 
 

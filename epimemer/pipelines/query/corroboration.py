@@ -1,10 +1,11 @@
 """How many *independent* sources say this — derived at read time.
 
-`ValueSignal` promised two things and the confidence prior split them. *"How well-supported by
-evidence"* became the caller-supplied `confidence` prior; *"multiple independent
-sources increase confidence"* is this module. The difference between them is
-what the number is *about*: `confidence` describes the material, corroboration
-describes the **graph**, so it changes whenever the graph changes.
+`ValueSignal` promised two things and the confidence prior split them. *"How
+well-supported by evidence"* became the caller-supplied `confidence` prior;
+*"multiple independent sources increase confidence"* is this module. The
+difference between them is what the number is *about*: `confidence` describes
+the material, corroboration describes the **graph**, so it changes whenever the
+graph changes.
 
 **Never stored.** A stored corroboration count is the trap that removed
 `novelty` — an answer frozen at the moment it was taken, against a baseline
@@ -21,26 +22,19 @@ tenfold while adding no support at all.
 counting sources per node id would count each restatement's source once and
 stop. The walk covers ``{node} ∪ {SIMILARITY neighbours}`` instead. Facts can be
 deduplicated, but only where an agent judged them one claim *and* the
-merge cleared its gate — which is nothing ingested before 2026-08-21, since the
-gate reads a `claim_kind` recorded at ingest. So the neighbourhood stays the
-right walk, and merging simply moves a pair from this reading to the identity
-one. Three reasons it was right not to wait: nothing is destroyed, a wrong
-similarity edge overstates a number whose workings come back with it, and it
-works today.
+merge cleared its gate, which reads a `claim_kind` recorded at ingest, so a fact
+ingested without one never merges. So the neighbourhood stays the right walk,
+and merging simply moves a pair from this reading to the identity one. Nothing
+is destroyed either way, and a wrong similarity edge overstates a number whose
+workings come back with it.
 
-**No similarity edge is written anywhere, so today this walk always returns
-`{node}`** (measured 2026-08-21: zero on both real graphs). The reads here
-are correct and the neighbourhood is the right design; it simply has no input
-yet, because the "record `SIMILARITY` and keep both" action every refusal
-recommends is reachable only through the generic `link` tool and is therefore
-never taken. Two consequences worth knowing before changing anything here: every
-count in production is currently the *identity* reading, and the cost measured
-in `BENCHMARKS.md` was taken against edges assigned by a dial rather than
-produced by judgment. **This is not a reason to collapse the walk** — that
-migration was proposed for dedup and declined for exactly this reason, since
-removing the neighbourhood would delete the only consumer of the judgment the
-`assessed` edge
-exists to start recording.
+**A similarity edge is a judgment.** `apply_reflection(similarities=[…])`
+writes one where a judge calls a nominated pair `one_claim`
+(`pipelines/reflection/similarity_decisions.py`), beside the `assessed` edge
+every verdict writes. The cost measured in `BENCHMARKS.md` was taken against
+edges assigned by a dial rather than produced by judgment. **Collapsing the walk
+into node identity was proposed for dedup and declined**, since removing the
+neighbourhood would delete the only consumer of the `one_claim` judgment.
 
 **A claim about another period is not a second witness.** "The city is
 called Leningrad" (BBC, 1924–1991) and "the city is called Saint Petersburg"
@@ -50,7 +44,7 @@ city really was renamed, and the predecessor is `historical` rather than
 `corrected`, which still corroborates by the rule above. So Reuters counted as a
 second witness to a sentence it never wrote, and the number rose exactly where
 the graph already knew better. `assertions_are_disjoint` settles it, and this
-module now asks it before the neighbourhood is formed.
+module asks it before the neighbourhood is formed.
 
 **Nothing is removed from the graph, and nothing is even rejected.** Both claims
 are true of their own periods, both stay, and the succession between them is
@@ -64,10 +58,10 @@ response is the only place they would learn it.
 **It can only fire where the dates provably clear each other.**
 `assertions_are_disjoint` answers False for an undated side, for a half-dated
 pair, for intervals on different clocks, and for any cross pair that compares
-`unknown` (`temporal.py` §6). On today's corpora, where most nodes carry no
-intervals, it will rarely fire — the correct amount, not a reason to widen it,
-since a check that fired on ignorance would be measuring how diligently the
-corpus was dated.
+`unknown` (`dev-docs/VALIDITY_DESIGN.md` §2.6). On today's corpora, where most
+nodes carry no intervals, it will rarely fire — the correct amount, not a reason
+to widen it, since a check that fired on ignorance would be measuring how
+diligently the corpus was dated.
 
 **An agreeing inference is reported, not counted.** `reflect` offers similar
 inferences that share no premise (`SIMILAR_INFERENCES.md`), so a `similarity`
@@ -289,10 +283,9 @@ async def _source_edges_by_node(
     """The `sourced_from` edges of each node — the document *and* the periods.
 
     One fetch with two readers. The count needs the document at the end of the
-    edge; the disjointness rule needs the intervals riding on it. This
-    used to take `dst_id` and discard the rest, which is the whole defect: the
-    dates that would have settled the Leningrad pair were being read and thrown
-    away on the same line.
+    edge; the disjointness rule needs the intervals riding on it. Taking
+    `dst_id` alone would throw away, on the line that read them, the dates that
+    settle the Leningrad pair.
     """
     if not node_ids:
         return {}
@@ -372,7 +365,7 @@ def _adjacent_periods(
     """The uncounted look-alikes, each carrying the periods that uncounted it.
 
     Sorted by id for the same reason the sources are: one graph, one answer, on
-    either backend.
+    every backend.
     """
     return [
         AdjacentPeriod(
@@ -403,7 +396,7 @@ def _assemble(
     """Fold the contributing nodes into distinct sources, or `None` for no source.
 
     The subject's own sources are listed first and the rest sorted by id, so the
-    same graph gives the same answer on either backend and the entry a reader
+    same graph gives the same answer on every backend and the entry a reader
     most expects to see leads.
     """
     names: dict[str, str | None] = {}

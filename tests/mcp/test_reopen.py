@@ -19,7 +19,7 @@ was reopened and why, that the refusals name what was looked for, that every
 reopen leaves a `reopened` journal row carrying the reason, and that a fresh
 verdict suppresses again.
 
-Both backends, through the `storage` fixture.
+Every backend, through the `storage` fixture.
 """
 
 from datetime import datetime

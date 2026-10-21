@@ -280,7 +280,7 @@ class TestAtomicOperations:
         new_emb = EmbeddingRecord(item_id=new.id, model_id="m", vector=[0.1, 0.2])
         lineage = NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY)
         # Blind on purpose: the storage protocol names no exception type, and the
-        # two backends refuse with different ones.
+        # backends refuse with different ones.
         with pytest.raises(Exception):  # noqa: B017
             await store.supersede_node_tx(
                 old,
@@ -315,7 +315,7 @@ class TestAtomicOperations:
         await store.store_node(Topic(id=collide.id, content="squatter", source_id="s1"))
 
         # Blind on purpose: the storage protocol names no exception type, and the
-        # two backends refuse with different ones.
+        # backends refuse with different ones.
         with pytest.raises(Exception):  # noqa: B017
             await store.write_batch_tx(nodes=[fresh, collide])
 
@@ -347,7 +347,7 @@ class TestAtomicOperations:
         )
 
         # Blind on purpose: the storage protocol names no exception type, and the
-        # two backends refuse with different ones.
+        # backends refuse with different ones.
         with pytest.raises(Exception) as failed:  # noqa: B017
             await store.write_batch_tx(timelines=[appended], embeddings=[collide])
 

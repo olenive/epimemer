@@ -1,18 +1,19 @@
 """Keeping the active graph still while a logical operation is using it.
 
 **The active graph is process state on every backend**, not a SurrealDB detail.
-`MemoryStorage` resolves `self._graphs[self._database]` on every call and
-`SurrealDBStorage` sends `USE ns db` down one shared connection — so in both, a
-switch landing between two steps of one operation sends the rest of it
-somewhere else. It was filed as a connection problem and it is
-not; a dedicated second connection would have fixed the smaller half of it, on
-one backend.
+`InMemoryStorage` resolves `self._graphs[self._database]` on every call, SQLite
+and Postgres read the active graph's name off the store, and `SurrealDBStorage`
+sends `USE ns db` down one shared connection, so on every backend a switch
+landing between two steps of one operation sends the rest of it somewhere else.
+It is not a connection problem: a dedicated second connection would fix the
+smaller half of it, on one backend.
 
 Two things move the active graph, and they are the whole list:
 
-- **`switch_database`**, permanently — `use_graph`, racing anything batched
+- **`switch_database`**, permanently: `use_graph`, racing anything batched
   alongside it.
-- **the `viz_list_*` reads**, which borrow it and give it back, so that a
+- **SurrealDB's reads of another graph** (the `viz_list_*` reads and
+  `count_decisions_by_graph`), which borrow it and give it back, so that a
   dashboard can snapshot a graph the session is not on. That is a real feature
   (the viewer's *Snapshot* badge), and the borrow is the mechanism the
   wrong-graph incident had, running inside the server where `expected_graph`

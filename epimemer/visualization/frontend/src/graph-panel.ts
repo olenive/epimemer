@@ -35,8 +35,8 @@ cytoscape.use(fcose);
 // --- Color scheme by node type ---
 
 // Both tables name a *meaning* in the shared semantic palette rather than a hex
-// value, so the graph and the timeline cannot drift apart again (#56) and a
-// re-pick happens once, in `theme.ts`.
+// value, so the graph and the timeline cannot draw one kind in two colours, and
+// a re-pick happens once, in `theme.ts`.
 const NODE_MEANINGS: Record<string, keyof SemanticPalette> = {
   topic: "topic",
   fact: "fact",
@@ -47,8 +47,8 @@ const NODE_MEANINGS: Record<string, keyof SemanticPalette> = {
 
 // An edge tied to a node kind takes that kind's hue: `supports` runs from a
 // fact, `derived_from` from an inference, `subtopic_of` between topics. That is
-// also what keeps them apart — three of these used to sit on a hue that, after
-// the palette moved, belonged to a *different* kind.
+// also what keeps them apart: an edge on a hue of its own can end up, after the
+// palette moves, on the hue that belongs to a *different* kind.
 const EDGE_MEANINGS: Record<string, keyof SemanticPalette> = {
   supports: "fact",
   // The fact → topic half of what `supports` used to mean, split out when the
@@ -64,17 +64,16 @@ const EDGE_MEANINGS: Record<string, keyof SemanticPalette> = {
   // Lineage too, and deliberately the same hue: which of the two events
   // happened is carried by the *node's* status colour, so tinting the edge
   // would say it twice and leave the two readings free to disagree. Missing
-  // here it would fall through to `UNKNOWN_KIND` grey — the #55 failure, where
-  // a status the backend had grown drew as a kind the frontend never heard of.
+  // here it would fall through to `UNKNOWN_KIND` grey, a value the backend had
+  // grown drawn as a kind the frontend never heard of.
   temporally_followed_by: "lineage",
   merged_into: "lineage",
-  // A judgment about a pair, written whichever way the verdict went (#64). It
-  // is here for the reason the two above are: the backend grew an edge type,
-  // and a type this table has never heard of draws as `UNKNOWN_KIND` grey —
-  // which is the #55 failure, one layer over.
+  // A judgment about a pair, written whichever way the verdict went. It is here
+  // for the reason the two above are: the backend grew an edge type, and a type
+  // this table has never heard of draws as `UNKNOWN_KIND` grey.
   assessed: "assessed",
-  // An earlier `one_claim` verdict withdrawn (#68). The `similarity` edge stays
-  // in the graph — nothing deletes — so both draw, and they must not draw
+  // An earlier `one_claim` verdict withdrawn. The `similarity` edge stays in
+  // the graph, since nothing deletes, so both draw, and they must not draw
   // alike: `similarity` in its own hue would show agreement that has been
   // taken back. It takes `contradiction`'s, which is the other edge that stops
   // a similarity partner counting, for the same reason and by the same route.
@@ -95,7 +94,7 @@ export const nodeColor = (nodeType: string, theme: Theme): string => {
 
 /**
  * The colour a node draws in. **Every caller goes through here** — including
- * `applyTheme`, which is where focus state was previously lost.
+ * `applyTheme`, so a theme change keeps focus state.
  *
  * Cytoscape has no saturation property: nodes draw as
  * `background-color: data(color)`, so desaturation is a *computed colour*
@@ -128,10 +127,11 @@ export const edgeColor = (edgeType: string, theme: Theme): string => {
 //
 // So `active` is the only status named, and everything else — including one
 // this file has never heard of — fades. Listing the retired statuses instead is
-// what caused #55: `NodeStatus` grew `corrected` and `historical` in 666904f,
-// the list did not, and two retired states silently drew as live. A status is
-// added on the Python side by someone who has no reason to look here, so the
-// default is the only part of this that can be relied on to be right.
+// how retired nodes once drew at full opacity: `NodeStatus` grew `corrected`
+// and `historical`, the list did not, and two retired states silently drew as
+// live. A status is added on the Python side by someone who has no reason to
+// look here, so the default is the only part of this that can be relied on to
+// be right.
 const ACTIVE_OPACITY = 1.0;
 const RETIRED_OPACITY = 0.3;
 
@@ -146,7 +146,7 @@ export const statusOpacity = (status: string): number =>
 // (`getElementById` returns an empty collection, `.addClass` is a no-op), and a
 // node the type filter has set `display: none` on. Click, nothing happens, no
 // explanation. Both are closed here rather than at each caller
-// (EVENT_LOG.md §7, RETRIEVAL_PROVENANCE.md §4.4).
+// (VISUALISATION.md, Rules every panel follows).
 
 export interface HighlightReport {
   highlighted: string[];
@@ -227,7 +227,7 @@ const LAYOUT_CONFIGS: Record<string, object> = {
 //
 // Built per theme rather than declared once: the canvas is drawn, not styled,
 // so Tailwind's `dark:` variants cannot reach it. The hues move with the theme
-// too (#56), but they are baked into each element's `color` data at add time
+// too, but they are baked into each element's `color` data at add time
 // rather than read from here — so `applyTheme` re-writes them.
 const stylesheetFor = (palette: Palette) => [
   {

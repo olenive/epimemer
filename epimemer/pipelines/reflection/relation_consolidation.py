@@ -7,17 +7,15 @@ embedding similarity over the labels, scoped to the same behavioural kind (a
 
 **Nomination is the whole of what this module does, and judgment is the whole
 of what happens next.** `apply_reflection(relation_verdicts=[…])` records
-`distinct` or `synonymous` against both label records and nothing is rewritten
-— `relation_merges`, which relabelled edges in place, was removed on 2026-08-28
-(`RELATION_LABELS.md` §5). A vocabulary converges here through
-`describe_relation` rather than through collapse.
+`distinct` or `synonymous` against both label records and nothing is
+rewritten: no edge is ever relabelled (`RELATION_LABELS.md` §5). A vocabulary
+converges here through `describe_relation` rather than through collapse.
 
-A pair already judged — `distinct` or `synonymous`, via
-`apply_reflection(relation_verdicts=[…])` — is never nominated again.
-That suppression is **permanent by design**, inherited from the fact-pair layer
-in as many words rather than by accident, so a wrong `distinct` silences a pair
-for good; `RELATION_LABELS.md` §4.2 states it beside its dual, and `ISSUES.md`
-is where a retraction would be argued.
+A pair already judged, `distinct` or `synonymous`, is not nominated again: the
+suppression is the fact-pair layer's rule, inherited in as many words.
+`RELATION_LABELS.md` §4.2 states it beside its dual. A verdict a judge thinks
+was wrong goes back on the worklist only through `reopen`, which writes a
+`reopened` row the suppression reads.
 """
 
 import math

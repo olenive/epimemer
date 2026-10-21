@@ -1,7 +1,8 @@
 """Domain helpers for the epistemic review loop (see REVIEW_EPISTEMIC.md).
 
-Pure planning functions (reads only) that compute the edges / edge-ids a
-supersession or resolution must apply atomically.
+The review labels a node carries, the metacontexts a node stands in, the one
+similarity nomination bar, and pure planning functions (reads only) that compute
+the edges and edge ids a supersession or resolution must apply atomically.
 """
 
 from collections.abc import Awaitable, Callable, Sequence
@@ -26,15 +27,15 @@ from epimemer.storage.protocol import StorageBackend
 # been nominated"* — which is a statement about this number, not a coincidence
 # that happens to share its value.
 #
-# **It was two numbers until 2026-08-21, and the pair was unsound rather than
-# untidy.** `check_conflicts` and `merge_facts` used 0.83 while reflect's
-# contradiction and recurrence sweeps used a literal 0.80, so a pair scoring
-# 0.81 was nominated by reflect, judged `redundant` by the agent, and then
-# refused by `merge_facts` — with a message saying the graph would never have
-# offered the two as candidates, which it had just done. Unified downwards, to
-# 0.80: the gate is not a second opinion on the agent's judgment (see
-# `fact_dedup.merge_refusal`), so raising the sweeps instead would have narrowed
-# contradiction *and* recurrence nomination to buy back a message. The invariant
+# **One number, because two were unsound rather than untidy.** While
+# `check_conflicts` and `merge_facts` used 0.83 and reflect's contradiction and
+# recurrence sweeps used a literal 0.80, a pair scoring 0.81 was nominated by
+# reflect, judged `redundant` by the agent, and then refused by `merge_facts`,
+# with a message saying the graph would never have offered the two as
+# candidates, which it had just done. Unified downwards, to 0.80: the gate is
+# not a second opinion on the agent's judgment (see `fact_dedup.merge_refusal`),
+# so raising the sweeps instead would have narrowed contradiction *and*
+# recurrence nomination to buy back a message. The invariant
 # to keep, and the one `TestTheSimilarityFloorIsTheNominationBar` pins, is
 # **merge floor ≤ every nomination bar**.
 SIMILARITY_NOMINATION_THRESHOLD = 0.80
@@ -238,11 +239,10 @@ async def metacontexts_of(node_id: str, storage: StorageBackend) -> set[str]:
     **Absence names no metacontext.** A node with no ``has_metacontext`` edge is a
     node nobody said anything about, which is what absence means everywhere
     else here — an omitted ``confidence`` is unrated, an absent ``judged_by``
-    is unknown, an omitted ``claim_kind`` is unjudged. This used to be the one
-    exception, answering the base metacontext for an untagged node and so
-    turning silence into an assertion about the real world; requiring the
-    metacontext at
-    ingest made that exception unnecessary, and it was removed.
+    is unknown, an omitted ``claim_kind`` is unjudged. Answering the base
+    metacontext for an untagged node would turn silence into an assertion about
+    the real world, and requiring the metacontext at ingest makes that
+    unnecessary.
 
     The consequence is deliberate and worth stating: a node without a
     metacontext shares a metacontext with **nothing**, so it is never nominated

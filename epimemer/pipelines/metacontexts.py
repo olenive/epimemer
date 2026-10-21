@@ -11,9 +11,9 @@ metacontext instead of minting a node without one, `declare_metacontext` so
 a graph written before the rule can stop holding any, and
 `stamp_tag_metacontexts` so a name stands where it is used rather than nowhere.
 
-A metacontext assignment used to be **one-way**: `link` writes a
-`has_metacontext` edge and nothing removed one, so a fact wrongly assigned to a
-fiction metacontext stayed there for ever. That is not cosmetic. Metacontexts
+A metacontext assignment has to be **revisable**: `link` writes a
+`has_metacontext` edge, and without a way to remove one a fact wrongly assigned
+to a fiction metacontext would stay there for ever. That is not cosmetic. Metacontexts
 are load-bearing in three places and all three fail *silently*:
 
 - `merge_refusal` refuses a cross-metacontext pair, so a misassigned fact
@@ -23,7 +23,7 @@ are load-bearing in three places and all three fail *silently*:
 - a metacontext-scoped `search` misses it where it belongs and returns it where
   it does not.
 
-**Not a supersession**, which is why `update` had not quietly solved it: the
+**Not a supersession**, which is why `update` does not solve it: the
 claim is unchanged and the world has not moved, so `because` has no honest
 value. It is `rejudge`'s category — *the judgment about the claim was wrong* —
 and its own tool for a structural reason rather than a tidiness one. `rejudge`
@@ -107,13 +107,11 @@ async def reassign_metacontext(
     in one call never reaches that state, and never reaches the
     last-metacontext question either.
 
-    **Leaving a node stating no metacontext at all is refused outright.** It
-    used to be allowed behind a flag, back when absence meant base reality and
-    the withdrawal was a *promotion* worth authorising deliberately. Absence
-    means nothing now: a node without a metacontext shares a metacontext with
-    nothing, so it is never compared, never merged, and returned by no scoped
-    search. There is no longer any reason to want one, so the flag is gone
-    rather than renamed: a claim goes somewhere, or it stays where it is.
+    **Leaving a node stating no metacontext at all is refused outright.** A
+    node without a metacontext shares a metacontext with nothing, so it is never
+    compared, never merged, and returned by no scoped search. There is no reason
+    to want one, so there is no flag for it: a claim goes somewhere, or it stays
+    where it is.
 
     Nothing here moves a status or a lineage, and the node keeps its
     `judged_by` — that field records who wrote the wording, which is unchanged.

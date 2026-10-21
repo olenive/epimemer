@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """Measure Epimemer's cost as a graph grows.
 
-batching documents a known scaling ceiling — full scans and per-node
-round-trips in `list_sources`, `reflect` and `search` enrichment — and defers
-the fix until "latency is felt". That trigger is only checkable if something
-measures it, which is what this does.
+Full scans and per-node round trips in `list_sources`, `reflect` and `search`
+enrichment set a scaling ceiling, and the fix for each waits until its latency is
+felt. That trigger is only checkable if something measures it, which is what
+this does.
 
 Reuses the public tool functions (`segment_text` → `store_decomposition`,
 `search`, `reflect`, `list_sources`) rather than touching storage directly, so
@@ -24,27 +24,26 @@ read-time annotations cost what the graph has *become* rather than what size it
 is — corroboration walks the similarity neighbourhood and counts publishers, so
 against the plain corpus it would measure an empty walk over nothing.
 
-**Two corpora, and `diverse` is the default from 2026-08-29.** `--corpus
-templated` draws sentences from a 17-word vocabulary, which makes each one a
-near-restatement of every other and survives the pair scorer at ~1% under the
-real model — two orders above real prose. `--corpus diverse` metacontexts sentences
-over wide slots instead, survives at ~0, and plants restatement clusters
+**Two corpora, and `diverse` is the default.** `--corpus templated` draws
+sentences from a 17-word vocabulary, which makes each one a near-restatement of
+every other and survives the pair scorer at ~1% under the real model, two orders
+above real prose. `--corpus diverse` builds sentences from a template with wide
+slots instead, survives at ~0, and plants restatement clusters
 (`--duplicate-groups`, `--duplicate-size`) so the surviving-pair population is
 an **input** rather than a property of the generator nobody chose.
 
-The default was `templated` for one day, on the grounds that every recorded
-figure had been taken over it. That is the wrong side of the trade: a benchmark
-should default to measuring the thing it exists to measure, and comparability
-belongs in a labelled row rather than in a default nobody re-reads. Every
-emitted record names its corpus, so a historical comparison is
-`--corpus templated` and the old rows say which they were.
+Figures recorded before 2026-08-29 were taken over `templated`, and that is not
+a reason to default to it: a benchmark should default to measuring the thing it
+exists to measure, and comparability belongs in a labelled row rather than in a
+default nobody re-reads. Every emitted record names its corpus, so a historical
+comparison is `--corpus templated` and the old rows say which they were.
 
-**Widening the vocabulary alone does not work, and was tried first
-(2026-08-29).** Survival goes 1.13% → 0.0% between a 17-word bag and a 200-word
-one and stays there at 2,000 and 20,000 — the dial steps straight over the
-~0.01% real prose sits at, because what survives a pair scorer is shared
-*phrasing*, and a random generator never restates anything. Planting is what
-puts survivors back under control rather than under a vocabulary size.
+**Widening the vocabulary alone does not work** (measured 2026-08-29). Survival
+goes 1.13% → 0.0% between a 17-word bag and a 200-word one and stays there at
+2,000 and 20,000 — the dial steps straight over the ~0.01% real prose sits at,
+because what survives a pair scorer is shared *phrasing*, and a random
+generator never restates anything. Planting is what puts survivors back under
+control rather than under a vocabulary size.
 
 **The corpus only reaches a score through the provider, so under the mock it
 does not reach one at all.** The mock hashes text rather than reading it, and
@@ -137,12 +136,13 @@ _WORDS = (
     "context source relation timeline metacontext contradiction evidence"
 ).split()
 
-# The diverse corpus: a metacontext with wide slots rather than a wider word bag. The
-# slots multiply, so two independent draws rarely share enough phrasing to
-# score, while every sentence stays ordinary English. Measured over 400 facts
-# at the fact threshold (2026-08-29): 2 surviving pairs in 79,800 — 0.0025%,
-# against 1.13% for the templated corpus and 0.0105% for real facts in a real
-# graph. Restatements are planted rather than hoped for; see `_fact_pool`.
+# The diverse corpus: a sentence template with wide slots rather than a wider
+# word bag. The slots multiply, so two independent draws rarely share enough
+# phrasing to score, while every sentence stays ordinary English. Measured over
+# 400 facts at the fact threshold (2026-08-29): 2 surviving pairs in 79,800 —
+# 0.0025%, against 1.13% for the templated corpus and 0.0105% for real facts in
+# a real graph. Restatements are planted rather than hoped for; see
+# `_fact_pool`.
 _NOUNS = """harbour orchard ledger glacier turbine sediment archive lantern quarry pasture
 trawler seminar bursary aqueduct foundry marsh compass parchment vineyard causeway
 kiln estuary almanac terrace bellows reservoir cloister granary lattice moraine
@@ -1051,10 +1051,10 @@ def main() -> None:
         choices=CORPORA,
         default="diverse",
         help=(
-            "which text to generate. 'diverse', the default from 2026-08-29, "
-            "metacontexts sentences over wide slots and survives the pair scorer at "
+            "which text to generate. 'diverse', the default, builds sentences "
+            "from a template with wide slots and survives the pair scorer at "
             "~0, like real prose. 'templated' is the 17-word vocabulary every "
-            "figure recorded before that date was taken over, and survives at "
+            "figure recorded before 2026-08-29 was taken over, and survives at "
             "~1%% under the real model — pass it to reproduce one of them."
         ),
     )

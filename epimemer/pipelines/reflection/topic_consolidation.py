@@ -1,8 +1,8 @@
 """Topic consolidation for the reflection layer.
 
-Provides both flat merging (original behavior, marks sources as merged)
-and hierarchical consolidation (groups similar topics under a synthesized
-parent, keeping children active).
+Finds similar topic pairs for `reflect` to nominate, holds the merge safety bar
+(`all_pairs_above_threshold`), and merges two topics into one
+(`merge_similar_topics`, which marks the sources merged).
 """
 
 import math
@@ -30,8 +30,8 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     Kept scalar deliberately. Its one remaining caller is the merge safety bar,
     which runs over the two or three nodes of a single proposed merge — bounded
     by the merge, not by the graph — so the setup cost of a matrix product would
-    exceed the comparisons it replaces. The graph-scaled loop that used to be
-    here is now `similar_pairs`.
+    exceed the comparisons it replaces. The graph-scaled loop is
+    `similar_pairs`.
     """
     dot = sum(x * y for x, y in zip(a, b, strict=True))
     norm_a = math.sqrt(sum(x * x for x in a))
@@ -82,12 +82,11 @@ async def find_similar_topic_pairs(
     sorted by score descending.
 
     **Pairs somebody has already judged are dropped**, on the same terms as the
-    fact and inference sweeps and through the same read. This sweep was the one
-    that never did it: `apply_reflection` accepted a verdict on a topic pair,
-    wrote the `assessed` edge and reported it recorded, and the pair came back
-    on the next reflect regardless — for ever, to an agent who could not see it
-    had been answered. Found 2026-08-29 by judging three topic pairs and
-    watching all three return.
+    fact and inference sweeps and through the same read. Without it,
+    `apply_reflection` would accept a verdict on a topic pair, write the
+    `assessed` edge and report it recorded, and the pair would come back on the
+    next reflect regardless, for ever, to an agent who could not see it had
+    been answered.
 
     Args:
         storage: The storage backend.

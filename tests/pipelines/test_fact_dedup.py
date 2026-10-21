@@ -1039,7 +1039,7 @@ class TestTheJudgmentIsRecordedAtIngest:
     async def test_the_kind_survives_a_round_trip_through_the_backend(
         self, storage, embedding_provider
     ):
-        """Both backends, because a judgment that does not persist is one the
+        """Every backend, because a judgment that does not persist is one the
         merge can never read."""
         stored = await _fact(
             storage,

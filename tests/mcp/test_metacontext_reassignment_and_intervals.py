@@ -13,7 +13,7 @@ metacontext promotes the claim from asserted-in-one-world to asserted-in-all —
 why the paradigm repair is a *move*, and why a bare withdrawal has to say it
 means the promotion.
 
-Both backends via the `storage` fixture.
+Every backend, through the `storage` fixture.
 """
 
 from datetime import UTC, datetime

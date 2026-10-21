@@ -1,7 +1,7 @@
 """Postgres storage backend.
 
 One schema per graph in one Postgres database, reached over one connection.
-`dev-docs/POSTGRES_BACKEND.md` is the design, and this module has the shape of
+`dev-docs/STORAGE_BACKENDS.md` is the design, and this module has the shape of
 `sqlite_adapter.py`: the same tables, the same filter columns copied out of a
 `data` record, the same helpers, with Postgres types. What differs is said
 here.
@@ -24,7 +24,7 @@ lose the active graph, and reading another graph is an ordinary query against
 another schema: no second connection, no borrowing, no mover turn.
 
 **The connection runs in autocommit mode**, so every statement commits on its
-own and a transaction exists only where the code says so: the ten `*_tx`
+own and a transaction exists only where the code says so: the `*_tx`
 methods, the two read-modify-writes (resetting a counter, merging a relation
 label), `store_timeline`'s version check, and opening or deleting a graph, each
 inside `connection.transaction()`.
@@ -591,6 +591,26 @@ async def _embeddings(
     return [
         _load_embedding(data, vector) for data, vector in await _fetch(connection, query, params)
     ]
+
+
+def _embedding_where(
+    *, item_ids: Sequence[str] | None = None, model_id: str | None = None
+) -> tuple[str, list[Any]]:
+    """The embedding filters as one WHERE clause and its parameters.
+
+    Shared by the active graph's batched fetch and the viz read of a named
+    graph, so an item and a model select the same rows from either. An empty
+    list matches nothing.
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+    if item_ids is not None:
+        clauses.append(f"item_id {_ANY}")
+        params.append(_values(item_ids))
+    if model_id is not None:
+        clauses.append("model_id = %s")
+        params.append(model_id)
+    return (f"WHERE {' AND '.join(clauses)}" if clauses else ""), params
 
 
 async def _node(connection: Connection, g: sql.Identifier, node_id: str) -> EpistemicNode | None:
@@ -1897,11 +1917,7 @@ class PostgresStorage:
         found: dict[str, list[EmbeddingRecord]] = {item_id: [] for item_id in wanted}
         if not wanted:
             return found
-        where = f"WHERE item_id {_ANY}"
-        params: list[Any] = [wanted]
-        if model_id is not None:
-            where += " AND model_id = %s"
-            params.append(model_id)
+        where, params = _embedding_where(item_ids=wanted, model_id=model_id)
         for embedding in await self._run(lambda c, g: _embeddings(c, g, where, params)):
             found[embedding.item_id].append(embedding)
         return found
@@ -2545,3 +2561,13 @@ class PostgresStorage:
     ) -> Sequence[DecisionRecord]:
         where, params = _decision_where(kinds=kinds)
         return await self._read_graph(database, lambda c, g: _decisions(c, g, where, params), [])
+
+    async def viz_list_embeddings(
+        self,
+        database: str,
+        *,
+        item_ids: Sequence[str] | None = None,
+        model_id: str | None = None,
+    ) -> Sequence[EmbeddingRecord]:
+        where, params = _embedding_where(item_ids=item_ids, model_id=model_id)
+        return await self._read_graph(database, lambda c, g: _embeddings(c, g, where, params), [])

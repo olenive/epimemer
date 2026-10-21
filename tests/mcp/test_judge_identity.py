@@ -5,8 +5,8 @@ what they mean once a graph holds records: that a handle binds to the judge the
 user meant, that a rename carries decisions with it, and that consolidating two
 records rewrites no journal row.
 
-Both backends, because a judge is graph *state* and the two stores agree about
-it only if something checks — the divergence `tests/conftest.py` exists for.
+Every backend, because a judge is graph *state* and the stores agree about it
+only if something checks: the divergence `tests/conftest.py` exists for.
 """
 
 from datetime import UTC, datetime

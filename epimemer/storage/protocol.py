@@ -1,8 +1,7 @@
 """Storage backend protocol.
 
-Defines the interface that all storage backends must implement.
-The protocol is designed to be storage-agnostic — SurrealDB, Postgres,
-in-memory, or anything else can implement it.
+Defines the interface that every storage backend implements in full: the
+in-memory store, SurrealDB, SQLite and Postgres.
 """
 
 import re
@@ -512,8 +511,7 @@ class StorageBackend(Protocol):
         Backends must not answer this with one statement per id — that is the
         cost it exists to remove. On SurrealDB a node's table is not known from
         its id, so the single-node form probes topic, then fact, then inference:
-        1–3 round-trips each, and 2,104 of them in one `reflect` at 1,200 nodes
-        .
+        1–3 round-trips each, and 2,104 of them in one `reflect` at 1,200 nodes.
         """
         ...
 
@@ -896,12 +894,12 @@ class StorageBackend(Protocol):
     ) -> None:
         """Atomically write one timeline decision, with any links it moved.
 
-        The sixth transaction boundary, and the one a timeline decision lands
-        through. A split or a merge changes the timeline record *and* re-points
-        every `TIMELINK` naming the point it touched, and those used to be a
-        `store_timeline` followed by two `store_edge` calls per fact: a failure
-        between them left the record saying the fact had moved while its link
-        still pointed at the old date.
+        The transaction boundary a timeline decision lands through. A split or
+        a merge changes the timeline record *and* re-points every `TIMELINK`
+        naming the point it touched; written as a `store_timeline` followed by
+        two `store_edge` calls per fact, a failure between them would leave the
+        record saying the fact had moved while its link still pointed at the old
+        date.
 
         `timeline` upserts, on `write_batch_tx`'s terms: a timeline is one
         record holding its points, its constraints and its rules, so every
@@ -1143,7 +1141,7 @@ class StorageBackend(Protocol):
         several tokens and matches only documents containing all of them, which
         is what separates it from `JIRA-4418`; a term absent from the corpus
         contributes nothing rather than excluding everything. Terms arrive
-        pre-split so both backends agree on what the terms *are* before they can
+        pre-split so every backend agrees on what the terms *are* before they can
         disagree about anything else.
 
         **`verify_containment` splits the hits by adjacency**, for callers whose
@@ -1164,7 +1162,7 @@ class StorageBackend(Protocol):
         a hit, whose score is reported as measured and may be zero or, on an
         engine that does not clamp its IDF, negative. Otherwise a match whose
         BM25 score is `0.0` — the IDF floor, which a term more common than half
-        the corpus falls to — is not a result. Both backends enforce this; it is
+        the corpus falls to — is not a result. Every backend enforces this; it is
         part of the contract, not an optimisation. The floor zeroes the *score*,
         not the *match*, and
         a zero-scored row surviving into rank fusion would arrive at an
@@ -1332,10 +1330,10 @@ class StorageBackend(Protocol):
         nomination of `(a, b)`.
 
         **A pair whose newest row is `reopened` is not in the set**, which is
-        how `reopen` puts a label pair back on the worklist. Both backends
-        derive this through `standing_relation_pairs` rather than expressing it
-        as a query, because a suppression index the two spell differently is one
-        that can disagree about what has been judged.
+        how `reopen` puts a label pair back on the worklist. Every backend
+        derives this through `standing_relation_pairs` rather than expressing it
+        as a query, because a suppression index two backends spell differently is
+        one that can disagree about what has been judged.
         """
         ...
 
@@ -1676,9 +1674,10 @@ class StorageBackend(Protocol):
     ) -> list[DecisionRecord]:
         """Journal rows matching every filter given, newest first.
 
-        The four reads review mode needs (§10.5), in one method because they
-        compose: *"what did agent-1 decide yesterday"* is two of them, and a
-        method per filter would make the composition the caller's problem.
+        Every read review mode needs (by judge, kind, subject, review pointer
+        and time), in one method because they compose: *"what did agent-1
+        decide yesterday"* is two of them, and a method per filter would make
+        the composition the caller's problem.
 
         `agent_ids` matches `judged_by.agent_id` against **any** of them, and
         never the digest — a judge that re-described itself is the same judge,
@@ -1905,6 +1904,28 @@ class StorageBackend(Protocol):
         names its target and leaves the active connection where it found it.
         `kinds` left out means every row. A graph that does not exist answers
         with an empty list, as the other `viz_list_*` reads do.
+        """
+        ...
+
+    async def viz_list_embeddings(
+        self,
+        database: str,
+        *,
+        item_ids: Sequence[str] | None = None,
+        model_id: str | None = None,
+    ) -> Sequence[EmbeddingRecord]:
+        """Embedding records in a graph, for a viewer that lays nodes out by meaning.
+
+        Distinct from `get_embeddings_for_items`, which reads the *active*
+        graph: the hub asks a session for any graph it can see, so this names
+        its target and leaves the active connection where it found it.
+
+        `item_ids` left out means every embedding the graph holds. A list
+        restricts the answer to those items, and an empty list matches nothing.
+        `model_id` restricts it to one model. An item with no embedding adds
+        nothing to the answer, and a graph that does not exist answers with an
+        empty list, as the other `viz_list_*` reads do. The order is the
+        backend's own, so a caller that needs one sorts.
         """
         ...
 

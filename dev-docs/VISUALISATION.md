@@ -1,6 +1,11 @@
 # Visualisation: hub architecture, pipeline strip, colour customisation
 
-Three parts of the dashboard, each with the reasons behind its shape.
+A design, built, except colour phase C4 (Part C).
+
+Three parts of the dashboard, each with the reasons behind its shape, and the
+rules every panel follows. The shapes a client reads from the hub, the routes,
+the snapshot and the event stream, are specified in `VIZ_CONTRACT.md`. The code
+is `epimemer/visualization/`, with the dashboard under its `frontend/`.
 
 - **Part A, the viz hub.** A standalone process that owns the dashboard port;
   MCP server processes publish to it. It exists to remove a failure class: an
@@ -12,8 +17,7 @@ Three parts of the dashboard, each with the reasons behind its shape.
   lighting up as data flows, with counters. Click a glyph to expand the full
   net.
 - **Part C, colour customisation.** A dropdown of colour pickers for the
-  chrome and text, persisted per viewer. Built through phase C3; C4 (export
-  and import, preset themes, settable semantic hues) is not built.
+  chrome and text, persisted per viewer.
 
 Decisions made with the user, not to be re-litigated:
 
@@ -22,12 +26,45 @@ Decisions made with the user, not to be re-litigated:
    and status.
 2. Transport: **plain WebSocket**. MCP processes dial out to the hub. No
    message broker.
-3. UI: a **session selector** dropdown; one session viewed at a time; most
-   recently active is the default; disconnected sessions grey out.
+3. UI: a **session selector** dropdown; one session viewed at a time;
+   disconnected sessions grey out. The default is a session that answers, then
+   one listed but not answering, then a disconnected one, the most recent
+   `last_event_at` first within each.
 4. There is no embedded viz server. One code path. Hub down means no viz,
    with a loud stderr note from the MCP process.
 
-Style: functional, closures over classes, Pydantic `BaseModel` for data.
+## Rules every panel follows
+
+The graph, the timeline, the pipeline strip, the live log and focus mode each
+hold to these, so a rule is decided once here rather than in each panel's
+design.
+
+- **Ambient signal, deliberate detail.** A panel shows on its own that
+  something happened: a tile glows, a counter ticks, a selector gains an entry.
+  Detail opens only on a click. An arriving event never opens a panel or takes
+  over the drawer: the agent makes on the order of ten tool calls per task, and
+  a drawer that changed underneath the reader would be unreadable and would
+  clobber a detail they opened on purpose.
+- **The session, then the graph.** Switching session clears what a panel holds
+  for the old one; only the hub's rings are replayed for the new one. Within a
+  session, a record or a log entry from graph A never highlights into graph B.
+- **Opacity is status, saturation is focus.** Both panels draw a retired node
+  fainter by opacity, and focus mode dims what a retrieval did not return by
+  desaturation (`RETRIEVAL_PROVENANCE.md` §4.1). One channel per meaning, so a
+  retired node the retrieval returned and an active one it missed never arrive
+  at the same appearance. Both panels take the two from the same functions in
+  `theme.ts`, so they cannot come to disagree.
+- **A highlight never fails silently.** It could in two ways: an id not in the
+  current graph, where the lookup returns an empty collection and the highlight
+  does nothing, and a node the type filter hides, where the highlight lands on
+  something invisible. The highlight reports the ids it could not find, and
+  clears the type filter only when the filter would hide something being
+  highlighted; clearing it every time would undo a filter the user set.
+- **Panel rules are pure functions.** Cytoscape cannot be instantiated under
+  jsdom, which has no canvas, so every rule the graph panel follows is a pure
+  function tested under vitest, and the modules that touch the DOM stay thin.
+  The timeline keeps the same split for its geometry, query parsing and label
+  layout, which are the parts most likely to be wrong.
 
 ---
 
@@ -35,245 +72,92 @@ Style: functional, closures over classes, Pydantic `BaseModel` for data.
 
 ## A.0 Topology
 
-```
-browser ──ws──► ┌─────────────┐ ◄──ws (dial-out)── MCP server (session A, surrealdb/memory)
-browser ──ws──► │   viz hub    │ ◄──ws (dial-out)── MCP server (session B, mem://default)
-                │:8765         │
-                │  static UI   │        Hub owns the port. MCP processes never bind it.
-                └─────────────┘        Stale MCP orphans ⇒ dead sessions, not wrong UIs.
-```
-
-- The hub is a **relay plus session registry**. It holds no storage and no
-  visualisation logic.
-- Each MCP server process is a **session**: it registers, publishes events,
-  and answers snapshot and graph-list RPCs over its own socket. Reads execute
-  inside the owning process, which is what makes `mem://` backends viewable.
-- Port contention self-resolves: if two hubs race to spawn, the second fails
-  to bind and exits; its spawner's client just retries connecting.
+- The hub is a **relay plus session registry** and holds no storage. Each MCP
+  server process is a session that answers the hub's reads over its own
+  socket, so reads execute inside the owning process. That is what makes
+  in-process stores viewable: the in-memory backend, or SurrealDB on a
+  `mem://` URL.
+- Port contention resolves itself. If two hubs race to spawn, the second fails
+  to bind, finds an Epimemer hub answering `/api/health` on the port and exits
+  quietly; its spawner's client just retries connecting. A bind that fails
+  against anything else exits with a stderr message saying the port is taken.
 
 ## A.1 Wire protocol (session ⇄ hub)
 
-`epimemer/visualization/protocol.py`, Pydantic models shared by hub and
-client:
+The messages are Pydantic models in `protocol.py`, imported by both the hub and
+the session client so the shapes cannot drift (`VIZ_CONTRACT.md` §8). The
+choices behind them:
 
-```python
-class SessionInfo(BaseModel):
-    session_id: str  # uuid4, generated by the MCP process at startup
-    pid: int
-    backend: str  # "memory" | "surrealdb"  (A.4)
-    active_graph: str
-    started_at: datetime
-
-
-class Register(BaseModel):  # session → hub, first message on connect
-    type: Literal["register"] = "register"
-    info: SessionInfo
-
-
-class PublishEvent(BaseModel):  # session → hub
-    type: Literal["event"] = "event"
-    payload: dict  # serialised AnyEvent (events.py), unmodified
-
-
-class RpcRequest(BaseModel):  # hub → session
-    type: Literal["rpc_request"] = "rpc_request"
-    request_id: str
-    method: Literal["list_graphs", "snapshot", "retrievals"]
-    params: dict
-
-
-class RpcResponse(BaseModel):  # session → hub
-    type: Literal["rpc_response"] = "rpc_response"
-    request_id: str
-    result: dict | None = None
-    error: str | None = None
-```
-
-- `PublishEvent.payload` is the event JSON from `events.py`, which the hub
-  never parses beyond routing. The hub stamps `"session_id"` into the payload
-  before fanning out to browsers, so sessions never have to remember to.
-- Sessions send `Register` again (same `session_id`) whenever `active_graph`
-  changes, piggybacking on the `GraphSwitched` event, so the hub's registry
-  stays current without parsing event payloads.
-- RPC timeout: hub side, 10 s per request, surfaced as HTTP 504 to the
-  browser.
+- The hub never parses an event beyond routing it. It stamps `session_id` into
+  the payload itself, so sessions never have to remember to, and a session
+  sends `Register` again when it switches graph, so the registry follows the
+  active graph without the hub reading event payloads.
+- One message on `/ingest` is bounded by `INGEST_MAX_MESSAGE_BYTES` (16 MiB),
+  named once and passed to both sides so neither guesses the other's limit. A
+  message over it closes the socket, which takes the whole session off the
+  hub, so a session replaces an answer that would not fit with an error naming
+  the remedy (`VIZ_CONTRACT.md` §6) and stays connected.
 
 ## A.2 Hub server
 
-`epimemer/visualization/hub.py`, a Starlette app built functionally
-(`create_hub_app() -> Starlette`):
+What the route table in `VIZ_CONTRACT.md` §4 does not say:
 
-- `GET /` plus a static mount serving the frontend bundle from
-  `visualization/static/`.
-- `WS /ws`: browser connections, with per-connection sequence numbers and a
-  subscription message `{"subscribe": {"session": "<id>", "graphs": [...]}}`.
-  One session at a time; `graphs: null` means all graphs of that session.
-- `WS /ingest`: session connections. The first message must be `Register`
-  (else close 1002); then `PublishEvent` is stamped and forwarded, and
-  `RpcResponse` resolves the pending future by `request_id`. On disconnect
-  the session is marked disconnected and kept listed, greyed, for
-  `DISCONNECT_GRACE_SECONDS` (300), with `session_disconnected` broadcast to
-  browsers; `session_connected` on register.
-- `GET /api/health`: `{"ok": true, "pid": ..., "version": ...}` plus a
-  service marker, so a probe can tell an epimemer hub from a stranger on the
-  port. Used by auto-spawn probing and `--status`.
-- `GET /api/sessions`: `SessionInfo` list with `connected` and
-  `last_event_at`.
-- `GET /api/graphs?session=<id>`: RPC `list_graphs` to that session.
-- `GET /api/warnings?session=<id>`: RPC `warnings`, answering what that
-  session's active graph does about warnings in `configure_warnings`'s own
-  response shape. A read, and the panel behind it is read-only
-  (`WARNINGS_DASHBOARD.md` §2.4).
-- `GET /api/snapshot?session=<id>&graph=<g>`: RPC `snapshot`, shape
-  `{"graph", "nodes", "edges", "timelines", "metacontexts",
-  "relation_labels"}`. Each edge carries `validity`, the periods its source
-  asserts the claim was true: a list of `ValidityInterval` as the graph stores
-  them, filled on a `sourced_from` edge and empty on every other type
-  (`VALIDITY_DESIGN.md`). The live `edge_stored` event carries the same list,
-  so a browser that stays open and one that reloads see one shape.
-- `GET /api/retrievals?session=<id>`: the retrieval records
-  (`RETRIEVAL_PROVENANCE.md`).
-
-State is a plain dict `session_id -> {ws, info, pending_rpcs, connected,
-last_event_at, rings}` captured in closures, on one asyncio loop, with no
-locks beyond what the relay needs. The per-session rings for graph actions
-and retrieval records are described in `EVENT_LOG.md` §4 and
-`RETRIEVAL_PROVENANCE.md` §3.2. Acts and warnings share the first ring rather
-than having one each: replay has to reproduce arrival order, and two rings
-replayed one after the other would put every warning after every act.
-
-The `__main__` entry (`python -m epimemer.visualization.hub`, also the
-`epimemer-viz` console script):
-
-- `run` (default): write the pidfile, bind `EPIMEMER_VIZ_HOST:EPIMEMER_VIZ_PORT`,
-  serve. If the bind fails and a health probe of the port answers as an
-  epimemer hub, exit 0 quietly (lost the spawn race); otherwise exit 1 with a
-  clear stderr message (port taken by a stranger).
-- `--status`: probe health and read the pidfile; print hub pid and sessions.
-- `--stop`: read the pidfile, SIGTERM, wait briefly, report.
-- Pidfile: `~/.epimemer/viz-hub.pid`. A stale pidfile (no such process) is
-  overwritten silently.
+- `GET /api/embeddings` is its own route rather than part of the snapshot,
+  which would grow several times over to carry vectors.
+- `GET /api/warnings` is a read, and the panel behind it is read-only
+  (`EVENT_LOG.md` §12.4).
+- The per-session rings the hub keeps are `EVENT_LOG.md` §4 (acts and
+  warnings) and `RETRIEVAL_PROVENANCE.md` §3.2 (retrieval records).
 
 ## A.3 Session client (MCP side)
 
-`epimemer/visualization/hub_client.py`:
+`hub_client.py` connects, registers, forwards every bus event and answers the
+hub's reads. Each read runs inside one turn of the storage `graph_guard`, so the
+reads behind one answer describe a single instant and no tool call runs between
+them (`DEVELOPER_GUIDE.md`, *The active graph holds still*). The snapshot sends
+only active nodes; historical ones are read in the same turn only to work out
+the boundaries reflect would propose.
 
-```python
-async def start_hub_client(
-    bus: InProcessEventBus,
-    raw_storage: StorageBackend,      # pre-instrumentation, for RPC reads
-    info: SessionInfo,
-    hub_url: str,                     # ws://host:port/ingest
-) -> Callable[[], Awaitable[None]]:   # returns async stop()
-```
-
-- A background task connects (the `websockets` library), sends `Register`,
-  then concurrently forwards every bus event as `PublishEvent` and answers
-  `RpcRequest`s.
-- RPC handlers run in this process against `raw_storage`: `list_graphs` is
-  `list_databases()` plus `current_database` and the backend label;
-  `snapshot` is the five `viz_list_*` reads through
-  `visualization/snapshot.py`. A snapshot of a graph this session is not on
-  takes the storage `graph_guard`'s mover turn for its reads
-  (`DEVELOPER_GUIDE.md`, *The active graph holds still*).
-- Reconnect loop with capped exponential backoff (1 s to 30 s), forever.
-  Events published while disconnected are dropped; browsers recover through
-  the existing gap-detection and snapshot refresh.
-- The first connection failure logs one `logger.error` and writes one line to
-  stderr, which Claude Code surfaces: "viz hub unreachable at …; run `uv run
-  epimemer-viz --status`". Later retries log at debug.
-- `stop()` cancels the task and closes the socket, called from the lifespan
-  `finally`.
+The client never blocks the MCP server: it reconnects with capped backoff for
+ever and drops the events published while it is away, which browsers recover
+from by refetching the snapshot (`VIZ_CONTRACT.md` §7.5). The first connection
+failure writes one line to stderr, which Claude Code surfaces: "viz hub
+unreachable at …; run `uv run epimemer-viz --status`". Later retries log at
+debug.
 
 ## A.4 Backend label
 
-`SessionInfo.backend` and `/api/graphs` carry a human-readable backend kind
-from `backend_name`, a property on the `StorageBackend` protocol implemented
-by every backend (`"memory"`, `"surrealdb"`); no `hasattr` probing. It is
-what lets the UI name the backend it is showing, the cheapest half of the
-silent-wrong-viz fix: `MCP: default (in-memory)` reads instantly as "wrong
+`SessionInfo.backend` and `/api/graphs` carry the backend kind (`memory`,
+`sqlite`, `surrealdb`, `postgres`). It is the cheapest half of the
+silent-wrong-viz fix: `MCP: default (memory)` reads instantly as "wrong
 server" where `MCP: default` does not.
 
 ## A.5 MCP server lifespan
 
-When `config.viz_enabled`:
-
-1. Build `SessionInfo` (uuid4, `os.getpid()`, `storage.backend_name`,
-   `storage.current_database`, now).
-2. Probe `GET http://{viz_host}:{viz_port}/api/health` (0.5 s timeout). If no
-   healthy hub answers and `config.viz_autospawn` (default `True`,
-   `EPIMEMER_VIZ_AUTOSPAWN`), spawn `[sys.executable, "-m",
-   "epimemer.visualization.hub"]` with `start_new_session=True` and its
-   output detached, so it survives the MCP process, then poll health for up
-   to about 3 s.
-3. `stop_client = await start_hub_client(bus, raw_storage, info, ws_url)`.
-4. Log the hub URL.
-
-`use_graph` needs no viz-specific code: the hub client subscribes to the bus
-and re-registers whenever it sees a `graph_switched` event.
-
-The MCP process never binds the viz port. `EPIMEMER_VIZ_HOST` and
-`EPIMEMER_VIZ_PORT` describe the hub; `EPIMEMER_VIZ_ENABLED` means "publish
-to the hub".
+With `EPIMEMER_VIZ_ENABLED` on, the server probes the hub's health and, when
+none answers and autospawn is on, spawns one detached in a new process session,
+so it outlives the MCP process. The MCP process never binds the viz port:
+`EPIMEMER_VIZ_HOST` and `EPIMEMER_VIZ_PORT` describe the hub, and
+`EPIMEMER_VIZ_ENABLED` means "publish to the hub". `use_graph` needs no
+viz-specific code, since the client re-registers on `graph_switched`.
 
 ## A.6 `viz_status` MCP tool
 
-So the user can always ask through the session they are provably talking to:
-
-```
-viz_status() -> {
-  "hub_url": "http://127.0.0.1:8765",
-  "hub_reachable": true,
-  "connected": true,            # this session's ingest socket state
-  "session_id": "...",
-  "backend": "surrealdb",
-  "active_graph": "default",
-  "sessions_on_hub": 2
-}
-```
-
-This is the durable answer to "I opened the visualiser but can't find my
-graph": the tool names the session to select in the UI dropdown.
+The durable answer to "I opened the visualiser but can't find my graph". Asked
+through the session the user is provably talking to, it names the hub URL,
+whether the hub can see this session, and the session to select in the
+dropdown.
 
 ## A.7 Frontend
 
-- `api.ts`: `fetchSessions()`; `fetchGraphs(sessionId)`,
-  `fetchWarningSettings(sessionId)` and `fetchSnapshot(sessionId, graph)` take
-  the session.
-- `session-select.ts`: the header's session selector, populated from
-  `/api/sessions` and refreshed on `session_connected` /
-  `session_disconnected`. Option label `{backend}:{active_graph} (pid
-  {pid})`; disconnected sessions stay listed but greyed; default selection is
-  the most recent `last_event_at`. Selecting a session sends the subscribe
-  message, re-fetches graphs and loads the snapshot.
-- The header shows `MCP: {active_graph} ({backend})` for the selected session,
-  and a `reflect n/m` badge beside it (`reflect-badge.ts`), amber once a
-  reflect is due, seeded from the `reflect` field on `/api/graphs` and then
-  moved by `reflect_counter_updated` events. Seeding matters: events alone
-  would leave a browser that connected to a graph already at 7 of 10 showing
-  nothing until the next store.
-- A `warnings` button beside the badge opens a small read-only panel
-  (`warning-settings.ts`) titled *Warnings on <graph>*: the mute in words, then
-  one row per warning kind with the action in force and whether that answer is
-  inherited from the process default or set on this graph. It re-reads on
-  `graph_switched` for the watched session, as the badge does. Nothing on the
-  dashboard writes a setting, because a write from the browser would be the
-  first write into a graph with no author (`WARNINGS_DASHBOARD.md` §2.4).
-- `log-panel.ts` reads two coarse streams: acts, and the warnings a tool
-  computed. A warning is a row with the verb `warned`, marked in the `pending`
-  hue, dimmed with *not shown to the agent* in its tooltip when the agent's
-  response did not carry it, and clickable to highlight the nodes it was about
-  (`EVENT_LOG.md` §12).
-- `events.ts` passes `session_id` through and drops events from non-selected
-  sessions defensively; `graph_switched` acts only when the event's session
-  matches the selected one.
-
-## A.8 Tests
-
-`tests/visualization/test_hub.py`, `test_hub_client.py`,
-`test_advisory_events.py`, `log-panel.test.ts`, `warning-settings.test.ts`, and
-the `viz_status` and `backend_name` coverage in `tests/mcp/` and the storage
-suite, parameterised over both backends.
+- The header's `reflect n/m` badge, amber once a reflect is due, is seeded from
+  the `reflect` field on `/api/graphs` and then moved by
+  `reflect_counter_updated` events. Events alone would leave a browser that
+  connected to a graph already at 7 of 10 showing nothing until the next store.
+- The hub sends a browser only the session it subscribed to, and on top of
+  that the `graph_switched` and `reflect_counter_updated` handlers act only
+  when the event's session is the selected one.
+- The live log and the read-only warnings panel are `EVENT_LOG.md`.
 
 ---
 
@@ -281,114 +165,58 @@ suite, parameterised over both backends.
 
 ## B.0 Layout
 
-The knowledge graph is the star; pipelines are ambient awareness.
-
-```
-┌──────────────────────────────────────────────────────┐
-│ header (session ▾, graph ▾, badges)                  │
-├──────────────────────────────────────────────────────┤
-│                                                      │
-│               knowledge graph (flex-1)               │
-│                                                      │
-├──────────────────────────────────────────────────────┤
-│ ▂ pipeline strip (~110px, collapsible)               │
-│ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐      │
-│ │ ○─▭─○   │ │ ○─▭─○   │ │ ○▭○▭○   │ │ ○─▭─○   │      │
-│ │ seg:sem │ │ seg:par │ │ edges   │ │ retrieve│      │
-│ │ 3 runs  │ │ idle    │ │ ●12     │ │ idle    │      │
-│ └─────────┘ └─────────┘ └─────────┘ └─────────┘      │
-└──────────────────────────────────────────────────────┘
-```
+The knowledge graph is the star; pipelines are ambient awareness. The strip
+sits under the graph at a fixed height and collapses from the header.
 
 - One **tile** per `pipeline_name`. Tiles persist across runs and across
   snapshot loads; there is no shared "current pipeline" that a new
-  `PipelineStarted` could clobber.
-- Each tile: a **mini glyph** of the net topology (places as dots,
-  transitions as small rects, no text labels), the pipeline name, and a
-  status line.
-- While running, the tile border glows; inside the glyph the firing
-  transition and token-holding places light up.
-- **Click a tile** for the detail view: the full Graphviz rendering with
-  labels and per-place token badges, live-updating, as an overlay that
-  expands upward over the graph so the strip stays visible. Esc or × closes
-  it.
-- The strip is collapsible from the header and has a fixed height. The
-  timeline panel beside the graph is resizable (`split-pane.ts`).
+  `pipeline_started` could clobber.
+- Each tile: a **mini glyph** of the net topology (places as dots, transitions
+  as small rects, no text labels), the pipeline name, and a status line. While
+  running, the border glows and the firing transition and token-holding places
+  light up. A failed run gets a red border, and the error is in the tile's
+  tooltip.
+- **Click a tile** for the detail view: the full Graphviz rendering with labels
+  and per-place token badges, live-updating, as an overlay that expands upward
+  over the graph so the strip stays visible. Esc or × closes it.
 
-## B.1 Data model (frontend)
+Tiles aggregate rather than drawing each event, because events are emitted at
+storage-write granularity: one `store_decomposition` publishes hundreds
+(`EVENT_LOG.md` §3).
 
-`pipeline-store.ts`, a plain state module with no rendering:
+## B.1 Tiles and topology
 
-```ts
-interface PipelineRunState {
-  topology: PipelineStarted;          // last-seen topology (has names + edges)
-  status: "idle" | "running" | "completed" | "failed";
-  activeTransition: string | null;
-  placeTokens: Record<string, number>; // live counts
-  runsCompleted: number;
-  lastDurationMs: number | null;
-  lastTransitionsFired: number | null;
-  itemsProcessed: number;             // cumulative, B.2
-  lastError: string | null;
-}
-// keyed by pipeline_name, per selected session; cleared on session switch.
-```
-
-Tiles are created lazily on the first `PipelineStarted` for a name, since
-topology arrives with that event. `reflect` is not a Petri net but declares a
-synthetic linear topology via `visualization/phase_events.py`, so it gets a
-tile and phase-by-phase lighting like the rest. Pre-seeding real topologies
-server-side is out of scope: net builders need runtime inputs.
+A tile appears on the first pipeline event for its name, and its glyph once a
+`pipeline_started` brings the topology. When a transition lights is
+`DEVELOPER_GUIDE.md`, *Petri net visualisation*. `reflect` is not a Petri net
+but declares a synthetic linear topology, so it gets a tile and phase-by-phase
+lighting like the rest. Pre-seeding real topologies server-side is out of
+scope: net builders need runtime inputs.
 
 ## B.2 The "how much data" number
 
-`TokensUpdated` carries absolute per-place counts. `itemsProcessed` is the
-cumulative sum of positive deltas across updates (`sum(max(0, new - old))`
-per place): a robust proxy for "tokens pushed through" that does not require
-knowing which places are terminal. Shown as the tile's number while running
-(amber dot and count); after completion the tile shows `{runsCompleted} runs
-· {lastDurationMs}ms`. The metric is one pure function,
-`applyTokensUpdate(state, event) -> state`.
+`tokens_updated` carries absolute per-place counts. The tile's number is the
+cumulative sum of positive deltas across updates, per place: a robust proxy for
+"tokens pushed through" that does not require knowing which places are
+terminal. While running the tile shows that number; after completion, the run
+count and the last duration.
 
 ## B.3 Glyph rendering
 
-The Graphviz WASM path is reused, the same layout engine as the detail view,
-so the glyph is a genuine miniature of what clicking reveals. `generateDot`
-in `pipeline-detail.ts` takes `{ mini: boolean }`: mini mode emits empty
-labels, smaller node sizes, tightened `nodesep` and `ranksep`, no edge
-labels, and the same `id="place-…"` / `id="transition-…"` attributes so the
-colour overlay works on both sizes. The SVG is rendered once per topology and
-cached per pipeline name. Colours: idle, firing, completed and token-holding
-from the pipeline group of the palette; a failed run gets a red tile border
-and the error in the status line.
+The glyph is drawn by the same Graphviz WASM layout as the detail view, in a
+mini mode with no labels and tighter spacing, so it is a genuine miniature of
+what clicking reveals. Both sizes carry the same element ids, so one colour
+overlay works on both. The SVG is rendered once per topology and cached.
 
-## B.4 Files
+## B.4 Behaviour
 
-- `pipeline-store.ts`: state and pure event-application functions.
-- `pipeline-strip.ts`: renders tiles from the store, handles click, and
-  subscribes to the pipeline event types.
-- `pipeline-detail.ts`: DOT generation (with `mini`), SVG overlay helpers,
-  and full-size rendering from the store's state for one chosen pipeline.
-  Token badges only in detail mode.
-- `main.ts`: graph panel plus strip; snapshot loads do not touch pipeline
-  state; the collapse toggle; Esc closes detail.
-
-## B.5 Behaviour
-
-- Two pipelines in quick succession (a `segment` then `store_decomposition`
-  fires segmentation then edge creation): both tiles animate independently.
-- Detail view open while another pipeline runs: only the viewed pipeline's
-  events update the big SVG; other tiles keep animating.
-- On a WebSocket gap, running tiles are marked "unknown" (grey pulse) until
-  the next event for that pipeline arrives. Snapshot refresh does not reset
-  `runsCompleted` or `itemsProcessed`; they are session-lifetime counters.
-- Switching sessions clears the store; pipeline history is not replayed.
-
-## B.6 Tests
-
-State transitions in `pipeline-store.ts` are pure and covered by the vitest
-suite (`make test-frontend`); the rendering modules are covered by `tsc` and
-manual QA against a live server.
+- Two pipelines in quick succession animate their tiles independently, and an
+  open detail view follows only its own pipeline.
+- On a WebSocket gap, running tiles are marked stale ("…", grey pulse) until
+  the pipeline's next start, firing, completion or failure event.
+- Run counts and items processed are session-lifetime counters: a snapshot
+  refresh does not reset them.
+- Switching sessions clears the strip; pipeline history is not replayed.
 
 ---
 
@@ -396,85 +224,57 @@ manual QA against a live server.
 
 A dropdown of colour pickers for the parts of the dashboard the user actually
 looks at (timeline text, detail text, every background), with the choices
-persisted per viewer. C1 to C3 are built; C4 is not.
+persisted per viewer. Phase C4, in `PROPOSED_FEATURES.md`, would add export and
+import, preset themes and settable semantic hues (C.6).
 
 ## C.0 Three colour systems
 
-The dashboard has three colour systems, and the request lands across all of
-them:
-
 1. **Tailwind utility classes**: the chrome (header, toolbars, panels,
-   buttons, chips, the detail drawer). Compiled into a stylesheet at build
-   time. A colour picker cannot touch a compiled class, which is why C.1
-   exists.
+   buttons, chips, the drawer). They are compiled at build time, so a colour
+   picker cannot touch them, which is why C.1 exists.
 2. **The runtime `Palette`** (`theme.ts`): the neutral fields read at render
-   time by the three *drawn* surfaces that Tailwind cannot reach: the
-   cytoscape canvas, the timeline SVG, and the graphviz DOT for the pipeline
-   detail.
-3. **The runtime `SemanticPalette`** (`theme.ts`): the hues that say what
-   kind of thing something is, read at render time by both the graph and the
-   timeline (C.6). The pipeline's active, completed and failed colours are a
-   separate small group.
+   time by the three *drawn* surfaces that Tailwind cannot reach: the cytoscape
+   canvas, the timeline SVG, and the Graphviz DOT for the pipeline detail.
+3. **The runtime `SemanticPalette`** (`theme.ts`): the hues that say what kind
+   of thing something is (C.6).
 
-Most of the work is giving systems 1 and 2 a single source of truth. The
-picker is a couple of hundred lines on top.
+Most of the work is giving systems 1 and 2 a single source of truth.
 
 ## C.1 Token model
 
-The raw greys are replaced by **semantic tokens**, each backed by a CSS
-custom property. About 22 distinct grey classes collapse to nine tokens,
-because most of the classes were the light and dark halves of the same idea:
+The raw greys are replaced by nine **semantic tokens** in `tokens.css`, each
+backed by a CSS custom property: four surfaces, a border and four weights of
+text. About 22 distinct grey classes collapse to nine because most were the
+light and dark halves of the same idea, and nine is about the right number of
+knobs: a picker per raw class would be 22 controls that mostly move together.
 
-| Token | Light → dark | Used for |
-|---|---|---|
-| `--surface-page` | `gray-200` → `gray-950` | The page and the graph canvas |
-| `--surface-chrome` | `gray-300` → `gray-900` | Headers, toolbars, drawers, trays |
-| `--surface-raised` | `gray-100` → `gray-800` | Buttons, chips, selects |
-| `--surface-raised-hover` | `gray-50` → `gray-700` | Their hover state |
-| `--border` | `gray-400` → `gray-700` | Every divider and outline |
-| `--text-strong` | `gray-900` → `gray-200` | Headings, hovered controls |
-| `--text-primary` | `gray-700` → `gray-300` | Body text, node labels |
-| `--text-secondary` | `gray-600` → `gray-400` | Labels, captions, most chrome |
-| `--text-muted` | `gray-500` → `gray-500` | Hints, counts, disabled |
-
-Nine tokens is also about the right number of knobs: a picker per raw class
-would be 22 controls that mostly move together.
-
-**The drawn surfaces derive from the same tokens.** `palette.nodeLabel` is
-`--text-primary`; `palette.surfaceChrome` is `--surface-chrome`;
-`palette.axis` and `palette.tick` are `--border` and `--text-muted`. Before
-this, those values were duplicated between `theme.ts` and the markup and had
-drifted. Genuinely draw-only fields (`placeFill`, `transitionStroke`,
-`dotEdge` and the rest of the graphviz set) stay as a second group with their
-own tokens.
+**The drawn surfaces derive from the same tokens**: a node label is
+`--text-primary`, an axis plate is `--surface-chrome`, and so on. Genuinely
+draw-only fields (the Graphviz set) stay as hex literals per theme in
+`theme.ts`.
 
 Tokens hold sRGB channels rather than hex, because some class occurrences
 carry an alpha modifier and `rgb(var(--token) / <alpha-value>)` is the only
-form Tailwind can compose one with. The nine defaults are written in
-`tokens.css` and again in `theme.ts`, which needs values where no stylesheet
-is loaded; a test parses the stylesheet and asserts the pair agrees.
+form Tailwind can compose one with. The defaults are written in `tokens.css`
+and again in `theme.ts`, which needs values where no stylesheet is loaded; a
+test asserts the pair agrees.
+
+The structural test in `layout.test.ts` is what stops the migration rotting
+back: no raw grey (or white) `bg-`, `text-` or `border-` class survives in
+`index.html` or the TS modules. A new panel written the old way would still
+look right in both themes while ignoring the user's settings entirely.
 
 ## C.2 Mechanism
 
-Tailwind with a JS config, `darkMode: "class"`:
+Tailwind's colours are extended with names backed by the variables, so
+`bg-surface-chrome` reads `var(--surface-chrome)`, and the `dark:` variants
+disappear from the markup: the dark theme is a different set of values for
+the same variables, declared once in `tokens.css` under `:root` and `.dark`.
 
-```js
-theme: { extend: { colors: {
-  surface: { page: "var(--surface-page)", chrome: "var(--surface-chrome)", … },
-  content: { strong: "var(--text-strong)", primary: "var(--text-primary)", … },
-} } }
-```
-
-`bg-surface-chrome` compiles to `background-color: var(--surface-chrome)`,
-and the `dark:` variants disappear from the markup: the dark theme is a
-different set of values for the same variables, declared once in
-`tokens.css` under `:root` and `.dark`.
-
-**The one performance trap.** `currentPalette()` is called on every render,
-and the timeline re-renders on every metacontext of a pan. Reading nine-plus
-variables through `getComputedStyle` in that loop is forced-reflow jank. The
-variables are read once per theme or override change into a cached `Palette`
-object in `theme.ts`, invalidated on change, never per render.
+**The one performance trap.** The palette is read on every render, and the
+timeline re-renders on every step of a pan. Reading the variables through
+`getComputedStyle` in that loop is forced-reflow jank, so they are read once
+per theme or override change into a cached `Palette`, never per render.
 
 ## C.3 Where the settings live
 
@@ -498,43 +298,25 @@ epimemer.palette → {"version":1,"light":{"--surface-chrome":"#e5e7eb"},"dark":
 Only overridden tokens are stored, so a default that changes later still
 reaches users who never touched it. `version` lets a future rename migrate
 rather than silently drop. Unreadable or unparseable storage falls back to
-defaults, as `theme.ts` and `split-pane.ts` already do.
+the defaults.
 
 ## C.4 The picker UI
 
-A dropdown from a paintbrush button beside the theme toggle, grouped by the
-table in C.1:
-
-```
-┌ Colours ───────────────────── [Reset all] ┐
-│ Surfaces                                  │
-│   Page          ▢ #e5e7eb   ⟲             │
-│   Panels        ▢ #d1d5db   ⟲             │
-│   Controls      ▢ #f3f4f6   ⟲             │
-│ Text                                      │
-│   Headings      ▢ #111827   ⟲  AA 12.6:1  │
-│   Body          ▢ #374151   ⟲  AA  8.9:1  │
-│   Captions      ▢ #4b5563   ⟲  ⚠ 3.2:1    │
-└───────────────────────────────────────────┘
-```
-
-Each row: a native `<input type="color">`, the hex, a per-token reset, and
-for text tokens a live contrast ratio against `--surface-chrome`. Native
-`<input type="color">` rather than a custom picker: it is one element, it is
-accessible, it gets the platform's eyedropper for free, and a hand-rolled HSV
-wheel is a lot of code that has nothing to do with this project. Changes
+A dropdown from a paintbrush button beside the theme toggle, grouped into
+surfaces and text. Each row: a native `<input type="color">`, the hex, a
+per-token reset, and for text tokens a live contrast ratio against
+`--surface-chrome`. Native rather than a custom picker: it is one element, it
+is accessible, it gets the platform's eyedropper for free, and a hand-rolled
+HSV wheel is a lot of code that has nothing to do with this project. Changes
 apply live on `input` and persist on `change`, so dragging through a gradient
-does not write to storage on every metacontext.
-
-A *Graph & timeline* group with the semantic hues, and Export and Import
-buttons, would sit below these; both are C4.
+does not write to storage on every step.
 
 ## C.5 Contrast, and the way back
 
 A colour picker over the whole UI can render the UI unusable.
 
 - **Live WCAG ratio** beside every text token, warning below 4.5:1 for small
-  text. The formula is a small pure function in `contrast.ts`.
+  text.
 - **The reset control is not themeable.** "Reset all" keeps hard-coded inline
   colours, so it is legible no matter what the user has done.
 - A query parameter (`?palette=reset`) is a second way back for the case
@@ -543,85 +325,39 @@ A colour picker over the whole UI can render the UI unusable.
 ## C.6 The semantic hues: shared across panels, not customisable
 
 The semantic hues are fixed: node types, edge types, contradiction red,
-selection pink, and the pipeline's active, completed and failed colours. They
-are how the graph says what kind of thing you are looking at.
+selection pink, the `pending` colour of proposals, and the pipeline's active,
+completed and failed colours. They are how the graph says what kind of thing
+you are looking at.
 
-One palette, `SemanticPalette` in `theme.ts`, is shared by the graph panel
-and the timeline, so one window cannot give two answers to "what colour is a
-fact". The set comes from the valid-time grammar
-(`TIMELINE_VISUALISATION.md` §13.3), because that set was perceptually
-validated in both themes: lightness band, chroma floor, colour-vision
-deficiency separation, contrast against the surface.
+One palette, `SemanticPalette` in `theme.ts`, is shared by the graph panel and
+the timeline, so one window cannot give two answers to "what colour is a
+fact". The set was validated in both themes with a perceptual checker: OKLCH
+lightness band, chroma floor, colour-vision-deficiency ΔE separation, and
+contrast against the surface. The values live in `theme.ts`; how the timeline
+uses them is `TIMELINE_VISUALISATION.md` §13.3. The graph panel's selection
+border and highlight are still its own colours, in `graph-panel.ts`.
 
-| Meaning | Light | Dark |
-|---|---|---|
-| **fact / claim** | `#2a78d6` | `#3987e5` |
-| **inference** | `#4a3aa7` | `#9085e9` |
-| **topic** | `#1baf7a` | `#199e70` |
-| **historical / retired** | `#8095aa` | `#5d6d7e` |
-| **pending / proposed** | `#9a6b00` on `#f6ecd4` | `#fab219` on `#33290e` |
-| **contradiction** | `#ef4444` | `#ef4444` |
-| **selection** | `#ec4899` | `#ec4899` |
+Choices worth their reasons:
 
-Two choices worth their reasons. **Topic is green**, the furthest validated
-hue from fact's blue and inference's violet. **Contradiction keeps red and
-the now-line gives it up**: the now-line is chrome, an annotation on the axis
-rather than a thing in the data, so it is a dashed neutral rule
-(`--text-secondary` stroke, `--text-strong` label) and does not compete with
-a semantic hue. Source strips are outside this palette: a per-source strip is
-always direct-labelled, so its colour carries no meaning and draws from a
-plain rotation whose only requirement is that adjacent strips differ, which is
-`stripHue` in `theme.ts`.
+- **Topic is green**, the furthest validated hue from fact's blue and
+  inference's violet.
+- **Contradiction keeps red and the now-line gives it up.** The now-line is
+  chrome, an annotation on the axis rather than a thing in the data, so it is
+  a dashed neutral rule (`--text-muted` stroke, `--text-secondary` label).
+  Chrome stays subordinate to data throughout: no bold, no semantic hue on
+  axis furniture.
+- **Source strips are outside this palette.** A per-source strip is always
+  direct-labelled, so its colour carries no meaning and must not compete with
+  one that does. It draws from a plain rotation, `stripHue`, whose only
+  requirement is that adjacent strips differ.
+- **`historical` is defined and drawn by neither panel**, since status is
+  drawn by opacity (*Rules every panel follows*).
 
 Making the semantic hues settable (C4) needs an answer to "what happens when
 two of them are set to the same value", which is a different question from
 "let me darken this background".
 
-## C.7 Files
-
-| File | Role |
-|---|---|
-| `src/tokens.css` | `:root` and `.dark` blocks declaring every token's default. The one place a default colour is written. |
-| `tailwind.config.js` | `theme.colors` extended with the CSS-var-backed semantic names. |
-| `src/theme.ts` | `Palette` derives from the tokens; cached per theme and override change. `SemanticPalette`. |
-| `src/palette-store.ts` | Pure: defaults, override merge, per-theme resolution, hex validation, serialise and parse, reset. |
-| `src/contrast.ts` | Pure: relative luminance and WCAG ratio. |
-| `src/palette-picker.ts` | The dropdown; DOM only, state from `palette-store`. |
-| `src/main.ts` | Wires the picker; re-renders drawn panels on change, as the theme toggle does. |
-
-## C.8 Tests
-
-Pure, and the bulk of the value: `palette-store.test.ts` (defaults; a partial
-override merges rather than replaces; overrides are per theme and do not
-leak; invalid hex rejected; corrupt or unavailable storage falls back;
-`version` mismatch discards rather than misreads; reset restores exactly the
-defaults) and `contrast.test.ts` (known pairs, symmetry, the 4.5:1 boundary).
-
-jsdom: `palette-picker.test.ts` (a change writes the CSS variable on `:root`;
-live on input, persist on commit; per-token reset restores one token; reset
-all clears storage) and `theme.test.ts` (the cached palette invalidates on
-theme change and on override change, and not on every read).
-
-Structural, in `layout.test.ts`: no `bg-gray-*`, `text-gray-*` or
-`border-gray-*` class survives in `index.html` or the TS modules. That is
-what stops the migration rotting back: a new panel written the old way would
-still look right in both themes while ignoring the user's settings entirely.
-
-## C.9 Phasing
-
-1. **C1, token migration.** Built. No UI, no behaviour change; the largest
-   diff, done alone so a regression is unambiguous. Ends with the structural
-   test in C.8. Not quite pixel-identical: about 25 occurrences moved a step,
-   mostly dark borders written `gray-800` joining the `gray-700` group.
-2. **C2, store and apply.** Built. `palette-store.ts`, `contrast.ts`,
-   persistence, and applying overrides to `:root` at startup.
-3. **C3, the picker.** Built. The dropdown, live preview, contrast badges,
-   resets.
-4. **C4, later, if wanted.** Export and import, preset themes (high contrast,
-   solarized), and settable semantic hues (C.6). Listed in
-   `PROPOSED_FEATURES.md`.
-
-## C.10 Open questions
+## C.7 Open questions
 
 1. **Should font size be in scope?** The same dropdown is the natural home
    for it, and "make the labels bigger" is a more common request than "make

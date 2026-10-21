@@ -1,6 +1,6 @@
 """The verdict that had no writer (`REVIEW_MODE.md` §1, the `assessed` edge).
 
-`reflect` nominated eighteen pairs on `memory` on 2026-08-21. Five merged.
+`reflect` nominated eighteen pairs on the development graph on 2026-08-21. Five merged.
 **Thirteen were declined and vanished** — and came back on the next pass, and
 the one after, because `already_linked` was built from `SIMILARITY ∪
 CONTRADICTION` and both graphs carried zero of either.
@@ -578,7 +578,7 @@ class TestTheEdgeCarriesWhyItWasWritten:
 class TestTheEdgeNamesWhoDecided:
     """`judged_by`, on every edge a verdict writes.
 
-    The reason it is asserted here rather than trusted: the `memory` graph
+    The reason it is asserted here rather than trusted: the development graph
     carries verdicts recorded with no judge, and reading the code cannot tell a
     session that claimed nobody from a threading bug that dropped the judge on
     the way. Only an assertion at the write separates the two, and this file had
@@ -628,7 +628,7 @@ class TestTheEdgeNamesWhoDecided:
         assert edges["similarity"].judged_by == JudgeRef(agent_id="first", digest="aaa")
 
     async def test_an_unclaimed_session_records_no_judge(self, storage, embedding_provider):
-        """The control, and the case the `memory` graph is in. Blank has always
+        """The control, and the case the development graph is in. Blank has always
         meant unknown, so the write goes through — but it must be blank because
         nobody was named, not because the name was dropped."""
         a = await _fact(storage, embedding_provider, "the deploy failed")
@@ -784,7 +784,7 @@ class TestATopicPairStopsComingBackToo:
     **Worse than the fact-pair case it mirrors**, because the call reported
     success: a verdict recorded nowhere and a verdict recorded where nothing
     reads are indistinguishable from the caller, except that the second one
-    says it worked. Found 2026-08-29 by judging three topic pairs on `memory`
+    says it worked. Found 2026-08-29 by judging three topic pairs on the development graph
     and watching all three come back on the next pass.
     """
 

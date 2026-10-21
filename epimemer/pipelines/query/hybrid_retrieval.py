@@ -10,10 +10,10 @@ Two independent retrieval arms meeting at a fusion step, then graph expansion:
     [CollapsedSeeds] -> run_graph_expansion -> [ExpandedResults]
     [ExpandedResults] -> build_query_result -> [QueryResult]
 
-"Hybrid" used to mean vector plus graph expansion. It now means what the name
-says. The two arms fail in opposite directions — cosine similarity has no notion
-of term rarity, BM25 has none of meaning — which is the whole argument for
-running both, and neither can change what the other computes.
+"Hybrid" means what the name says: two retrieval arms. The two fail in opposite
+directions — cosine similarity has no notion of term rarity, BM25 has none of
+meaning — which is the whole argument for running both, and neither can change
+what the other computes.
 
 The lexical arm is a transition rather than a call inside another one on
 purpose: the pipeline strip renders net topology, so a fusion hidden inside a

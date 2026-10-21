@@ -34,7 +34,7 @@ export interface SnapshotResponse {
   /** Both absent from a hub that predates the timeline panel. */
   timelines?: TimelineView[];
   metacontexts?: MetacontextView[];
-  /** Absent from a hub that predates the relation label record (#74). */
+  /** Absent from a hub that predates the relation label record. */
   relation_labels?: RelationLabelView[];
   /**
    * Where reflect would offer a date for an edge a source left open.
@@ -79,7 +79,7 @@ export const fetchGraphs = async (session: string): Promise<GraphListResponse> =
  *
  * A read, and the only one the settings panel makes: nothing on the dashboard
  * writes a setting, because a write from the browser would be the first write
- * into a graph with no author (WARNINGS_DASHBOARD.md §2.4).
+ * into a graph with no author (EVENT_LOG.md §12.4).
  */
 export const fetchWarningSettings = async (session: string): Promise<WarningSettings> => {
   const resp = await fetch(`/api/warnings?session=${encodeURIComponent(session)}`);

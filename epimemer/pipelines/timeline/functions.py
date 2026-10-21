@@ -2,7 +2,7 @@
 
 All functions take a Timeline and return a new Timeline (immutable-style).
 Backed by a sorted list with bisect for efficient lookups.
-The implementation is swappable later without changing the interface.
+The implementation can be swapped without changing the interface.
 """
 
 from bisect import bisect_left, bisect_right, insort_left
@@ -130,8 +130,7 @@ def get_in_range(
     interval on this timeline before `start` can reach the window. The longest
     interval is measured in the same pass that gathers the dated points, so the
     bound costs nothing to have, and a timeline whose intervals are all short
-    skips its whole earlier history rather than testing every point in it, as
-    this function used to.
+    skips its whole earlier history rather than testing every point in it.
 
     Sorting is by `start` and is done here rather than assumed: the record is
     kept in that order by `reorder_timepoints`, but a chronology the caller was

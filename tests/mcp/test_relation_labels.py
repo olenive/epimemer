@@ -12,8 +12,8 @@ nothing yet reads the description. What is pinned here is the part later stages
 build on — that identity exists, that it is per graph, and that coining is the
 only act that claims to have introduced a word.
 
-Both backends via the `storage` fixture, because a record the two stores disagree
-about is the divergence `tests/conftest.py` exists for.
+Every backend, through the `storage` fixture, because a record two stores
+disagree about is the divergence `tests/conftest.py` exists for.
 """
 
 from epimemer.cli import _backfill_relations

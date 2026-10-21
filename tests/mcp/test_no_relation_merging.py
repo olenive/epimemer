@@ -8,11 +8,10 @@ archival, `reassign_metacontext` a metacontext, and `apply_review` records a dis
 them. This was the one operation with no undo, and it operated on the least
 valuable thing in the graph — a word, which affects no retrieval (§1.2).
 
-**It was removed on 2026-08-28 rather than replaced.** Stage 4's deprecation is
-the shape that would replace it — `status` and `alias_of` on the label record,
-existing edges keeping their own wording, `list_relations` folding aliases
-underneath — and it is not built, because dropping is reversible and building is
-not. §5 has the full argument.
+**It was removed rather than replaced.** A deprecation is the shape that would
+replace it: `status` and `alias_of` on the label record, existing edges keeping
+their own wording, `list_relations` folding aliases underneath. It is not built,
+because dropping is reversible and building is not. §5 has the full argument.
 
 These tests are the guard on that decision, and they exist because the
 reintroduction is a natural-looking one line: an agent looking at two synonymous
@@ -22,9 +21,9 @@ is pinned at both layers — the tool cannot be asked, and no backend can do it.
 **What replaced it is not nothing**, and the last test says so. The nominations
 still arrive, and `relation_verdicts` is their destination: a pair is judged
 `distinct` or `synonymous`, the judgment is recorded against both label records,
-and the pair never comes back. That ordering was the constraint on removing
-merging at all — stage 3 had to land first, or `similar_relations` would
-nominate into a void, which is FC1's treadmill running to no destination.
+and the pair is not nominated again unless `reopen` puts it back. Without
+verdicts, removing merging would leave `similar_relations` nominating into a
+void, which is FC1's treadmill running to no destination.
 """
 
 import inspect

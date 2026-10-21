@@ -11,10 +11,10 @@ const THEMES: Theme[] = ["light", "dark"];
  * (RETRIEVAL_PROVENANCE.md §4.1).
  *
  * `statusOpacity` already maps retired → faded, and its comment exists because
- * two retired states once drew as live (#55). If focus mode also dimmed by
- * opacity, *retired + retrieved* and *active + not-retrieved* would land at the
- * same alpha — one channel carrying two meanings, decided in two files, and
- * #55 silently re-opened in one mode.
+ * two retired states once drew as live. If focus mode also dimmed by opacity,
+ * *retired + retrieved* and *active + not-retrieved* would land at the same
+ * alpha: one channel carrying two meanings, decided in two files, and retired
+ * nodes drawing as live again in one mode.
  */
 describe("test_focus_mode_leaves_status_opacity_alone", () => {
   it("keeps a retired-and-retrieved node distinguishable from an active-and-not", () => {
@@ -49,10 +49,10 @@ describe("test_focus_mode_leaves_status_opacity_alone", () => {
 });
 
 /**
- * `applyTheme` used to recompute `color` from node type and theme **alone**, so
- * toggling the theme while focus mode was on restored every node to full
- * saturation and silently left the mode — colour decided in two places, which
- * is the #56 failure exactly.
+ * If `applyTheme` recomputed `color` from node type and theme **alone**,
+ * toggling the theme while focus mode was on would restore every node to full
+ * saturation and silently leave the mode: colour decided in two places, which
+ * is how the two panels once drew one kind in two colours.
  */
 describe("test_theme_toggle_preserves_focus_desaturation", () => {
   it("recomputes a dimmed node dimmed, in either theme", () => {
@@ -83,8 +83,8 @@ describe("test_theme_toggle_preserves_focus_desaturation", () => {
 });
 
 /**
- * §4.2: dim only the graph and the two panels disagree about what came back —
- * the class of bug #56 fixed for colour, one mode later.
+ * §4.2: dim only the graph and the two panels disagree about what came back,
+ * the disagreement the shared palette removed for colour, one mode later.
  */
 describe("test_focus_mode_applies_to_both_panels", () => {
   it("dims a fact the same way in the graph and on the timeline", () => {

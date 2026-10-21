@@ -1,6 +1,6 @@
-"""Reading the journal back, shakiest first (REVIEW_MODE.md §5, §6, step 6).
+"""Reading the journal back, shakiest first (REVIEW_MODE.md §5, §6).
 
-Step 5 made *what did this agent judge* one query. This is what turns that query
+The journal makes *what did this agent judge* one query. This is what turns that query
 into a review: an order that puts the calls most worth a second look at the top,
 so a reviewer can stop reading when it stops repaying the attention.
 
@@ -10,10 +10,9 @@ first *even when a tier-2 row carries more signals* — because a blank
 `certainty` means **unrated**, not doubtful, and letting an unrated
 decision outrank one an agent actually flagged re-commits the sin the confidence prior fixed.
 
-Nothing supplies a `certainty` yet, so the whole live corpus is tier 2. That is
-why the derived half is what step 6 ships: it needs no attribution and works on
-the graph as it stands. The tier-1 rows below are built by hand, which is the
-only place they exist until step 7's `apply_review`.
+Only the review writers supply a `certainty`, so most of a live corpus is tier
+2. That is why the derived half matters: it needs no attribution and works on
+the graph as it stands. The tier-1 rows below are built by hand.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -274,7 +273,7 @@ class TestTheToolOverARealGraph:
 
     async def test_it_reports_whether_anyone_has_checked_a_row(self, storage):
         """Derived from a row pointing back rather than stored (§3.4) — the
-        property step 7's `unreviewed` mode filters on."""
+        property the `unreviewed` mode filters on."""
         original = _row(DecisionKind.MERGE, ["a", "b"])
         await storage.record_decision(original)
         await storage.record_decision(_row(DecisionKind.REVERSAL, ["a"], reviews=original.id))
@@ -327,8 +326,8 @@ class TestTheToolOverARealGraph:
 
 
 class TestItWorksOnTheCorpusAsItStands:
-    """Step 6 ships before anything supplies a `certainty` and before most rows
-    have a judge, which is the point rather than a caveat."""
+    """The ordering has to work where nothing supplies a `certainty` and most rows
+    have no judge, which is the point rather than a caveat."""
 
     async def test_a_journal_written_by_the_ordinary_tools_orders_usefully(
         self, storage, embedder, config

@@ -17,7 +17,7 @@ import type { AdvisoryRaised, GraphActionRecorded } from "./types";
  *
  * A warning is a line in the story of a session, beside the act it accompanied,
  * so it belongs in this list rather than in a panel of its own
- * (WARNINGS_DASHBOARD.md §2.3). One shape carries both, so the filters, the
+ * (EVENT_LOG.md §12.3). One shape carries both, so the filters, the
  * ordering and the deduplication are written once.
  */
 export type LogEntryKind = "act" | "warning";

@@ -10,7 +10,8 @@ uv sync --extra dev
 
 Python 3.14+ and [uv](https://docs.astral.sh/uv/). The default suite needs
 no external services and no embedding model: it runs against the in-memory
-store and SurrealDB's embedded `mem://` engine, with a mock embedding provider.
+store, SurrealDB's embedded `mem://` engine and SQLite files in a temporary
+directory, with a mock embedding provider.
 
 ## Tests
 
@@ -18,8 +19,11 @@ store and SurrealDB's embedded `mem://` engine, with a mock embedding provider.
 make test          # or: uv run python -m pytest tests/ -q
 ```
 
-Most storage and MCP tests run against **both** backends: a `conftest.py`
-fixture parameterises over `InMemoryStorage` and `SurrealDBStorage("mem://")`.
+Most storage and MCP tests run against **every** backend: a `conftest.py`
+fixture parameterises over `InMemoryStorage`, `SurrealDBStorage("mem://")`,
+`SQLiteStorage` and `PostgresStorage`. The Postgres parameter skips itself
+unless `EPIMEMER_TEST_POSTGRES_DSN` names a database. Point it only at a
+database you can throw away: every test drops every graph schema in it.
 
 Two things `mem://` cannot model, two real connections and surviving a
 restart, have their own **opt-in** suites, which skip themselves under a bare
@@ -41,6 +45,18 @@ make test-integration
 make test-integration SURREAL_PORT=8123
 ```
 
+The Postgres parameter has a target of its own, which starts a throwaway
+`postgres:17-alpine` in Docker, runs the suite selected to Postgres and tears
+the server down, with the same port check:
+
+```bash
+make test-postgres
+make test-postgres PG_PORT=5434
+```
+
+A skipped parameter is reported as a pass, so check that the run says
+`passed` with nothing skipped.
+
 ### Frontend
 
 The visualization frontend under `epimemer/visualization/frontend/` is
@@ -49,7 +65,7 @@ Python-only so Node is not a prerequisite for backend work.
 
 ```bash
 make test-frontend      # npm run typecheck && npm test
-cd epimemer/visualization/frontend && npm ci && npm run build
+make build-frontend     # npm ci && npm run build
 ```
 
 The build writes `epimemer/visualization/static/`, which is **not committed**:
@@ -83,17 +99,13 @@ old the lock gets. A finding names a package and a severity and stops there,
 since OSV says a version is affected rather than that this code reaches the
 affected path.
 
-The scheduled run files what it finds as an issue and closes it when the
-finding is gone. It opens no pull request and edits no lock file: updating is
+The scheduled run files what it finds as an issue; updating is
 `uv lock --upgrade`, run the suite, one commit.
 
 ## Conventions
 
-[AGENTS.md](AGENTS.md) holds the coding rules and is checked in so that they
-are reviewed beside the code: functional style, Pydantic for data, no
-singletons, every backend implementing the full storage protocol, and the
-rule against citing issue numbers in code or prose. Read it before a first
-change.
+[AGENTS.md](AGENTS.md) holds the coding rules, checked in so that they are
+reviewed beside the code. Read it before a first change.
 
 The MCP boundary has a guard: every parameter an implementation in
 `epimemer/mcp/tools.py` accepts is either exposed on the matching tool in
@@ -101,27 +113,6 @@ The MCP boundary has a guard: every parameter an implementation in
 `tests/mcp/test_boundary_exposes_the_implementation.py` with the reason it is
 the server's to supply. A new parameter fails that test until you do one or
 the other.
-
-## Layout
-
-```
-epimemer/
-  core/: Pydantic models (node types, edges, timelines, metacontexts)
-  storage/: Storage protocol + InMemory + SurrealDB adapters
-  embeddings/: Embedding protocol + sentence-transformers + mock
-  pipelines/
-    segmentation/: Paragraph split, semantic similarity
-    graph_construction/: Edge creation, node versioning
-    query/: Vector search, graph expansion, hybrid retrieval
-    reflection/: Topic consolidation, contradiction detection, archival
-    review/: Reading the decision journal back, and what a reviewer concludes
-    timeline/: Pure functional timeline operations
-  mcp/: FastMCP server, tool implementations, config
-  logging/: Structured JSON logging
-  visualization/: Standalone viz hub, session client, and frontend
-tests/: unit, pipeline, MCP, integration
-scripts/: benchmarks, corpus measurement, prose lint, advisory check, local SurrealDB
-```
 
 ## Where the design lives
 
@@ -136,6 +127,8 @@ under `dev-docs/`:
   what, why, rough cost, and what has to be true before it can start
 - [BENCHMARKS.md](dev-docs/BENCHMARKS.md): measured scaling limits and where
   they come from
+- [VIZ_CONTRACT.md](dev-docs/VIZ_CONTRACT.md): what a client of the
+  visualisation hub may rely on, and when `VIZ_SCHEMA_VERSION` must change
 - The remaining files are the design of one subsystem each, with the
   alternatives that were rejected and the measurements behind the choices
 

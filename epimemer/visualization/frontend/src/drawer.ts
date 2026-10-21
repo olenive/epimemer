@@ -1,10 +1,10 @@
 /**
  * The detail drawer: two tabs, one fixed-height strip.
  *
- * The drawer used to serve one thing, the selected node's detail. A response is
- * a second thing with a **different driver and a different lifetime** — node
- * detail follows your selection, a response follows the selected record — and
- * in focus mode you want both at once (RETRIEVAL_PROVENANCE.md §5.1).
+ * The drawer serves two things with a **different driver and a different
+ * lifetime**: node detail follows your selection, a response follows the
+ * selected record, and in focus mode you want both at once
+ * (RETRIEVAL_PROVENANCE.md §5.1).
  *
  * The rule it enforces is §5.2's: **a retrieval must never steal the drawer.**
  * Nothing here is called when a record merely *arrives*; only selecting one
