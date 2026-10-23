@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.4.0] — 2026-10-23
 
 - A new dated point no longer clears every held temporal contradiction on its
   timeline. A hold now waits for an ordering assertion that touches one of its
