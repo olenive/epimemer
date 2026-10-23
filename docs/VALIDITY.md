@@ -1,14 +1,12 @@
 # Valid time: when a claim was true
 
-Saint Petersburg was Petrograd was Leningrad was Saint Petersburg. Every one
-of those was true. A memory system that can only record such a pair as a
-*contradiction* or a *correction* is wrong in both directions, and the damage
-is not cosmetic: it files historical truth as error, it removes it from the
-active set, and **it lets an inference combine claims that were never
-simultaneously true, with nothing to detect it.**
+Saint Petersburg was Petrograd, then Leningrad, then Saint Petersburg again,
+and each name was true in its period. Epimemer records when each claim held,
+so a succession like that is filed neither as a contradiction nor as a
+correction, and an inference that combines claims never true at the same time
+is caught.
 
-This page is the model that prevents that. Design notes:
-`dev-docs/VALIDITY_DESIGN.md` and `dev-docs/REVIEW_EPISTEMIC.md` §13.
+Design notes: `dev-docs/VALIDITY_DESIGN.md` and `dev-docs/REVIEW_EPISTEMIC.md` §13.
 
 ---
 
@@ -19,36 +17,29 @@ This page is the model that prevents that. Design notes:
 | **Transaction time** | *When did the graph learn this?* | `created_at`, `superseded_at`, `lifecycle`, read by `graph_as_of` and `query_changes` |
 | **Valid time** | *When was this true?* | validity intervals on `sourced_from` edges, read by `search(valid_as_of=…)` |
 
-Both names are marked on both sides. A bare `as_of` would inherit the default
-reading, and in a knowledge graph *"as of 1980"* reads as *what was true
-then*, which is the wrong axis for `graph_as_of`.
+Each tool names its clock in its argument, so *"as of 1980"* is never read on
+the wrong axis.
 
 ---
 
 ## 2. Validity lives on the provenance edge, per source
 
-Not on the node. A claim with two sources has **two periods**, and they are
-kept apart:
+A claim with two sources has **two periods**, and they are kept apart:
 
 ```
 fact ──sourced_from[validity: [interval, …]]──> document A
      └─sourced_from[validity: [interval, …]]──> document B
 ```
 
-Nothing is ever unioned onto the node, and nothing collapses at read time
-either. Both collapses lie in a way nobody could later detect:
+Nothing unions them onto the node or collapses them at read time: a union of
+a careful source and a sloppy one yields a period neither claims, and an
+intersection of two episodes yields "never". So `search` returns `validity` as
+a list of `(source, intervals)` pairs and the caller decides. Only a
+`sourced_from` edge may carry validity.
 
-- **Union** takes one careful source and one sloppy one and yields a period
-  *neither* claims.
-- **Intersection** takes two separate episodes and yields "never".
-
-So `search` returns `validity` as a list of `(source, intervals)` pairs and
-lets the caller decide. Only a `sourced_from` edge may carry validity at all.
-
-Alongside it, `RawDocument` carries an optional **`published_at`**: when the
-document was published, as against `created_at`, which is when it was
-ingested. It never falls back to `created_at`, because a fabricated
-publication date is worse than a missing one.
+`RawDocument` also carries an optional **`published_at`**, when the document
+was published, as against `created_at`, when it was ingested. It never falls
+back to `created_at`.
 
 ---
 
@@ -64,12 +55,10 @@ A `ValidityInterval` carries:
 | `basis` | `stated` or `inferred` |
 
 Intervals are **half-open**, and a self-contradictory one (starting at or
-after it ends) is refused at construction rather than stored.
+after it ends, or witnessed outside its own endpoints) is refused rather than
+stored.
 
 ### Endpoints distinguish *unknown* from *unbounded*
-
-Four kinds, and the first two are routinely confused in systems that only
-have a nullable datetime:
 
 | Kind | Meaning |
 |---|---|
@@ -78,27 +67,23 @@ have a nullable datetime:
 | `unknown` | the source does not say when this began or ended |
 | `unbounded` | the source says it has *always* held, or holds still |
 
-*"We don't know when it started"* and *"it had no start"* are different
-claims, and a single `NULL` cannot tell them apart.
+*"We don't know when it started"* and *"it had no start"* are different claims.
 
 ### Timelines, not metacontexts
 
-Validity is measured against a named **timeline**. A fictional date and a
-real one are not comparable, and there is no conversion between them. A
-timeline also carries its own `reference_time`, that clock's *now*, which is
-why *"is this claim current?"* must be asked against the relevant timeline
-rather than against `datetime.now()`.
+Validity is measured against a named **timeline**. A fictional date and a real
+one are not comparable, and there is no conversion between them. A timeline
+carries its own `reference_time`, that clock's *now*, so *"is this claim
+current?"* is asked against the relevant timeline rather than the wall clock.
 
 ### `basis`: stated or inferred
 
 `stated` means the document gave the date. `inferred` means it was worked
-out.
+out, from tense or context or from two documents read together.
 
 **A date the agent knows from world knowledge and the document does not give
-is neither, and must not be supplied at all.** That is the whole content of
-the rule: provenance means the graph can say who asserted what, and a date
-smuggled in from the agent's own knowledge is attributed to a source that
-never said it.
+is neither, and must not be supplied at all**: it would be attributed to a
+source that never said it.
 
 ### Comparison
 
@@ -106,31 +91,28 @@ never said it.
 
 `before` · `after` · `overlap` · **`unknown`**
 
-The fourth is the point. Two periods that cannot be placed relative to each
-other, because an endpoint is unknown or because they are on different
-clocks, give `unknown`, and every consumer must handle it as *we cannot tell*
-rather than folding it into false.
+Two periods that cannot be placed relative to each other, because an endpoint
+is unknown or because they are on different clocks, give `unknown`, and every
+consumer treats it as *we cannot tell* rather than as false.
 
 ---
 
 ## 4. Only ingest can supply intervals
 
 Epimemer makes no LLM calls, so the calling agent supplies validity at
-`store_decomposition`, per node. It has to be there: tense and the dates
-written in the text are visible at ingest and nowhere afterwards.
+`store_decomposition`, per node: tense and the dates written in the text are
+visible at ingest and nowhere afterwards.
 
 Everything downstream **reads**, with two exceptions that write an endpoint
 without reading the text: `apply_reflection(boundaries=[…])` fills one that
 is still **open**, from a succession two documents imply together (§7); and
 `correct_interval` replaces one that is **present and wrong** (§7.1).
-Nothing infers a date from the text later, because the text is gone by then.
 
 ---
 
 ## 5. The world changing is not the same as being wrong
 
-The lifecycle splits on which of the two happened, and the split runs
-through the status, the edge, and the edge migration together:
+The lifecycle splits on which of the two happened:
 
 | | **Correction** | **World-change** |
 |---|---|---|
@@ -142,46 +124,40 @@ through the status, the edge, and the edge migration together:
 | Eligible for archival by age? | yes | no |
 | Keeps its own provenance? | no, moved to the replacement | yes |
 
-The caller must say which; there is no default, because filing a change in
-the world as an error is how a graph forgets its own history. `because` is
-required on `supersede_by`.
+The caller must say which: `because` is required on `update` and
+`supersede_by`, with no default, because filing a change in the world as an
+error is how a graph forgets its own history.
 
 **The succession edge never claims adjacency.** Saint Petersburg to Petrograd
 to Leningrad to Saint Petersburg is three separately observed transitions, so
-cycles and parallel same-direction edges are legal, and nothing may
-deduplicate them by `(src, dst, type)`. Every walker over this edge type must
-therefore be cycle-safe.
+cycles and parallel same-direction edges are legal and are never deduplicated.
 
 ### Recurrence
 
-The word names two unrelated things in this codebase. This section is about
-**lifecycle recurrence**: a claim that was retired becomes true again, and
-`restore` puts it back with the `recurs` verdict. A **recurrence rule** is a
-pattern on a timeline, "the second Tuesday of every month", added with
-`add_recurrence` and expanded into occurrences when a query asks; that is
+This section is about **lifecycle recurrence**: a retired claim becomes true
+again, and `restore` puts it back with the `recurs` verdict. A **recurrence
+rule**, "the second Tuesday of every month", is a pattern on a timeline; see
 [TIMELINES.md](TIMELINES.md).
 
-Because a world-change is reversible, a claim can become true again.
 `historical` is restorable and `corrected` is not.
 
 - Similarity nomination sees historical candidates, which is what makes the
-  **`recurs`** verdict reachable at all.
+  **`recurs`** verdict reachable.
 - `check_conflicts` returns each candidate's status, because telling
   `redundant` from `recurs` *is* that distinction.
 - `reflect` reports mixed active/historical pairs under `recurrences`, apart
   from `contradictions`: a claim beside its own successor is not in conflict
   with it.
-- `restore` reactivates the named node **and writes the new source's
-  `sourced_from` edge in one transaction**. Without that source it refuses: a
-  claim back to active with no edge saying who asserts it is one the graph
-  states and cannot attribute.
+- `restore(node_ids=…, sourced_from=…)` reactivates the node **and writes the
+  new source's `sourced_from` edge in one transaction**. Without
+  `sourced_from` it refuses, since the graph would state a claim it cannot
+  attribute.
 
 ### Lifecycle episodes
 
 A node can leave the active set more than once, so its history is an
-**append-only list** of episodes. `query_changes` reads the episodes, which is
-why a node that retired, returned and retired again reports three events
-rather than one.
+**append-only list** of episodes. `query_changes` reads them, which is why a
+node that retired, returned and retired again reports three events.
 
 ---
 
@@ -189,7 +165,7 @@ rather than one.
 
 Retrieval is covered in
 [RETRIEVAL.md](RETRIEVAL.md#7-valid-time-answers-in-groups-never-as-a-filter).
-The short form:
+In short:
 
 - Results carry `validity`, per source, uncollapsed.
 - `valid_as_of` answers in **two buckets**, `valid` and `unknown`, and
@@ -202,131 +178,98 @@ The short form:
 
 ## 7. What reflect does with validity
 
-The phases that read intervals all **propose and never write**; see
+The phases that read intervals **propose and never write**; see
 [REFLECTION.md](REFLECTION.md).
 
 ### The soundness check
 
-An inference is flagged when **no source puts its premises in the same
-period**: `compare_intervals` returns `before` or `after` for every pair of
-their stated periods. It is reported with the offending pairs and their
-dates, not as a verdict.
+An inference is listed under `unsound_inferences` when **no source puts its
+premises in the same period**: `compare_intervals` returns `before` or `after`
+for every pair of their stated periods. It reports the offending pairs and
+their dates, not a verdict, and it never blocks.
 
-Two properties make it a check on evidence rather than on ignorance:
-
-- It is **silent whenever a pair cannot be placed.** `unknown` never flags.
-  An undated graph produces no findings at all, which is correct: nothing was
-  learned about it.
+- It is **silent whenever a pair cannot be placed.** `unknown` never flags,
+  so an undated graph produces no findings.
 - Where a premise has several sources, their periods are **unioned per
-  premise** before comparison. That is the one collapse permitted anywhere in
-  this design, and its error direction is the safe one: an over-wide source
-  suppresses a flag, never manufactures one.
+  premise** before comparison, the one collapse permitted anywhere here. An
+  over-wide source can suppress a flag, never manufacture one.
 
-It flags; it never blocks. Ingest cannot do this job: the motivating case
-spans two documents, neither of which is in front of the agent while the
-other is being stored.
+It runs at reflect because the two premises usually come from different
+documents, and only reflect sees both.
 
 ### The same check, asked about a merge that has not happened
 
-`merge_inferences` collapses two derivations into one node resting on the
-**union** of their premises. So the same question, do these premises fall
-clear of each other, can be asked of a survivor that does not exist yet, and
-it is: `inference_merge_candidates` carries the answer as a warning, and so
-does the merge's own response.
-
-The finding is only recoverable beforehand. Once the merge lands, the
-`derived_from` edges have migrated and nothing distinguishes *these premises
-arrived from two inferences* from *this one was drawn on both*.
-
-It is a warning rather than a refusal because the honest response is
-usually to narrow the merged claim's wording or period, which the agent does
-by writing content. Refusing would block a merge it could have fixed.
+`merge_inferences` makes one node resting on the **union** of the sources'
+premises, so the same check is asked before the merge: reflect's
+`inference_merge_candidates` and the merge's own response carry it as a
+warning. After the merge it cannot be recovered, because the `derived_from`
+edges have moved. The usual answer is to narrow the merged claim's wording or
+period, which is why it warns rather than refuses.
 
 ### Boundary proposals
 
-Ingest extracts what one document says. Reflect proposes what **two
-documents say together**, and the motivating case is invisible at ingest:
+Reflect's `boundary_proposals` cover what **two documents say together**:
 
 > Document 1: *"the city is called Leningrad."*
 > Document 2: *"the city has been called Saint Petersburg since 1991."*
 
-The first document cannot know its claim will ever stop being true, so the
-first period is left open. Only something seeing both can close it.
+The first document leaves its period open. Only something seeing both can
+close it. Three rules:
 
-Three rules keep this honest:
-
-1. **The succession edge is the licence.** A proposal is drawn from a
+1. **The succession edge is the licence.** A proposal is drawn only from a
    `temporally_followed_by` edge, the agent's recorded verdict that the world
-   moved from one claim to the next. Reflect never judges succession itself.
-   `superseded_by` licenses nothing here: a claim that was never true has no
-   period to close.
-2. **Only a date some document actually gives is ever proposed**: the
-   successor's own located start moved across the edge, or the predecessor's
-   own located end. Where a side holds several periods, the boundary nearest
-   the handover is used.
+   moved on. Reflect never judges succession itself, and `superseded_by`
+   licenses nothing: a claim that was never true has no period to close.
+2. **Only a date some document actually gives is proposed**: the successor's
+   own located start moved across the edge, or the predecessor's own located
+   end. Where a side holds several periods, the boundary nearest the handover
+   is used.
 3. **Publication dates are never used.** A document published in 2000 bounds
-   when its claim was *asserted*, never when the previous one stopped
-   holding, and closing Leningrad's period at 2000 would have the graph
-   assert the city was called Leningrad in 1995.
+   when its claim was *asserted*, never when the previous one stopped holding.
 
-A consequence worth stating plainly: two documents neither of which carries a
-date yield **no proposal**, and that is the honest outcome. What the feature
-buys is real anyway: a date from the second document lands on the first
-document's fact, which no single-document ingest could do.
+So two undated documents yield **no proposal**.
 
-Every proposal is `inferred`, nothing is written by the proposing pass, and
-`apply_reflection(boundaries=[…])` is the only thing that writes. It
-re-derives which interval is meant from the graph as it stands and
-**refuses** rather than guesses when the request no longer names exactly one
-open period: several means ambiguous, none means already answered. Refusals
-come back with a reason, because a boundary silently not applied is worse
-than one rejected out loud.
+Every proposal is `inferred`, and `apply_reflection(boundaries=[…])` is the
+only thing that writes one. It re-derives which interval is meant from the
+graph as it stands and **refuses** when the request no longer names exactly one
+open period; refusals come back in `boundaries_refused` with a reason.
 
 A proposal you disagree with is declined through
 `apply_reflection(boundaries_declined=[…])`, with the proposal's identity and
 a required `reason`. The period stays open, and one `boundary_declined`
-journal row records the claim, the source and the question: which endpoint,
-at what date, on which clock. That row stops exactly that proposal being
-offered again, by `reflect` and on the timeline panel. A proposal for another
-date or the other endpoint is a different question, so a proposal whose date
-moves because the successor's period was corrected comes back. The decline is
-a journal row rather than an edge between the two claims, which can still be
-nominated as a similar or contradictory pair. `reopen(boundary={…})` withdraws
-a decline, and the proposal then returns carrying the reopening's reason.
+journal row records the claim, the source, the endpoint, the date and the
+clock. That stops exactly that proposal being offered again, by `reflect` and
+on the timeline panel; a proposal for another date or the other endpoint is a
+different question and is still offered. The decline is a journal row rather
+than an edge, so the two claims can still be nominated as a similar or
+contradictory pair. `reopen(boundary={…})` withdraws a decline, and the
+proposal returns carrying the reopening's reason.
 
 ### 7.1 Correcting a period that is present and wrong
 
-`boundary_proposals` fills an endpoint that is **open**. Nothing derives that
-a date already recorded was *misread* (a republication date taken for the
-original, a tense read the wrong way), so correcting one is a separate act on
-separate evidence: `correct_interval(node_id, source_id, intervals,
+`boundary_proposals` fills an endpoint that is **open**. A recorded date that
+was *misread* (a republication date taken for the original, a tense read the
+wrong way) is corrected with `correct_interval(node_id, source_id, intervals,
 because)`.
 
-**It is not a supersession.** The claim is unchanged and the world has not
-moved, so `because` in the `update` sense has no honest value. This is the
-same category as a mislabelled `claim_kind`, and it has a tool of its own
-rather than a field on `rejudge` because of how it is addressed: `rejudge`
-names a node, and an interval belongs to a (node, source) pair
-(`dev-docs/REVIEW_MODE.md` §6.5). Nothing is retired and no lineage moves.
+**It is not a supersession**: the claim is unchanged, nothing is retired and
+no lineage moves. It is a tool of its own rather than a field on `rejudge`
+because an interval belongs to a (node, source) pair, not to a node
+(`dev-docs/REVIEW_MODE.md` §6.5).
 
-**The whole list for that (node, source) pair is replaced**, because an
-interval is a position in a list on one `sourced_from` edge and has no id of
-its own. Supplying an empty list is allowed, and is how a period that was
-invented outright comes off; refusing that would leave a fabricated interval
-unremovable.
+**The whole list for that (node, source) pair is replaced**, since an interval
+has no id of its own. An empty list is allowed, and is how a period that was
+invented outright comes off.
 
 **`basis` stays yours to state per interval**, unlike an accepted boundary,
-which is forced to `inferred`. A correction is often restoring what the
-document actually said, and calling that inferred would understate it.
+which is forced to `inferred`: a correction often restores what the document
+actually said.
 
-Refused where the graph cannot back the change: a blank `because`, no node, a
-source that is not named by exactly one `sourced_from` edge from that node, or
-a replacement identical to what is already there (a restatement is not a
-revision). The prior list is kept in the edge's `interval_corrections` trail.
-That matters because corroboration reads intervals to decide whether a
-look-alike witnesses the same period or is the neighbouring truth: a wrong
-interval has been moving counts for as long as it stood, and the trail plus
-the journal row's timestamp is what bounds which answers were affected.
+Refused for a blank `because`, a missing node, a source not named by exactly
+one `sourced_from` edge from that node, or a replacement identical to what is
+there. The prior list is kept in the edge's `interval_corrections` trail.
+Corroboration reads intervals, so that trail and the journal row's timestamp
+bound which answers a wrong interval affected.
 
 ---
 
@@ -334,16 +277,12 @@ the journal row's timestamp is what bounds which answers were affected.
 
 - **`basis` is per interval.** Accepting a proposed boundary marks the whole
   interval `inferred`, so a start the document *stated* stops being
-  reportable as stated. The alternative, leaving it `stated`, would have a
-  source appear to assert a date no document gave, which is the one thing the
-  rule exists to prevent. Under-claiming is the safe direction.
-- **Deduplication merges states and never events.** Identical claims
-  recurring over disjoint periods are one node with several intervals, and
-  because validity lives on the `sourced_from` edge the intervals survive a
-  merge with no combination rule to invent. But *"Labour is in government"*
-  in 1997 and 2024 is one state whose intervals union, while *"Labour won the
-  election"* in 1997 and 2024 is two events, and merging them would fabricate
-  one victory spanning both. The two sentences are near-identical, so nothing
-  computed from them separates the cases: the judgment is made at ingest,
-  where the document is still readable, and stored as `Fact.claim_kind`. A
-  fact ingested without one never merges.
+  reportable as stated. Leaving it `stated` would have a source appear to
+  assert a date no document gave.
+- **Deduplication merges states and never events.** Identical claims over
+  disjoint periods are one node with several intervals, and the intervals
+  survive a merge because they live on the `sourced_from` edges. But *"Labour
+  is in government"* in 1997 and 2024 is one state, while *"Labour won the
+  election"* in 1997 and 2024 is two events, and the sentences alone cannot
+  tell them apart. The judgment is made at ingest and stored as
+  `Fact.claim_kind`; a fact ingested without one never merges.

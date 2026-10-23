@@ -301,6 +301,17 @@ class TestTheAdvisoryRidesWithTheMerge:
         # its content in light of it.
         assert result["notify_user"] is False
 
+    async def test_the_premises_the_warning_names_are_declared(self, storage, embedding_provider):
+        """The warning's evidence names the two premises by id, so the agent
+        can read them off the response and the record has to say so."""
+        one, other = await _disjoint_pair(storage, embedding_provider)
+
+        result, meta = await _merge(storage, embedding_provider, [one, other])
+
+        (warning,) = result["warnings"]
+        premises = {warning["detail"]["a"]["id"], warning["detail"]["b"]["id"]}
+        assert premises <= {record.node_id for record in meta.retrieved}
+
     async def test_proceeding_past_one_is_journalled_against_the_survivor(
         self, storage, embedding_provider
     ):

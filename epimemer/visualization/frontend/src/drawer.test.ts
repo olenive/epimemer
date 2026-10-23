@@ -44,7 +44,7 @@ beforeEach(() => {
 describe("test_response_tab_and_node_tab_keep_separate_content", () => {
   it("keeps each tab's content when the other is filled", () => {
     drawer.showResponse("search", '{"nodes": []}');
-    drawer.showNode("fact — 1a2b3c4d", "The deployment rollback failed");
+    drawer.showNode("fact: 1a2b3c4d", "The deployment rollback failed");
 
     expect(drawer.contentOf("response")).toBe('{"nodes": []}');
     expect(drawer.contentOf("node")).toBe("The deployment rollback failed");
@@ -84,7 +84,7 @@ describe("test_response_tab_and_node_tab_keep_separate_content", () => {
 describe("test_a_new_record_does_not_change_the_open_drawer", () => {
   it("leaves the open drawer, its active tab and its content alone", () => {
     drawer.showResponse("search", "first response");
-    drawer.showNode("fact — 1a2b3c4d", "the node I am reading");
+    drawer.showNode("fact: 1a2b3c4d", "the node I am reading");
 
     // What "a retrieval occurred" does to the drawer: nothing. The selector
     // gains an entry and the unread count moves; there is deliberately no
@@ -145,7 +145,7 @@ describe("test_dimmed_node_stays_clickable_and_says_it_was_not_retrieved", () =>
   });
 
   it("puts the marker in the body, where a click can read it", () => {
-    drawer.showNode("fact — 1a2b3c4d", "content", notRetrievedMarker(false, true));
+    drawer.showNode("fact: 1a2b3c4d", "content", notRetrievedMarker(false, true));
 
     expect($("detail-content").textContent).toContain("content");
     expect($("detail-content").textContent).toMatch(/not in this retrieval/i);
@@ -175,7 +175,7 @@ describe("test_a_described_topic_shows_its_description_beneath_its_content", () 
   });
 
   it("reaches the drawer body a click can read", () => {
-    drawer.showNode("topic — 1a2b3c4d", nodeDetailBody("issue-53", "What it covers."));
+    drawer.showNode("topic: 1a2b3c4d", nodeDetailBody("issue-53", "What it covers."));
 
     expect($("detail-content").textContent).toContain("issue-53");
     expect($("detail-content").textContent).toContain("What it covers.");

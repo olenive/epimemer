@@ -278,6 +278,7 @@ class InstrumentedStorage:
         await self._bus.publish(
             graph_action(
                 graph=graph,
+                action_id=self._bus.next_action_id(),
                 verb=verb_for_status(status),
                 subjects=[old_node.id, new_node.id],
                 counts={"nodes": 1, "edges": 1 + len(evidence_edges)},
@@ -323,6 +324,7 @@ class InstrumentedStorage:
         await self._bus.publish(
             graph_action(
                 graph=graph,
+                action_id=self._bus.next_action_id(),
                 verb=verb_for_status(status),
                 subjects=[old_node.id, existing_id],
                 counts={"edges": 1 + len(evidence_edges)},
@@ -357,6 +359,7 @@ class InstrumentedStorage:
             await self._bus.publish(
                 graph_action(
                     graph=graph,
+                    action_id=self._bus.next_action_id(),
                     verb=verb_for_status(status),
                     subjects=[node.id for node in nodes],
                     counts={"nodes": len(nodes)},
@@ -401,6 +404,7 @@ class InstrumentedStorage:
         await self._bus.publish(
             graph_action(
                 graph=graph,
+                action_id=self._bus.next_action_id(),
                 verb=ActionVerb.MERGED,
                 # The survivor first: "merged 2 nodes into 5e6f7g8h" is the line, and
                 # where the content went is the part worth reading.
@@ -449,6 +453,7 @@ class InstrumentedStorage:
         await self._bus.publish(
             graph_action(
                 graph=graph,
+                action_id=self._bus.next_action_id(),
                 verb=ActionVerb.RESTORED,
                 subjects=[source.id for source in source_nodes],
                 counts={"nodes": len(source_nodes), "edges": len(restored_edges)},
@@ -494,6 +499,7 @@ class InstrumentedStorage:
             await self._bus.publish(
                 graph_action(
                     graph=graph,
+                    action_id=self._bus.next_action_id(),
                     verb=ActionVerb.STORED,
                     subjects=[node.id for node in nodes],
                     counts={
@@ -545,6 +551,7 @@ class InstrumentedStorage:
         await self._bus.publish(
             graph_action(
                 graph=graph,
+                action_id=self._bus.next_action_id(),
                 verb=kind,
                 subjects=[timeline.id],
                 counts={
@@ -582,6 +589,7 @@ class InstrumentedStorage:
         await self._bus.publish(
             graph_action(
                 graph=graph,
+                action_id=self._bus.next_action_id(),
                 verb=decision.kind,
                 subjects=list(decision.subject_ids),
                 counts={
@@ -642,6 +650,7 @@ class InstrumentedStorage:
             await self._bus.publish(
                 graph_action(
                     graph=graph,
+                    action_id=self._bus.next_action_id(),
                     verb=ActionVerb.STORED,
                     subjects=[node.id for node in nodes],
                     counts={

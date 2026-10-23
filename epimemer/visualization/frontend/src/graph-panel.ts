@@ -5,12 +5,13 @@
  * Supports live updates via graph events from the WebSocket.
  */
 
-import cytoscape, { type Core, type LayoutOptions } from "cytoscape";
+import cytoscape, { type Core } from "cytoscape";
 // @ts-expect-error — cytoscape-dagre has no types
 import dagre from "cytoscape-dagre";
 // @ts-expect-error — cytoscape-fcose has no types
 import fcose from "cytoscape-fcose";
 import type { EventRouter } from "./events";
+import { layoutOptionsFor, layoutTitle } from "./graph-layout";
 import {
   currentTheme,
   currentPalette,
@@ -191,36 +192,6 @@ export const highlightNote = (report: HighlightReport): string | null => {
   return parts.length > 0 ? parts.join("; ") : null;
 };
 
-// --- Layout configs ---
-//
-// The graph is wide and shallow: a few ranks (topic → fact → inference) holding
-// many peers each. `rankDir` sets the direction ranks advance in, so the *peers*
-// spread along the other axis — a vertical rankDir is what puts them across the
-// viewport's width. "LR" reads as a single tall column that auto-fit then
-// shrinks to nothing.
-//
-// "BT" over "TB" so edges point upward into what they are about: facts settle
-// at the bottom and the topics they support rise to the top. That holds while
-// edges run detail → abstraction; a graph wired the other way inverts.
-
-const LAYOUT_CONFIGS: Record<string, object> = {
-  dagre: {
-    name: "dagre",
-    rankDir: "BT",
-    rankSep: 90,
-    nodeSep: 45,
-    animate: true,
-    animationDuration: 300,
-  },
-  fcose: {
-    name: "fcose",
-    animate: true,
-    animationDuration: 300,
-    nodeRepulsion: 8000,
-    idealEdgeLength: 80,
-  },
-};
-
 // --- Cytoscape stylesheet ---
 
 // Cast needed: Cytoscape types don't model data() mappers for numeric fields.
@@ -285,6 +256,8 @@ interface GraphPanelState {
   currentLayout: string;
   currentFilter: string;
   pendingLayout: ReturnType<typeof setTimeout> | null;
+  /** Told which layout it is showing: a large graph's hierarchy is drawn in rows. */
+  layoutSelect?: HTMLSelectElement;
 }
 
 const truncate = (text: string, maxLen: number): string =>
@@ -343,6 +316,7 @@ export const initGraphPanel = (
     currentLayout: "dagre",
     currentFilter: "all",
     pendingLayout: null,
+    layoutSelect: controls?.layoutSelect,
   };
 
   // The retrieval a record returned, or null when focus mode is off. Null is
@@ -607,8 +581,6 @@ export const initGraphPanel = (
 // --- Layout ---
 
 const runLayout = (state: GraphPanelState): void => {
-  const config = LAYOUT_CONFIGS[state.currentLayout] ?? LAYOUT_CONFIGS.dagre;
-
   // Apply filter
   if (state.currentFilter !== "all") {
     state.cy.nodes().forEach((n) => {
@@ -620,8 +592,10 @@ const runLayout = (state: GraphPanelState): void => {
     state.cy.nodes().style("display", "element");
   }
 
-  const layout = state.cy.layout(config as LayoutOptions);
-  layout.run();
+  state.cy.layout(layoutOptionsFor(state.currentLayout, state.cy)).run();
+  if (state.layoutSelect) {
+    state.layoutSelect.title = layoutTitle(state.currentLayout, state.cy.nodes().length);
+  }
 };
 
 /**
@@ -635,11 +609,11 @@ export const bindGraphControls = (
 ): void => {
   layoutSelect.addEventListener("change", () => {
     state.currentLayout = layoutSelect.value;
-    runLayout({ ...state, cy, pendingLayout: null });
+    runLayout({ ...state, cy, pendingLayout: null, layoutSelect });
   });
 
   filterSelect.addEventListener("change", () => {
     state.currentFilter = filterSelect.value;
-    runLayout({ ...state, cy, pendingLayout: null });
+    runLayout({ ...state, cy, pendingLayout: null, layoutSelect });
   });
 };

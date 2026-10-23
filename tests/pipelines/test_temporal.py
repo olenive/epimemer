@@ -130,6 +130,28 @@ class TestVagueExpressions:
         assert found.end is None
         assert found.label == label
 
+    @pytest.mark.parametrize(
+        "text,label",
+        [
+            ("throughout the Victorian Era the mill ran", "throughout the Victorian Era"),
+            ("during the Cold War it was closed", "during the Cold War"),
+            ("in the Bronze Age the river moved", "in the Bronze Age"),
+            ("since the Enlightenment it has", "since the Enlightenment"),
+            ("after the French Revolution it was sold", "after the French Revolution"),
+            ("before the Second World War it was a mill", "before the Second World War"),
+            ("during the Tang Dynasty it was built", "during the Tang Dynasty"),
+            ("in the Age of Enlightenment it was built", "in the Age of Enlightenment"),
+            ("during the War of the Roses it burned", "during the War of the Roses"),
+            ("in the Sixties it was a club", "in the Sixties"),
+        ],
+    )
+    def test_a_named_period_is_recognised_by_its_head_noun(self, text, label):
+        """A capital letter marks a name, and a name is a time only when the
+        noun it is built on names a stretch of time: the last word, or the one
+        before "of"."""
+        found = only(text)
+        assert (found.start, found.label) == (None, label)
+
 
 class TestWhatItRefusesToMatch:
     """Every entry here is a false positive that would put an invented date on
@@ -156,6 +178,31 @@ class TestWhatItRefusesToMatch:
     def test_finds_nothing(self, text):
         assert detect_temporal_expressions(text) == []
 
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "the fix is described in the README",
+            "see the note in the CHANGELOG",
+            "the target is configured in the Makefile",
+            "it runs on the MCP server",
+            "the runbook was written by the Platform Team",
+            "imported from the Python standard library",
+            "the case was settled in the Supreme Court",
+            "the failure was logged during the CI run",
+            "the office is in the Department of War",
+            "a stall in the Renaissance Fair tent",
+            "the bug is in the code",
+            "he stood at the window",
+            "the key is in the lock",
+        ],
+    )
+    def test_a_prepositional_phrase_naming_no_time_is_not_a_timepoint(self, text):
+        """A temporal preposition followed by a capitalised name reads like
+        "during the Renaissance" and usually names a file, a team or a court.
+        Filed as a timepoint it lands in the undated tray as though a source
+        had dated something."""
+        assert detect_temporal_expressions(text) == []
+
     def test_a_year_needs_a_temporal_cue(self):
         """A bare four-digit number is only a year when something says so — a
         preposition, or a date pattern around it."""
@@ -165,6 +212,22 @@ class TestWhatItRefusesToMatch:
     @pytest.mark.parametrize("text", ["in 0999", "in 3200"])
     def test_ignores_years_outside_the_plausible_range(self, text):
         assert detect_temporal_expressions(text) == []
+
+
+class TestTheTighteningKeepsGenuineExpressions:
+    """The expressions the vague rule must not take down with it."""
+
+    def test_a_month_and_year_still_resolves(self):
+        found = only("the release shipped in March 2026")
+        assert (found.start, found.end) == (utc(2026, 3, 1), utc(2026, 4, 1))
+
+    def test_a_bare_year_after_a_preposition_still_resolves(self):
+        found = only("the project was founded in 2024")
+        assert (found.start, found.end) == (utc(2024, 1, 1), utc(2025, 1, 1))
+
+    def test_a_named_date_beside_a_file_name_is_the_only_mark(self):
+        found = detect_temporal_expressions("on 12 March 1997 it was noted in the README")
+        assert [f.text for f in found] == ["12 March 1997"]
 
 
 class TestMultipleAndOverlapping:

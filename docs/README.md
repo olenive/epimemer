@@ -1,6 +1,6 @@
 # Epimemer documentation
 
-How the built system works, and why it works that way.
+How each part of Epimemer behaves for someone using it.
 
 | Page | Covers |
 |---|---|

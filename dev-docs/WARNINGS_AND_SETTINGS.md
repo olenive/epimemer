@@ -1,14 +1,15 @@
 # Warnings, their settings, and inference merge
 
-A design, built: the code is `epimemer/core/advisories.py`, the
-`configure_warnings` tool and `merge_inferences`.
+The code is `epimemer/core/advisories.py`, the `configure_warnings` tool and
+`merge_inferences`.
 
 A warning is a typed message a tool attaches to its response when the graph
 can compute something the agent cannot: that two premises never held together,
-that a contradiction was recorded across metacontexts, and so on. A warning policy,
-per process with per-graph overrides, decides which warnings are surfaced and
-whether they ask for a person. This document holds the reasoning behind that
-design.
+that a contradiction was recorded across metacontexts, and so on. The warning
+policy decides which warnings are surfaced and whether they ask for a person.
+It follows the `reflect_threshold` pattern: a process default
+(`ServerConfig.warning_policy`), a per-graph `WarningOverrides` set by
+`configure_warnings`, and one pure `resolve_warning_policy`.
 
 **The word is warning everywhere a person or an agent reads it.** Inside Python
 the class is called `Advisory`, because `Warning` is a builtin and a model
@@ -33,31 +34,21 @@ meaning stays fixed whatever the policy says.
 
 An inference is its derivation, so merging two migrates both sets of premises
 (their `derived_from` and `supports` edges) onto the survivor: A resting on
-`{F1}` and B on `{F2}` becomes one node resting on `{F1, F2}`. Usually that is right, two pieces of
-evidence for one conclusion. It is wrong in exactly one checkable case: both
-premises are dated and their asserted periods provably fall clear.
+`{F1}` and B on `{F2}` becomes one node resting on `{F1, F2}`. Usually that is
+right, two pieces of evidence for one conclusion. It is wrong in exactly one
+checkable case: both premises are dated and their asserted periods provably
+fall clear. The merge is not a fabrication, because the agent writes fresh
+content asserting one claim over the combined premises; if those premises
+never held together, the result is unsound and `find_unsound_inferences` flags
+it.
 
-It is tempting to read the union as fabrication, a derivation nobody made, and
-conclude that inferences must never merge. That reading assumes the merge
-silently preserves two separate arguments. It does not: the agent writes fresh
-content, asserting one claim over the combined premises. If those premises never
-held together, the resulting inference is genuinely unsound and
-`find_unsound_inferences` is right to flag it.
-
-So the mechanism is sound and the danger is a specific computable outcome, which
-is the shape of thing a warning addresses and a rule does not:
-
-- A rule would refuse. But the honest response to *these premises never held
-  together* is often to narrow the merged claim's wording or period, which the
-  agent can only do by writing content, which is what it is already doing.
-  Refusing blocks a merge the agent could have fixed.
-- Warning after the fact arrives detached from the decision that caused it.
-- Warning before hands the agent the one thing it cannot compute for itself, at
-  the moment it is choosing what to write.
-
-The warning therefore rides along with the nomination as well as the response.
-It is computable from the graph before anything is proposed, so a second round
-trip to deliver it would be latency bought for nothing.
+So the danger is a specific computable outcome, and a warning fits it where a
+refusal does not: the honest response is often to narrow the merged claim's
+wording or period, which the agent does by writing the content it is already
+writing. The warning rides along with the nomination as well as the response,
+because it is computable before anything is proposed and is worth most at the
+moment the agent chooses what to write. `pipelines/reflection/inference_dedup.py`
+states the same argument at the code.
 
 ---
 
@@ -103,23 +94,20 @@ exists to prevent. A test asserts both directions.
 
 ## 4. Policy decisions and their reasons
 
-**`proceed` is the default, and `reject` does not exist.** The warning reaches
-the agent before it decides; an agent that has been told why the merge is
-questionable and has written its content accordingly is not a caller who needs
-stopping. `reject` is not reserved-but-unimplemented either: a value nothing can
-produce is worse than no value at all, because a caller writes a branch for it
-and the branch is dead. It lands when something wants it, with its refusal path
-and its tests.
+**`proceed` is the default, and the actions are `proceed` and `flag`.** The
+warning reaches the agent before it decides; an agent that has been told why
+the merge is questionable and has written its content accordingly is not a
+caller who needs stopping. A `reject` action lands only when something wants
+it, with its refusal path and its tests, because a value nothing produces gets
+a dead branch written for it.
 
-**`same_metacontext_contradiction` defaults to `flag`.** Under an empty
-`by_kind` and a `proceed` default, `record_contradiction` would return
-`notify_user: false` for a same-metacontext pair, the key surviving with its
-trigger quietly changed. A user
-can still set that kind to `proceed`; the point is that turning the notification
-off is somebody's decision rather than a side effect of the representation.
-Exempting the tool from policy entirely was rejected: `notify_user` would then
-mean *policy said flag* on one tool and *metacontexts overlap* on another, and a
-caller could not tell which.
+**`same_metacontext_contradiction` defaults to `flag`**, in the default
+`by_kind`, so `record_contradiction` keeps raising `notify_user` for a
+same-metacontext pair. A user can set that kind to `proceed`; turning the
+notification off is then somebody's decision rather than a side effect of the
+representation. The tool stays under the policy rather than exempt from it, or
+`notify_user` would mean *policy said flag* on one tool and *metacontexts
+overlap* on another.
 
 **Recording is unconditional; surfacing is the setting.** `surface` gates the
 response and never the journal row, because a graph whose warnings were switched
@@ -158,9 +146,8 @@ with one.
 
 **One review machine, not two.** Review state lives on `DecisionRecord` only,
 and it is derived: a record is reviewed when another record points back at it.
-A separate typed note list on the node, with its own `reviewed_at`, was
-rejected because an agent proceeding past a warning would have written to
-both, and two *what has nobody looked at* scans is two shapes for one question.
+A warning gets no note list of its own on the node, because two *what has
+nobody looked at* scans would be two shapes for one question.
 
 **One journal row per operation, not per warning.** The agent made one
 decision; splitting it invites acting on it several times. The kinds and their

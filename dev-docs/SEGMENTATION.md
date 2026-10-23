@@ -1,12 +1,10 @@
 # Segmentation: the agent cuts, on evidence
 
-A design, built: the code is `epimemer/pipelines/segmentation/` and the `segment` and `resegment` tools.
-
-There are two ways to get better cuts than a rule can make: the calling agent
-cuts, or the server calls a model itself. The user chose the first.
-`docs/INGEST.md` describes the behaviour for someone using it: the doubts, the
-anchor contract and its refusals, re-cutting, and what the document records.
-This document holds the reasons.
+The code is `epimemer/pipelines/segmentation/` and the `segment` and
+`resegment` tools. When a rule's cut is not good enough, the calling agent
+cuts. `docs/INGEST.md` describes the behaviour for someone using it: the
+doubts, the anchor contract and its refusals, re-cutting, and what the
+document records. This document holds the reasons.
 
 The one property this design protects: **the server makes no model calls of
 its own.** That is why Epimemer has no API keys, no provider configuration,
@@ -121,8 +119,8 @@ journal entry to carry prose.
 
 ### 5.3 What a re-cut replaces
 
-The old passages are **deleted**, and this is the one place the design steps
-outside the append-only habit. The user confirmed it.
+The old passages are **deleted**, the one place the design steps outside the
+append-only habit.
 
 They are real rows by then: `segment` stores every passage before it returns
 the ids, and the passages join the lexical search corpus at once. Holding them
@@ -187,38 +185,26 @@ its own small vocabulary.
 
 ### 6.3 Calibrate before building
 
-Measured on 27 September 2026 with `scripts/segmentation_doubts.py`, read-only,
-over every graph the server held: 148 documents in the six that held anything,
-84 of them in the development graph.
-
-| Doubt | Documents | Rate | What they were |
-|---|---|---|---|
-| `single_passage` | 17 | 11.5% | every one a session note written as one paragraph, 850 to 2,000 characters (15 in the development graph) |
-| `outsized` | 3 | 2.0% | all genuine: a passage four to seven times the median, in two dev notes and one docs page |
-| `mid_sentence` | 1 | 0.7% | a false positive: a markdown heading line as its own passage, followed by a paragraph starting with a lower-case identifier |
-| `fragments` | 0 | 0% | no list-heavy or transcript corpus exists yet |
-
-The measurement set two thresholds. `single_passage` needs more than 1,200
-characters, where the first guess was 600: a paragraph-sized note left whole
-is the author's own cut, while a dozen sentences with no break are worth a
-look. And a passage that is a markdown heading, or a single line shorter than
-80 characters, does not count as an unfinished sentence, so `mid_sentence` is
-not raised across a title.
+The thresholds are set by running `scripts/segmentation_doubts.py`, read-only,
+over real graphs. Over 148 real documents, a 600-character `single_passage`
+fired on 17, every one a session note written as one paragraph of 850 to 2,000
+characters, so it needs more than 1,200: a paragraph-sized note left whole is
+the author's own cut, while a dozen sentences with no break are worth a look.
+The one `mid_sentence` hit was a markdown heading as its own passage, so a
+heading, or a single line shorter than 80 characters, does not count as an
+unfinished sentence. `outsized` fired on three genuine cases.
 
 `fragments` has not been exercised: nothing measured could have raised it.
-The first list-heavy or transcript corpus ingested should be measured before
-its threshold is trusted.
+Measure the first list-heavy or transcript corpus ingested before trusting its
+threshold.
 
 ## 9. Rejected
 
-- **The server calls a model.** Consistent quality regardless of client, at
-  the price of keys, cost, model choice and non-determinism inside the
-  server, and every property that follows from their absence. Easy to give
-  up later, hard to win back.
-- **A three-step ingest for everyone**: `segment` proposes without storing,
-  the agent confirms or cuts, then stores. Every document pays a round trip
-  so that the awkward minority can be re-cut, and the two-step flow the
-  guide, the docs and every client already follow changes shape.
+- **The server calls a model.** It would cost keys, model choice and
+  non-determinism inside the server, the properties this design protects.
+- **A three-step ingest for everyone** (`segment` proposes without storing,
+  the agent confirms or cuts, then stores): every document would pay a round
+  trip so that the awkward minority can be re-cut.
 - **Re-cutting after decomposition.** Claims would have to move between
   passages, and a claim's passage is what search shows as its context. That
   is a new document version, not a re-cut, and ingesting again gives it.
@@ -227,15 +213,11 @@ its threshold is trusted.
 
 ## 10. Open
 
-- **The anchor minimum.** Three words or twelve characters clears the anchors
-  an agent writes for each shape: a speaker turn
-  (`INTERVIEWER: Where were you`), a numbered clause (`3. Termination`), a chat
-  line (`[09:40] ben: separate thing`). The bare label `WITNESS:` is refused,
-  and it is the anchor the minimum exists for, since it finds that speaker's
-  first turn wherever the agent meant. The one natural anchor it trips is a
-  short heading: `## Fees`, `# Changelog` and `2. Term` are two words, marker
-  included, and under twelve characters, so the agent carries the anchor into
-  the next line, newline included, which is the copy a model is likeliest to
-  get wrong. Accepting a whole line as an anchor would let those through, since
-  a heading's line is usually unique; it waits until a real refusal says it is
-  needed.
+- **The anchor minimum.** Three words or twelve characters clears a speaker
+  turn (`INTERVIEWER: Where were you`), a numbered clause (`3. Termination`)
+  and a chat line (`[09:40] ben: separate thing`), and refuses the bare label
+  `WITNESS:`, which would find that speaker's first turn wherever the agent
+  meant. It also trips a short heading (`## Fees`, `2. Term`), so the agent
+  carries the anchor into the next line, newline included, which is the copy a
+  model is likeliest to get wrong. Accepting a whole line as an anchor would
+  let those through; it waits until a real refusal says it is needed.

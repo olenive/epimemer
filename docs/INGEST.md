@@ -26,7 +26,7 @@ time to get it right is before decomposing.
 
 ## 2. How the server cuts
 
-The server cuts by rule and never calls a model. Two rules are available,
+The server cuts by rule and never calls a language model. Two rules are available,
 chosen by `EPIMEMER_SEGMENTATION_STRATEGY` or per call with
 `segmentation_strategy`:
 
@@ -53,9 +53,8 @@ poor cut and reports them in the `segment` result as `doubts`, each a
 | `mid_sentence` | a passage ends without terminal punctuation and the next begins in lower case; a heading or a short single line does not count |
 
 A doubt refuses nothing: the passages are stored either way, and the agent
-re-cuts or carries on. Doubts are not `warnings`. A warning argues with
-something the agent did, and may ask for a person; a doubt is the server's
-unease about its own work, and asks for neither. A cut the agent supplied is
+re-cuts or carries on. Doubts are separate from `warnings`: a doubt is about
+the server's own cut and never asks for a person. A cut the agent supplied is
 never doubted.
 
 ## 4. Stating a cut: anchors
@@ -141,9 +140,8 @@ rule's cut is right, leave it.
   place, so the keyword arm of `search` stops returning the old ones. The cut
   they made is kept on the document (§7).
 
-A re-cut asks for no reason and writes no journal row. The document carries
-no judge of its own, and a cut is not a verdict about the world, so `review`
-never shows one.
+A re-cut asks for no reason and writes no journal row, so `review` never
+shows one.
 
 ## 7. What the document records
 
@@ -160,8 +158,8 @@ Every path that cuts records how it cut in the document's
 `strategy` is `paragraph`, `semantic` or `agent`. `history` is empty until a
 re-cut, which appends the cut it replaced, oldest first, with when and by
 which judge. A re-cut made with no judge claimed has no `replaced_by` key. A
-document ingested before this record existed has none; its first re-cut
-records the passage count it replaced and leaves the strategy unrecorded.
+document stored without this record gets one on its first re-cut, with the
+passage count it replaced and the strategy left `null`.
 
 ## 8. What the calls return
 

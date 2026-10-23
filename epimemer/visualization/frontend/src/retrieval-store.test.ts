@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   entryFromRecord,
+  focusIds,
   recordsInGraph,
   rememberRecord,
   responseText,
   selectorLabel,
+  selectorTitle,
   unreadCount,
   type RecordEntry,
 } from "./retrieval-store";
@@ -149,5 +151,41 @@ describe("responseText", () => {
 
   it("hands back an untruncated payload unchanged", () => {
     expect(responseText(entry({ responseText: "{}" }))).toBe("{}");
+  });
+});
+
+// Choosing a record marked "not declared" greyed out every node: its id list
+// is empty because the tool never said what it retrieved, and focus mode read
+// that as a retrieval that came back with nothing.
+describe("focusIds", () => {
+  it("leaves focus off for a record whose tool never declared", () => {
+    expect(focusIds(entryFromRecord(wire({ retrieved: null })))).toBeNull();
+  });
+
+  it("focuses on what a declared record returned", () => {
+    expect(focusIds(entry())).toEqual(["n1", "n2"]);
+  });
+
+  it("dims everything for a declared retrieval that returned nothing", () => {
+    // The honest picture of a search that came back empty, and a different
+    // answer from a tool that never said.
+    expect(focusIds(entryFromRecord(wire({ retrieved: [] })))).toEqual([]);
+  });
+
+  it("is off when no record is selected", () => {
+    expect(focusIds(null)).toBeNull();
+  });
+});
+
+describe("selectorTitle", () => {
+  it("says an undeclared record declares nothing, so nothing is dimmed", () => {
+    const title = selectorTitle(entryFromRecord(wire({ retrieved: null })));
+    expect(title).toMatch(/declare/i);
+    expect(title).toMatch(/nothing is dimmed/i);
+  });
+
+  it("describes focus mode otherwise", () => {
+    expect(selectorTitle(null)).toMatch(/dim/i);
+    expect(selectorTitle(entry())).not.toMatch(/did not declare/i);
   });
 });

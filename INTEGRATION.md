@@ -28,11 +28,12 @@ Or add it directly to `~/.claude.json`:
 ```
 
 From a checkout, `uv run --directory /path/to/epimemer epimemer serve` is the
-equivalent command.
+equivalent command, and `make build-frontend` builds the dashboard page, which
+a checkout does not include.
 
-With visualization enabled, open http://127.0.0.1:8765 in your browser to
-watch the graph, the pipelines, a timeline and a log of every decision and
-warning as they happen.
+The dashboard is on by default (`EPIMEMER_VIZ_ENABLED`): open
+http://127.0.0.1:8765 in your browser to watch the graph, the pipelines, a
+timeline and a log of every decision and warning as they happen.
 
 ### Configuration
 
@@ -129,8 +130,8 @@ restate the count.
 | `merge_facts` | Collapse facts that restate one claim into a single node, keeping every source. Refuses events, cross-metacontext pairs, and facts ingested without a `claim_kind` |
 | `reverse_merge` | Undo a merge: restore the sources with their own edges and destroy the survivor. The only tool that deletes a node. Refuses when anything has been added to the survivor since the merge |
 | `merge_inferences` | Collapse inferences that state one conclusion into a single node. The survivor rests on the union of the sources' premises. Where those premises are dated and fall clear of each other, the response says so in `warnings` rather than refusing |
-| `configure_merge` | Read or set this graph's `merge_undo_depth` (how far back a merge stays reversible) and `merge_cycle_limit` (how many merge and un-merge rounds before a merge refuses) |
-| `configure_warnings` | Read or set what this graph does about warnings: per-kind `proceed` or `flag`, and `surface`, the global mute. The mute governs whether you are *shown* warnings, never whether they are recorded. A kind explicitly set to `flag` outranks the mute; one following the default does not |
+| `configure_merge` | Read or set this graph's `undo_depth` (how far back a merge stays reversible) and `cycle_limit` (how many merge and un-merge rounds before a merge refuses) |
+| `configure_warnings` | Read or set what this graph does about warnings: `actions`, per kind `proceed` or `flag`, and `surface`, the global mute. The mute governs whether you are *shown* warnings, never whether they are recorded. A kind explicitly set to `flag` outranks the mute; one following the default does not |
 
 ### Reflection
 
@@ -140,7 +141,7 @@ restate the count.
 | `configure_reflection` | Set or clear this graph's store threshold for suggesting a reflect |
 | `apply_reflection` | Apply your decisions from a reflection, including user-approved archivals, which export the nodes and retire them as `archived`, and `deferred`, which puts a never-retrieved nominee off for a number of reflect rounds that doubles each time |
 | `configure_deferral` | Read or set how many reflect rounds a deferred archival nominee waits: `first_wait` after the first deferral, doubling up to `cap`. `clear` returns a named setting to the default |
-| `reopen` | Put a question a verdict suppressed back on the worklist: two node ids for a pair judged `distinct`, two relation label names for a label pair, one node id for a node a `retained` verdict kept or a `deferred` verdict is holding back. Asserts nothing about the answer, and a `reason` is required |
+| `reopen` | Put a question a verdict suppressed back on the worklist: two `node_ids` for a pair judged `distinct`, two `relation_labels` for a label pair, one node id for a node a `retained` verdict kept or a `deferred` verdict is holding back, or a `boundary` proposal that was declined. Asserts nothing about the answer, and a `reason` is required |
 
 ### Review
 
@@ -234,7 +235,6 @@ server-level.
 State the graph you meant, worked out from the user's request or from your
 own `use_graph`. Do not copy the name out of a refusal: the check works only
 while your expectation and the server's state are arrived at independently.
-The refusal names the active graph so you can recover, not so you can echo it.
 
 There is no setting to relax the requirement. A `use_graph` batched alongside
 other calls waits for them to finish, so a batched ingest cannot be split

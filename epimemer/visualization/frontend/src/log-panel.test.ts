@@ -198,3 +198,38 @@ describe("a warning in the log rail", () => {
     expect(rows(els.entries)).toHaveLength(0);
   });
 });
+
+// The rail holds what this session did to the viewed graph, as the hub's ring
+// recorded it, so its empty message has three different things to say.
+describe("the empty message", () => {
+  const empty = (els: LogPanelElements): string => els.empty.textContent ?? "";
+
+  it("says no graph is selected before one is", () => {
+    const els = elements();
+    initLogPanel(els, fakeRouter().router, () => null);
+    expect(empty(els)).toBe("No graph selected yet.");
+  });
+
+  it("says nothing is recorded for the graph, and claims no more than that", () => {
+    // The ring is this session's: an empty rail says nothing about what an
+    // earlier session, or another agent, did to the graph.
+    const els = elements();
+    const panel = initLogPanel(els, fakeRouter().router, () => null);
+    panel.setViewedGraph("default");
+    expect(empty(els)).toBe("Nothing recorded for this graph in this session yet.");
+  });
+
+  it("says the filters hide what it holds when they do", () => {
+    const els = elements();
+    const { router, emit } = fakeRouter();
+    const panel = initLogPanel(els, router, () => null);
+    panel.setViewedGraph("default");
+    emit(act({ action_id: "000000000001" }));
+    emit(act({ action_id: "000000000002" }));
+    els.text.value = "no summary says this";
+    els.text.dispatchEvent(new Event("input"));
+
+    expect(els.empty.classList.contains("hidden")).toBe(false);
+    expect(empty(els)).toBe("None of the 2 entries match these filters.");
+  });
+});

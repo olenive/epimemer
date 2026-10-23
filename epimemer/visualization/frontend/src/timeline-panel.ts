@@ -20,6 +20,7 @@ import {
   NO_FILTERS,
   applyFilters,
   facetValues,
+  matchesRange,
   type TimelineFilters,
 } from "./timeline-filter";
 import {
@@ -92,6 +93,11 @@ const LABEL_INSET = 26;
 const MARK_RADIUS = 4.5;
 const INTERVAL_WIDTH = 9;
 const LABEL_HEIGHT = 15;
+/**
+ * The line along the bottom edge that counts what is hidden: its 9 px type
+ * and the gap above it. The labels give it up once there is anything to count.
+ */
+const NOTE_ROOM = 12;
 /** Straddling blocks carry their own text, so they need more room. */
 const BLOCK_HEIGHT = 22;
 /** Rough width of a character at the label font size, for budgeting text. */
@@ -216,8 +222,42 @@ interface View {
   breaks: Gap[];
 }
 
+/**
+ * What the panel says when it has nothing to draw: which of four different
+ * things is the case. A graph that has not loaded, a graph with nothing of the
+ * kind on screen, a timeline with nothing on it, and filters that hide what
+ * there is all leave the axis bare, and each needs a different act to fix.
+ */
+export const timelineEmptyText = (
+  loaded: boolean,
+  mode: TimeMode,
+  row: TimelineRow | null,
+): string => {
+  if (!loaded) return "No graph loaded yet.";
+  if (row === null) {
+    return mode === "content"
+      ? "No timelines in this graph. An agent creates one with create_timeline, then add_timepoint."
+      : "No nodes in this graph yet.";
+  }
+  const held = row.dated.length + row.undated.length;
+  if (held === 0) {
+    return mode === "content"
+      ? "This timeline has no timepoints yet. An agent adds them with add_timepoint."
+      : "No nodes in this graph yet.";
+  }
+  const [one, many, where] =
+    mode === "content"
+      ? ["timepoint", "timepoints", "on this timeline"]
+      : ["node", "nodes", "in this graph"];
+  return held === 1
+    ? `The filters hide the only ${one} ${where}.`
+    : `The filters hide all ${held} ${many} ${where}.`;
+};
+
 interface PanelState {
   snapshot: SnapshotLike;
+  /** Whether a snapshot has arrived, so an empty one can be told from none. */
+  loaded: boolean;
   mode: TimeMode;
   rows: TimelineRow[];
   /** Which timeline is on screen. Null means "whichever is first". */
@@ -352,6 +392,7 @@ export const initTimelinePanel = (
 ): TimelinePanelHandle => {
   const state: PanelState = {
     snapshot: { nodes: [], edges: [] },
+    loaded: false,
     mode: "record",
     rows: [],
     timelineId: null,
@@ -1638,6 +1679,8 @@ export const initTimelinePanel = (
     width: number,
     height: number,
     insets: Insets,
+    /** Something else is hidden, so the count will be written regardless. */
+    counting: boolean,
   ): number => {
     const palette = currentPalette();
     const byRequest = new Map<string, DatedMark>();
@@ -1682,11 +1725,14 @@ export const initTimelinePanel = (
       });
     }
 
-    const { placed, dropped } = layoutLabels(
-      [...expanded, ...plain],
-      { top: 0, bottom: height },
-      LABEL_GAP,
-    );
+    // Laid out again without the bottom line when the first pass hides
+    // anything, since the count of what it hid is written there.
+    const requests = [...expanded, ...plain];
+    const full = layoutLabels(requests, { top: 0, bottom: height }, LABEL_GAP);
+    const { placed, dropped } =
+      counting || full.dropped.length > 0
+        ? layoutLabels(requests, { top: 0, bottom: height - NOTE_ROOM }, LABEL_GAP)
+        : full;
 
     for (const label of placed) {
       const mark = byRequest.get(label.id);
@@ -1950,10 +1996,7 @@ export const initTimelinePanel = (
       (filtered.dated.length === 0 && filtered.undated.length === 0)
     ) {
       controls.empty.classList.remove("hidden");
-      controls.empty.textContent =
-        state.mode === "content"
-          ? "No timelines in this graph. An agent creates one with create_timeline, then add_timepoint."
-          : "No nodes in this graph yet.";
+      controls.empty.textContent = timelineEmptyText(state.loaded, state.mode, row);
       renderUndated([]);
       return;
     }
@@ -2003,8 +2046,22 @@ export const initTimelinePanel = (
     renderSuccession(group, validity.lanes, axisX);
     renderEnvelope(group, validity.lanes, axisX);
     for (const placed of validity.lanes) renderLane(group, placed, axisX, usable);
-    for (const mark of filtered.dated) renderMark(group, scale, mark, axisX);
-    const hidden = renderLabels(group, scale, filtered.dated, axisX, width, usable, insets);
+    // Only what the window holds, as with strips and beads: `timeToPos` pins a
+    // time outside the domain to an edge, so a mark the view has scrolled past
+    // would be drawn there on top of every other one, at a time it is not, and
+    // its label would take a row of the column.
+    const inView = filtered.dated.filter((mark) => matchesRange(mark, scale.domain));
+    for (const mark of inView) renderMark(group, scale, mark, axisX);
+    const hidden = renderLabels(
+      group,
+      scale,
+      inView,
+      axisX,
+      width,
+      usable,
+      insets,
+      validity.hidden > 0,
+    );
     // Last, so the marks sharing the axis column cannot bury them.
     group.appendChild(tickLabels);
 
@@ -2021,7 +2078,7 @@ export const initTimelinePanel = (
         fill: currentPalette().tickLabel,
         "font-size": 9,
       });
-      note.textContent = `${notes.join(", ")} — zoom in`;
+      note.textContent = `${notes.join(", ")}. Zoom in to show them.`;
       group.appendChild(note);
     }
 
@@ -2044,12 +2101,14 @@ export const initTimelinePanel = (
 
   const loadSnapshot = (snapshot: SnapshotLike): void => {
     state.snapshot = snapshot;
+    state.loaded = true;
     state.selectedMarkId = null;
     rebuild();
   };
 
   const clear = (): void => {
     state.snapshot = { nodes: [], edges: [] };
+    state.loaded = false;
     state.selectedMarkId = null;
     state.timelineId = null;
     rebuild();

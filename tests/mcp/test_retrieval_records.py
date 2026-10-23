@@ -12,6 +12,8 @@ from epimemer.mcp.retrieval_records import (
     RETRIEVED_CAP,
     RetrievalRecord,
     RetrievedNode,
+    new_record_log,
+    next_record_id,
     remember_record,
     structural_only,
 )
@@ -29,6 +31,35 @@ def _record(record_id: str = "000000000001", **over) -> RetrievalRecord:
         "response_text": '{"result": {"nodes": []}}',
     }
     return RetrievalRecord(**{**fields, **over})
+
+
+class TestRecordIds:
+    """A record's id is its place in one session's log, so the log numbers it.
+
+    Twelve digits, zero-padded, because the dashboard sorts records by id as
+    strings and that is the numeric order only while every id has one width.
+    """
+
+    def test_a_new_log_numbers_from_one(self):
+        log = new_record_log()
+        assert [next_record_id(log), next_record_id(log)] == ["000000000001", "000000000002"]
+
+    def test_two_logs_do_not_share_a_numbering(self):
+        """Two sessions in one process, as the test suite runs them, each keep
+        their own count; a numbering shared through the module would make an id
+        depend on whatever ran first."""
+        one, two = new_record_log(), new_record_log()
+        next_record_id(one)
+        next_record_id(one)
+
+        assert next_record_id(two) == "000000000001"
+        assert next_record_id(one) == "000000000003"
+
+    def test_ids_sort_as_strings_in_the_order_they_were_given(self):
+        log = new_record_log()
+        ids = [next_record_id(log) for _ in range(12)]
+        assert ids == sorted(ids)
+        assert {len(record_id) for record_id in ids} == {12}
 
 
 class TestProvenance:

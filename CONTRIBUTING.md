@@ -80,10 +80,9 @@ uv run python scripts/prose_drift.py
 ```
 
 It finds prose that states how many of something the code enumerates (how
-many reflect phases there are, how many lists are capped), the one kind of
-documentation drift that keeps recurring here. It is a lint you run rather
-than a test: pinning the numbers in the suite would lock in the duplication
-that causes them to go stale.
+many reflect phases there are, how many lists are capped). It is a lint rather
+than a test, because pinning the numbers in the suite would lock in the
+duplication that makes them go stale.
 
 ### Before changing a dependency
 
@@ -92,15 +91,11 @@ uv run python scripts/audit_dependencies.py
 ```
 
 It asks OSV whether anything installed here has a published advisory. A weekly
-CI job runs the same command, because it is the only thing watching this
-project's Python dependencies: Dependabot's `pip` ecosystem does not read
-`uv.lock` and neither does GitHub's dependency graph, so no alert fires however
-old the lock gets. A finding names a package and a severity and stops there,
-since OSV says a version is affected rather than that this code reaches the
-affected path.
-
-The scheduled run files what it finds as an issue; updating is
-`uv lock --upgrade`, run the suite, one commit.
+CI job runs the same command and files what it finds as an issue. It is the
+only thing watching this project's Python dependencies: Dependabot's `pip`
+ecosystem and GitHub's dependency graph do not read `uv.lock`. A finding names
+a package and a severity, not whether this code reaches the affected path.
+Updating is `uv lock --upgrade`, run the suite, one commit.
 
 ## Conventions
 
@@ -129,8 +124,8 @@ under `dev-docs/`:
   they come from
 - [VIZ_CONTRACT.md](dev-docs/VIZ_CONTRACT.md): what a client of the
   visualisation hub may rely on, and when `VIZ_SCHEMA_VERSION` must change
-- The remaining files are the design of one subsystem each, with the
-  alternatives that were rejected and the measurements behind the choices
+- The remaining files are the design of one subsystem each: its decisions
+  and the reasons that still bind
 
 These documents describe the current design and are rewritten when it
 changes. They are not a changelog: a resolved issue or a superseded plan is

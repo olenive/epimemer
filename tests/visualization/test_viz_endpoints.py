@@ -685,6 +685,14 @@ class TestViewConversion:
         assert view.edge_type == "supports"
         assert view.weight == 0.8
         assert view.graph == "my-graph"
+        assert view.label is None
+
+    def test_edge_to_view_carries_a_relation_label(self):
+        e = NodeEdge(src_id="a", dst_id="b", type=EdgeType.RELATED, label="works_for")
+        view = edge_to_view(e, "my-graph")
+        assert view.edge_type == "related"
+        assert view.label == "works_for"
+        assert "label" in view.model_dump()
 
 
 # --- Per-source validity in the snapshot ---

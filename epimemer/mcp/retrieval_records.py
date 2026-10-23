@@ -10,9 +10,8 @@ Everything here is a value. Where the records live, who may see them, and when
 they are written belongs to `server.py` and the hub.
 """
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from datetime import UTC, datetime
-from itertools import count
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -28,14 +27,6 @@ RESPONSE_TEXT_CAP = 20_000
 # The id list is as much a sizing problem as the payload: a `reflect` record can
 # carry hundreds of nominees (§3).
 RETRIEVED_CAP = 200
-
-_RECORD_IDS: Iterator[int] = count(1)
-
-
-def next_record_id() -> str:
-    """Monotonic and assigned here — not the hub's `seq`, which is per browser
-    connection and restarts on reconnect."""
-    return f"{next(_RECORD_IDS):012d}"
 
 
 def _now() -> datetime:
@@ -132,12 +123,26 @@ def remember_record(
 #
 # The ring itself is a value; this is the one mutable cell that holds the
 # current one, so the lifespan dict can hand the same log to the tool choke
-# point and to the hub client's RPC handler without either owning it.
+# point and to the hub client's RPC handler without either owning it. It also
+# holds the count of ids issued, because a record's id is its place in this log.
 
 
 def new_record_log() -> dict:
-    """A holder for this session's records ring."""
-    return {"ring": ()}
+    """A holder for this session's records ring and the ids it has issued."""
+    return {"ring": (), "issued": 0}
+
+
+def next_record_id(log: dict) -> str:
+    """The id of the next record in `log`: one more than the last it issued.
+
+    Counted per log rather than per process, so two sessions in one process
+    number their records independently. Assigned here rather than taken from
+    the hub's `seq`, which is per browser connection and restarts on reconnect.
+    Zero-padded to twelve digits because the dashboard sorts records by id as
+    strings, which is the numeric order only while every id has one width.
+    """
+    log["issued"] += 1
+    return f"{log['issued']:012d}"
 
 
 def append_record(log: dict, record: RetrievalRecord) -> None:

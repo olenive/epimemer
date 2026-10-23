@@ -194,6 +194,43 @@ def _vague(m: re.Match) -> TemporalExpression:
     return TemporalExpression(text=m.group(0), label=m.group(0))
 
 
+# The nouns a named period is built on. A capital letter marks a name, and most
+# names that follow "in the" or "by the" are files, teams, courts and products:
+# "in the README", "by the Platform Team", "in the Supreme Court". What makes
+# "the Middle Ages" a time is its head noun, so that is what is checked, against
+# a list kept short and explicit for the reason the vague markers are. A period
+# missing from it costs one mark on the timeline.
+_PERIOD_NOUNS = frozenset(
+    """
+    Age Ages Era Eras Epoch Period Century Decade Millennium Year Years
+    Dynasty Reign War Wars Battle Siege Revolution Depression Recession
+    Renaissance Enlightenment Reformation Restoration Regency Interregnum
+    Occupation Blitz Prohibition Crusades Troubles Holocaust Raj
+    Spring Summer Autumn Winter Christmas Easter
+    Twenties Thirties Forties Fifties Sixties Seventies Eighties Nineties
+    Palaeolithic Paleolithic Mesolithic Neolithic Pleistocene Holocene
+    Triassic Jurassic Cretaceous
+    """.split()
+)
+
+
+def _head_noun(phrase: str) -> str:
+    """The word an English name is built on: the one before "of", else the last.
+
+    "the Age of Enlightenment" is an age and "the Department of War" a
+    department; "the Second World War" is a war and "the Renaissance Fair" a
+    fair.
+    """
+    words = phrase.split()
+    return words[words.index("of") - 1] if "of" in words else words[-1]
+
+
+def _named_period(m: re.Match) -> TemporalExpression | None:
+    if _head_noun(m["phrase"]) not in _PERIOD_NOUNS:
+        return None
+    return _vague(m)
+
+
 # Order is priority: the first pattern to claim a span keeps it, so the longest
 # and most specific forms come first. "12 March 1997" must not also yield
 # "March 1997" and "1997".
@@ -264,15 +301,18 @@ _PATTERNS: tuple[tuple[re.Pattern, object], ...] = (
     ),
     # Vague markers. Kept short and explicit: an open-ended attempt to
     # recognise "temporal-sounding" prose is how a detector starts inventing.
-    # A capitalised noun phrase after a temporal preposition ("during the
-    # Renaissance", "in the Middle Ages") is included because the capitals are
-    # doing the work — "in the room" does not match.
+    # A named period after a temporal preposition ("during the Renaissance",
+    # "in the Middle Ages") is included. The capitals mark it as a name, so
+    # "in the room" does not match, and `_named_period` keeps only a name whose
+    # head noun is a stretch of time, so "in the README" does not either. "of"
+    # and "the" join capitalised words and never end the phrase, so the label
+    # stops at "the Bronze Age" in "in the Bronze Age the river moved".
     (
         re.compile(
             rf"(?<!\w)(?:{_PREPOSITION_WORDS}|throughout)\s+the\s+"
-            rf"(?:[A-Z]\w+)(?:\s+(?:[A-Z]\w+|of|the))*"
+            rf"(?P<phrase>[A-Z]\w+(?:(?:\s+(?:of|the))*\s+[A-Z]\w+)*)"
         ),
-        _vague,
+        _named_period,
     ),
     (
         re.compile(

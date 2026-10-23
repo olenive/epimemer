@@ -74,6 +74,10 @@ class EventBusProtocol(Protocol):
         """
         ...
 
+    def next_action_id(self) -> str:
+        """The next place in this bus's numbering of acts and warnings."""
+        ...
+
 
 # --- In-process implementation ---
 
@@ -115,6 +119,20 @@ class InProcessEventBus:
         self._category_index: dict[EventCategory, set[int]] = defaultdict(set)
         self._type_index: dict[type[Event], set[int]] = defaultdict(set)
         self._global_ids: set[int] = set()
+        self._actions_numbered = 0
+
+    def next_action_id(self) -> str:
+        """The next `action_id` for an act or a warning published on this bus.
+
+        One numbering for both, because the hub's ring replays them in this
+        order and the log deduplicates by it (EVENT_LOG.md §4.1). It lives on
+        the bus because the bus is the session's: each server lifespan creates
+        one, so two sessions in one process cannot share a count. Zero-padded
+        to twelve digits so the string order a JSON consumer sorts by is the
+        numeric one.
+        """
+        self._actions_numbered += 1
+        return f"{self._actions_numbered:012d}"
 
     async def publish(self, event: Event) -> None:
         """Publish an event to all matching subscribers concurrently."""

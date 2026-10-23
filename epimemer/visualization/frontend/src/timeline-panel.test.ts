@@ -213,10 +213,67 @@ describe("empty states", () => {
     expect(el("empty").classList.contains("hidden")).toBe(false);
   });
 
+  it("says no graph is loaded yet, rather than that the graph is empty", () => {
+    // Before the first snapshot there is no graph to be empty.
+    expect(el("empty").textContent).toMatch(/no graph loaded/i);
+    expect(el("empty").textContent).not.toMatch(/no nodes/i);
+  });
+
   it("names the tool that creates a timeline when content mode is empty", () => {
     // An empty panel that does not say why is indistinguishable from a broken one.
+    panel.loadSnapshot({ nodes: [], edges: [], timelines: [] });
     useContentMode();
     expect(el("empty").textContent).toContain("create_timeline");
+  });
+
+  it("says the graph has no nodes when the loaded graph has none", () => {
+    panel.loadSnapshot({ nodes: [], edges: [] });
+    expect(el("empty").textContent).toContain("No nodes in this graph");
+  });
+
+  it("says the filters hide everything, rather than that the graph is empty", () => {
+    // What the 21 October run found: "Historical" on a graph of 2,136 active
+    // nodes said "No nodes in this graph yet."
+    panel.loadSnapshot({
+      nodes: [node({ node_id: "n1" }), node({ node_id: "n2" })],
+      edges: [],
+    });
+    controls.statusSelect.value = "historical";
+    change(controls.statusSelect);
+
+    expect(el("empty").classList.contains("hidden")).toBe(false);
+    expect(el("empty").textContent).toMatch(/filters hide all 2 nodes/);
+    expect(el("empty").textContent).not.toMatch(/no nodes/i);
+  });
+
+  it("says a timeline has no timepoints, rather than that there are no timelines", () => {
+    panel.loadSnapshot({
+      nodes: [],
+      edges: [],
+      timelines: [timeline({ timeline_id: "t1" })],
+    });
+    useContentMode();
+
+    expect(el("empty").textContent).toContain("add_timepoint");
+    expect(el("empty").textContent).not.toMatch(/no timelines/i);
+  });
+
+  it("says the filters hide a timeline's timepoints when they do", () => {
+    panel.loadSnapshot({
+      nodes: [node({ node_id: "n1" })],
+      edges: [edge({ src_id: "n1", dst_id: "t1", metadata: { timepoint_id: "p1" } })],
+      timelines: [
+        timeline({
+          timeline_id: "t1",
+          timepoints: [timepoint("p1", "1900-01-01T00:00:00Z", null)],
+        }),
+      ],
+    });
+    useContentMode();
+    controls.statusSelect.value = "historical";
+    change(controls.statusSelect);
+
+    expect(el("empty").textContent).toMatch(/filters hide the only timepoint/);
   });
 
   it("clears back to empty", () => {
@@ -930,6 +987,109 @@ describe("reference time", () => {
   });
 });
 
+// A mark outside the visible window used to be drawn anyway, pinned to the
+// panel's edge by `timeToPos`, which clamps. Zoomed in on "now", every mark
+// later than the window was drawn on one pixel at the bottom, after the
+// now-rule, and its label took a row of the column with a leader to that edge.
+// The window's other edge did the same with everything earlier. Strips and
+// recurrence beads already left out what the window does not hold.
+describe("marks outside the visible window", () => {
+  const load = (): void => {
+    panel.loadSnapshot({
+      nodes: [],
+      edges: [],
+      timelines: [
+        timeline({
+          timeline_id: "t1",
+          name: "Dracula",
+          reference_time: "1897-07-15T00:00:00Z",
+          timepoints: [
+            timepoint("a0", "1897-01-01T00:00:00Z", "the first entry"),
+            timepoint("b1", "1897-06-01T00:00:00Z", "before one"),
+            timepoint("b2", "1897-06-02T00:00:00Z", "before two"),
+            timepoint("b3", "1897-06-03T00:00:00Z", "before three"),
+            timepoint("c1", "1897-09-01T00:00:00Z", "after one"),
+            timepoint("c2", "1897-09-02T00:00:00Z", "after two"),
+            timepoint("c3", "1897-09-03T00:00:00Z", "after three"),
+            timepoint("z9", "1897-12-31T00:00:00Z", "the last entry"),
+          ],
+        }),
+      ],
+    });
+    useContentMode();
+  };
+
+  const zoomIn = (steps: number): void => {
+    for (let i = 0; i < steps; i++) {
+      document.querySelector("#body svg")!.dispatchEvent(
+        new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -120, metaKey: true }),
+      );
+    }
+  };
+
+  const dots = (): SVGCircleElement[] => [
+    ...document.querySelectorAll<SVGCircleElement>("#body circle"),
+  ];
+  // The label's own words, without the tooltip it carries as a child.
+  const labelTexts = (): string[] => labels().map((l) => l.firstChild?.textContent ?? "");
+  const positions = (): number[] => dots().map((d) => Number(d.getAttribute("cy")));
+
+  it("draws every mark while the whole timeline is in view", () => {
+    load();
+    expect(dots()).toHaveLength(8);
+  });
+
+  it("leaves out the marks the window has scrolled past, rather than piling them at its edge", () => {
+    load();
+    zoomIn(3);
+
+    expect(dots().length).toBeGreaterThan(0);
+    expect(dots().length).toBeLessThan(8);
+    expect(new Set(positions()).size).toBe(positions().length);
+  });
+
+  it("does the same on both sides of now", () => {
+    load();
+    zoomIn(3);
+    click(el("now"));
+
+    // Centred on now, both the first and the last entry are out of view.
+    const shown = labelTexts();
+    expect(shown).toContain("before three");
+    expect(shown).toContain("after one");
+    expect(shown).not.toContain("the first entry");
+    expect(shown).not.toContain("the last entry");
+    expect(new Set(positions()).size).toBe(positions().length);
+  });
+});
+
+// The count of hidden labels is written along the bottom edge, which is where
+// "now" usually is, and the lowest label used to be written over it.
+describe("the hidden-label count", () => {
+  it("has a line of its own below the labels", () => {
+    panel.loadSnapshot({
+      nodes: Array.from({ length: 60 }, (_, i) =>
+        node({
+          node_id: `n${i}`,
+          created_at: new Date(Date.UTC(2024, 0, 1, 0, i)).toISOString(),
+          content: `node number ${i} with a reasonably long description`,
+        }),
+      ),
+      edges: [],
+    });
+
+    const note = [...document.querySelectorAll<SVGTextElement>("#body text")].find((t) =>
+      (t.textContent ?? "").includes("labels hidden"),
+    )!;
+    expect(note).toBeDefined();
+    // A label's box runs 4 px below its baseline; the note's 9 px type rises
+    // that far above its own.
+    const noteTop = Number(note.getAttribute("y")) - 9;
+    const lowest = Math.max(...labels().map((l) => Number(l.getAttribute("y")) + 4));
+    expect(lowest).toBeLessThanOrEqual(noteTop);
+  });
+});
+
 describe("referenceTimeFor", () => {
   const snapshot = {
     nodes: [],
@@ -1001,7 +1161,9 @@ describe("gestures", () => {
     panel.loadSnapshot({
       nodes: [
         node({ node_id: "n1", created_at: "2024-01-01T00:00:00Z" }),
-        node({ node_id: "n2", created_at: "2026-01-01T00:00:00Z" }),
+        node({ node_id: "n2", created_at: "2025-01-01T00:00:00Z" }),
+        node({ node_id: "n3", created_at: "2025-02-01T00:00:00Z" }),
+        node({ node_id: "n4", created_at: "2026-01-01T00:00:00Z" }),
       ],
       edges: [],
     });
@@ -1016,26 +1178,37 @@ describe("gestures", () => {
   /** Where the first mark sits, as a proxy for the visible window. */
   const firstMarkY = (): number => Number(marks()[0].getAttribute("cy"));
 
+  /**
+   * Where the mark for the node created at `created` sits. Followed by date
+   * rather than by index, because a mark the window scrolls past is not drawn.
+   */
+  const markY = (created: string): number =>
+    Number(
+      marks()
+        .find((m) => (m.textContent ?? "").includes(`created   ${created}`))!
+        .getAttribute("cy"),
+    );
+
   it("pans on a bare wheel", () => {
     loadTwoYears();
     // Zoom in first: with the whole extent on screen there is nowhere to pan.
     wheel({ deltaY: -120, metaKey: true });
-    const before = firstMarkY();
+    const before = markY("2025-01-01");
 
     wheel({ deltaY: 120 });
 
-    expect(firstMarkY()).not.toBe(before);
+    expect(markY("2025-01-01")).not.toBe(before);
   });
 
   it("zooms on ⌘-wheel, not pans", () => {
     // The two are distinguishable: zooming in spreads the marks apart, panning
     // slides them together.
     loadTwoYears();
-    const spreadBefore = Number(marks()[1].getAttribute("cy")) - firstMarkY();
+    const spreadBefore = markY("2025-02-01") - markY("2025-01-01");
 
     wheel({ deltaY: -120, metaKey: true });
 
-    const spreadAfter = Number(marks()[1].getAttribute("cy")) - firstMarkY();
+    const spreadAfter = markY("2025-02-01") - markY("2025-01-01");
     expect(spreadAfter).toBeGreaterThan(spreadBefore);
   });
 

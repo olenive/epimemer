@@ -135,6 +135,15 @@ class TestOneInsertionCoversEveryTool:
             assert {n.node_id for n in record.retrieved_nodes} <= set(node_ids)
             assert record.response_text == result.content[0].text
 
+    async def test_each_session_numbers_its_own_records_from_one(self):
+        """The id is a position in this session's log. A session that started
+        after another in the same process still starts at one."""
+        for _ in range(2):
+            async with _running() as (server, log, _):
+                await server.call_tool("graph_stats", {"expected_graph": "default"})
+
+                assert [record.record_id for record in records_of(log)] == ["000000000001"]
+
     async def test_a_tool_that_never_declared_still_gets_a_record(self):
         """§2, corrected: the *record* is by construction; only the ids are by
         declaration. A tool that forgets produces a record marked undeclared,

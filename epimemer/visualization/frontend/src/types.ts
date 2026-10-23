@@ -151,6 +151,12 @@ export interface EdgeView {
    * be combined into one.
    */
   validity: ValidityIntervalView[];
+  /**
+   * The descriptor of a user-defined relation, the word beside
+   * `edge_type: "related"`; null on the engine's own edge types. What this
+   * graph means by the word is in the snapshot's `relation_labels`.
+   */
+  label?: string | null;
   created_at: string;
   graph: string;
   metadata: Record<string, unknown>;

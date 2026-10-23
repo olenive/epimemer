@@ -16,6 +16,7 @@ import {
   recordsInGraph,
   rememberRecord,
   selectorLabel,
+  selectorTitle,
   unreadCount,
   type RecordEntry,
 } from "./retrieval-store";
@@ -39,6 +40,16 @@ export interface RetrievalSelectorHandle {
 }
 
 const NO_RECORD = "";
+
+/**
+ * The first option's words. It leaves focus mode when there is a record to
+ * leave it for; otherwise it says why there is none, since a session's other
+ * graphs can hold records this one does not.
+ */
+export const noRecordLabel = (held: number, shown: number): string => {
+  if (shown > 0) return "No focus";
+  return held === 0 ? "No retrievals yet" : "No retrievals in this graph";
+};
 
 /**
  * Wire the selector up.
@@ -66,7 +77,7 @@ export const initRetrievalSelector = (
 
     const none = document.createElement("option");
     none.value = NO_RECORD;
-    none.textContent = shown.length === 0 ? "No retrievals" : "No focus";
+    none.textContent = noRecordLabel(entries.length, shown.length);
     elements.select.appendChild(none);
 
     // Newest first: the retrieval you came to look at is the one that just
@@ -79,6 +90,9 @@ export const initRetrievalSelector = (
     }
     elements.select.value = selectedId ?? NO_RECORD;
     elements.select.disabled = shown.length === 0;
+    elements.select.title = selectorTitle(
+      shown.find((entry) => entry.recordId === selectedId) ?? null,
+    );
 
     const unread = unreadCount(shown, lastReadId);
     elements.unread.textContent = unread > 0 ? String(unread) : "";

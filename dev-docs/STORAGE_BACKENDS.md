@@ -1,8 +1,9 @@
 # The SQLite and Postgres backends
 
-A design, built: the code is `epimemer/storage/sqlite_adapter.py` and
-`epimemer/storage/postgres_adapter.py`, beside the in-memory store and
-SurrealDB. How a user sets either up is in the README, under *Persistence*.
+The two backends beside the in-memory store and SurrealDB, and the decisions
+a change to them keeps. The code is `epimemer/storage/sqlite_adapter.py` and
+`epimemer/storage/postgres_adapter.py`; how a user sets either up is in the
+README, under *Persistence*.
 
 ---
 
@@ -17,9 +18,8 @@ back up and secure: several Epimemer servers, on one machine or many, reading
 and writing one graph. A team that already runs SurrealDB can keep it.
 
 Both sit beside SurrealDB rather than replacing it. Its licence is no reason
-to avoid it: the Business Source License covers the SurrealDB server binary,
-which Epimemer does not ship, and the `surrealdb` Python package is Apache-2.0
-(read from package metadata, which is not a legal opinion).
+to drop it: the Business Source License covers the SurrealDB server binary,
+which Epimemer does not ship, and the `surrealdb` Python package is Apache-2.0.
 
 ## 2. What they share
 
@@ -76,12 +76,12 @@ characters that are a safe file name everywhere, so there is no escaping
 layer. Reading another graph opens its file read-only on a second connection,
 which borrows nothing, so it takes no mover turn.
 
-**`~/.epimemer/graphs` by default.** Long-running tools in this space keep a
-per-user directory with an environment override (Prefect, Letta, mem0, Simon
-Willison's `llm`), and the working directory, the usual alternative, is
-whatever the MCP client chose. The worry that a default hides where the data
-went is answered by telling the user: `list_graphs`, `epimemer graphs list`
-and the startup log name the backend and its location.
+**`~/.epimemer/graphs` by default**, a per-user directory with an
+environment override, because the working directory is whatever the MCP client
+chose. A default could hide where the data went, so `list_graphs`,
+`epimemer graphs list` and the startup log name the backend and its location;
+refusing to start without `EPIMEMER_SQLITE_DIR` would give the same
+visibility at the cost of a failed first run.
 
 **Transactions are `BEGIN IMMEDIATE`**, so the write lock is taken at the
 start: a transaction that read first and then met another process's lock could
@@ -139,14 +139,8 @@ selector event loop, also untested.
 
 ## 5. Rejected
 
-- **Full-text search for ranking** (SQLite FTS5, Postgres full-text): a third
-  analyzer, and the end of rare-term parity (§2).
-- **Floats as JSON.** Measured at the real embedding width (384): a gigabyte
-  and eleven seconds at 100,000 nodes.
-- **Three node tables.** The SurrealDB shape, and the source of its extra round
-  trips.
-- **Porting the SurrealDB migrations.** They correct graphs these backends
-  never hold; bundles are the migration path.
+- **Floats as JSON.** At the real embedding width (384), a gigabyte and eleven
+  seconds at 100,000 nodes.
 - **One SQLite file for every graph, with `ATTACH`.** A graph would stop being
   a file a user can copy, and deleting one would become a schema operation
   instead of an unlink.
@@ -156,15 +150,9 @@ selector event loop, also untested.
 - **A vector extension such as `sqlite-vec`.** A compiled dependency, and
   loadable-extension support is not guaranteed in every Python build. pgvector
   is a later option on Postgres (`PROPOSED_FEATURES.md`, *A vector index*).
-- **Refusing to start without `EPIMEMER_SQLITE_DIR`.** Reporting the location
-  gives the same visibility without a failed first run.
 - **A Postgres connection pool.** One connection per server process, with one
   lock around each unit of work, is what every backend does and what the graph
   guard assumes. A pool buys concurrency the server does not use.
-- **`search_path`.** Connection state a reconnect would have to restore and a
-  cross-graph read would have to work around.
 - **One Postgres database per graph.** Needs `CREATE DATABASE`, which cannot
   run inside a transaction, and a connection per graph. Schemas are what
   Postgres has for this.
-- **`schema_version` as the marker table.** It would offer other applications'
-  schemas as graphs to be dropped (§4).

@@ -66,6 +66,23 @@ const dateValue = (input: HTMLInputElement): number | null => {
   return Number.isNaN(t) ? null : t;
 };
 
+/**
+ * What the rail says when it shows nothing.
+ *
+ * It holds what this session did to the viewed graph, as the hub recorded it,
+ * so an empty rail says nothing about earlier sessions or other agents.
+ */
+export const logEmptyText = (viewedGraph: string, held: number): string => {
+  if (held === 0) {
+    return viewedGraph === ""
+      ? "No graph selected yet."
+      : "Nothing recorded for this graph in this session yet.";
+  }
+  return held === 1
+    ? "The one entry held does not match these filters."
+    : `None of the ${held} entries match these filters.`;
+};
+
 const timeLabel = (at: number): string =>
   new Date(at).toLocaleTimeString(undefined, {
     hour: "2-digit",
@@ -158,10 +175,7 @@ export const initLogPanel = (
         ? `${entries.length}`
         : `${shown.length} / ${entries.length}`;
     elements.empty.classList.toggle("hidden", shown.length > 0);
-    elements.empty.textContent =
-      entries.length === 0
-        ? "Nothing yet — the agent has not changed this graph."
-        : "No entries match these filters.";
+    elements.empty.textContent = logEmptyText(viewedGraph, entries.length);
 
     // Newest first: the thing you came to look at is the thing that just
     // happened. The store keeps action order; only the reading is reversed.

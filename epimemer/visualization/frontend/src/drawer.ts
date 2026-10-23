@@ -42,7 +42,7 @@ export interface DrawerHandle {
 
 const EMPTY: Record<DrawerTab, string> = {
   node: "Click a node to see its detail.",
-  response: "No retrieval selected — pick one from the header.",
+  response: "No retrieval selected. Pick one from the header.",
 };
 
 const TAB_ON =

@@ -6,86 +6,86 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
-- A never-retrieved archival nominee has a third answer beside `archivals` and
-  `retained`: `apply_reflection(deferred=[{node_id, because}])`, *not now, ask
-  again later*. The node is left out of `archival_candidates` for 2 reflect
-  rounds after its first deferral, doubling with each one after it up to 32,
-  and then comes back first in its class carrying `deferred`, with what was
-  said last time and the wait another deferral would set. A round is a reflect
-  that completes with at least one store since the previous reflect, so a
-  graph nobody stores into does not age a deferral. Each deferral is a
-  `deferral` journal row stamped with the round as `at_round`, accepted only
-  for a node the nominator's test counts as a never_retrieved nominee; anything
-  else comes back in `deferred_skipped` with the reason, and
-  `deferrals_recorded` says how many rounds each node waits. A node named in
-  `archivals` is archived and its deferral skipped, and one named in both
-  `retained` and `deferred` is refused in both.
-  `reopen(node_ids=[id])` withdraws a deferral that is still waiting, as it
-  withdraws a keep. The round and a graph's deferral settings travel in a
-  bundle, and the round moves with the reflect counter in one atomic step on
-  every backend, `complete_reflect_round`.
-- `configure_deferral` reads and sets one graph's `first_wait` and `cap`, and
-  `clear=["first_wait"]` returns a named one to the process default, which
-  `EPIMEMER_DEFERRAL_FIRST_WAIT` and `EPIMEMER_DEFERRAL_CAP` set. A change is
-  refused when a value named is below 1 or above 1024 rounds, or when `cap` is
-  below the `first_wait` it would resolve against, so a deferral cannot be
-  made to mean never; a read is never refused. The ceiling is enforced on
-  write, by the tool and at config load, and applied on read: a stored or
-  imported value above it is read as stored, behaves as 1024, and is reported
-  under `clamped`.
-- The guide and the tool descriptions now say plainly that `retained` on a
-  never-retrieved nominee is permanent: its nomination names no reason, so the
-  keep stands until `reopen` withdraws it. The `apply_reflection` description
-  no longer says a keep writes one edge per covered id: the anchors live on
-  the keep's journal row, where SurrealDB schema version 3 moved them. The
-  `reflect` description lists `archival_candidates`, which it did not mention
-  before.
-- The design notes are shorter and fewer. They state decisions and the reasons
-  for them, and leave how the code does it to the code. SQLite and Postgres
-  share `dev-docs/STORAGE_BACKENDS.md`; the warnings panel is part of
-  `EVENT_LOG.md`; topic nodes created from tags have one page,
-  `TAG_IDENTITY.md`; description review is part of `TOPIC_DESCRIPTIONS.md`;
-  the demo plan is an entry in `PROPOSED_FEATURES.md`.
-- The `EPIMEMER_SIMILARITY_THRESHOLD` setting is gone. Nothing read it:
-  `reflect` and the merge tools take their own thresholds per call.
-- The in-memory backend opens the graph `EPIMEMER_GRAPH` names, like the other
-  backends, and falls back to `"default"` as SQLite and Postgres do; before,
-  it always opened `"default"`.
-- Every backend refuses an illegal starting graph name when it is created, by
-  the rule `use_graph` applies to every later graph. SurrealDB used to take one
-  from `EPIMEMER_GRAPH` or `EPIMEMER_SURREALDB_DATABASE` and hand it to the
-  server unchecked.
-- The visualisation contract is versioned for a second client. The snapshot,
-  the session's register message, the health route and each entry on the
-  sessions route carry `schema_version`, 1 today; a removed or renamed field
-  or a change of meaning bumps it, an added field does not. A new
-  `/api/embeddings` route answers with the embedding vectors of a graph's
-  nodes, filtered by node type, served by the session from a new
-  `viz_list_embeddings` read on every backend: a client that lays topics out
-  by meaning needs the vectors, and the snapshot does not carry them. A
-  session's answer to the hub that would pass the ingest socket's 16 MiB
-  message ceiling, which an unfiltered embeddings answer for a large graph
-  does, now comes back as an error naming the size and the remedy instead of
-  closing the socket and taking the session off the hub; the hub and every
-  session share the one named limit. `dev-docs/VIZ_CONTRACT.md` says what a
-  client may rely on.
-- The design of a Rust and Bevy visualiser in its own repository,
-  `epimemer-bevy`, one 3D scene with time as the third axis and the graph,
-  timeline and 3D views as camera presets of it, was written here and moved
-  to that repository's `DESIGN.md` the same day. The contract it builds on
-  stays here, in `dev-docs/VIZ_CONTRACT.md`.
+- The dashboard's graph panel no longer freezes the page on large graphs.
+  Above 300 nodes the Hierarchy layout keeps dagre's ranks and wraps each into
+  rows, so a graph of over 2,000 nodes draws in under a second instead of about
+  38 seconds; smaller graphs lay out exactly as before. The Force layout is
+  unchanged and still slow on graphs that size.
+- The dashboard header wraps onto a second line on narrower screens instead of
+  pushing the Log, hub status, colour and theme buttons off the edge.
+- The timeline's status, type and metacontext filters no longer pass
+  timepoints whose linked nodes are not in the current node set.
+- Empty panels say which case applies: no graph loaded yet, nothing in the
+  graph, a timeline with no timepoints, or filters hiding everything there is.
+- Choosing a retrieval record whose tool declared nothing no longer greys out
+  the whole graph; the selector says so instead.
+- Zooming the timeline no longer piles marks from outside the window onto its
+  top and bottom edges, so the region after the Now line shows only what
+  belongs there, and the hidden-labels count no longer overlaps the lowest
+  label.
+- Dashboard text uses commas, colons and full sentences instead of em-dashes,
+  and a test keeps it that way.
+- Ingest, contradiction and variant responses now declare every node they
+  name to the dashboard: a tag whose description was not written, a fact
+  matching one the graph retired, the pair a contradiction or variant warning
+  is about, and the premises a merge warning names. Those retrieval records no
+  longer show as not declared. The parity test that guards declarations had
+  been passing without checking any tool since it stopped naming its graph; it
+  names it again and checks every tool.
+- Timepoint extraction no longer files phrases such as "in the README" or "by
+  the Platform Team" as undated timepoints. A capitalised phrase after "in
+  the", "during the" and similar words is proposed only when its head noun
+  names a period, such as an age, an era, a war or a dynasty, and a label no
+  longer ends on a stray "the" or "of".
+- Retrieval record ids and dashboard log ids are counted per session instead
+  of per process, so two sessions in one process each start from one. The
+  twelve-digit format and the order are unchanged.
+- Edges in the snapshot and the event stream carry `label`, the descriptor of
+  a user-defined relation, which the contract promised and the edge view
+  dropped. An added field, so `schema_version` stays 1.
+- The lock moves to fastmcp 4.1.3 with mcp 2.3.0, aiohttp 3.14.5 and certifi
+  2026.10.23.
+- `apply_reflection(deferred=[{node_id, because}])` is a third answer to a
+  never-retrieved archival nominee, beside `archivals` and `retained`: *not
+  now, ask again later*. The node leaves `archival_candidates` for 2 reflect
+  rounds, doubling with each further deferral up to 32, then comes back first
+  in its class carrying `deferred`. A round is a reflect that completes with at
+  least one store since the previous one. Each deferral is a `deferral` journal
+  row; refusals come back in `deferred_skipped`. `reopen(node_ids=[id])`
+  withdraws a deferral still waiting. The `StorageBackend` protocol gains the
+  reflect round (`get_reflect_round`, `complete_reflect_round`) and the
+  deferral overrides, and a bundle carries both.
+- `configure_deferral` reads and sets one graph's `first_wait` and `cap`;
+  `EPIMEMER_DEFERRAL_FIRST_WAIT` and `EPIMEMER_DEFERRAL_CAP` set the process
+  defaults. Each must be from 1 to 1024 rounds, with `cap` at least
+  `first_wait`. A stored value above 1024 behaves as 1024 and is reported under
+  `clamped`.
+- The guide and tool descriptions say `retained` on a never-retrieved nominee
+  is permanent until `reopen` withdraws it, no longer say a keep writes one
+  edge per covered id, and list `archival_candidates` under `reflect`.
+- The design notes are shorter and fewer: SQLite and Postgres share
+  `dev-docs/STORAGE_BACKENDS.md`, the warnings panel is in `EVENT_LOG.md`,
+  topic nodes created from tags are in `TAG_IDENTITY.md`, description review is
+  in `TOPIC_DESCRIPTIONS.md`, and the demo plan is in `PROPOSED_FEATURES.md`.
+- `EPIMEMER_SIMILARITY_THRESHOLD` is removed. Nothing read it.
+- The in-memory backend opens the graph `EPIMEMER_GRAPH` names, falling back
+  to `"default"`, as the other backends do.
+- Every backend refuses an illegal starting graph name at startup, by the rule
+  `use_graph` applies. SurrealDB used to pass one through unchecked.
+- The visualisation contract is versioned: the snapshot, the register message,
+  the health route and each sessions entry carry `schema_version` (1 today),
+  which a removed, renamed or redefined field bumps. A new `/api/embeddings`
+  route serves a graph's embedding vectors by node type, through a new
+  `viz_list_embeddings` backend read. A session answer over the 16 MiB socket
+  limit comes back as an error naming the size, rather than dropping the
+  session. `dev-docs/VIZ_CONTRACT.md` is the contract.
 - `certifi` is a named dependency with a floor of 2026.10.19, the release that
-  dropped the emSign root whose intermediate keys were disclosed on
-  20 October 2026. It arrived through `httpx` and `requests` before; naming it
-  keeps the floor when those two move, and reaches `botocore`, which uses its
-  own bundle only when certifi is absent.
+  dropped the emSign root whose intermediate keys were disclosed. `httpx`,
+  `requests` and `botocore` all read it.
 - The Docker image upgrades the operating system's CA bundle explicitly and
-  pins uv to 0.13.5, so a cached layer cannot keep a bundle that trusts the
-  compromised intermediates.
-- The frontend builds on Node 24.22.1, read from
-  `epimemer/visualization/frontend/.nvmrc`. The October 2026 Node releases
-  fixed a Brotli decoder write reachable through `fetch()` and two hostname
-  checks, and carry the same trust-store change.
+  pins uv to 0.13.5.
+- The frontend builds on Node 24.22.1, which has the October 2026 Node
+  security fixes, read from `epimemer/visualization/frontend/.nvmrc`.
 
 ## [0.3.1] — 2026-10-17
 

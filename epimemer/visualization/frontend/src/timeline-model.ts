@@ -225,18 +225,18 @@ const facetsFromNodes = (
 });
 
 /**
- * Nodes linked to one timepoint, via TIMELINK edges carrying its id.
+ * Ids of the nodes linked to one timepoint, via TIMELINK edges carrying its id,
+ * whether or not the snapshot holds those nodes.
  *
  * A TIMELINK may instead carry a `recurrence_id`, which attaches a fact to a
  * whole rule rather than to a moment. There is no mark to draw it on, so the
  * id comparison leaves it out.
  */
-const nodesForTimepoint = (
-  resolver: Resolver,
+const linkedToTimepoint = (
   edges: readonly EdgeView[],
   timelineId: string,
   timepointId: string,
-): NodeView[] =>
+): string[] =>
   edges
     .filter(
       (e) =>
@@ -244,8 +244,7 @@ const nodesForTimepoint = (
         e.dst_id === timelineId &&
         e.metadata?.timepoint_id === timepointId,
     )
-    .map((e) => resolver.nodes.get(e.src_id))
-    .filter((n): n is NodeView => n !== undefined);
+    .map((e) => e.src_id);
 
 /**
  * What the mark says about when, in words.
@@ -270,7 +269,7 @@ const describeTimepoint = (
   linked: readonly NodeView[],
 ): string => {
   const when = whenOf(point);
-  const lines = [`${timeline.name} — ${when}`];
+  const lines = [`${timeline.name}: ${when}`];
   if (point.contested) {
     lines.push(`order disputed: contradiction ${point.temporal_contradiction_id ?? "unnamed"}`);
   }
@@ -303,7 +302,10 @@ const markForTimepoint = (
   timeline: TimelineView,
   point: TimepointView,
 ): TimelineMark => {
-  const linked = nodesForTimepoint(resolver, edges, timeline.timeline_id, point.timepoint_id);
+  const linkedIds = linkedToTimepoint(edges, timeline.timeline_id, point.timepoint_id);
+  const linked = linkedIds
+    .map((id) => resolver.nodes.get(id))
+    .filter((n): n is NodeView => n !== undefined);
   const band = bandFor(point);
   return {
     id: point.timepoint_id,
@@ -326,6 +328,9 @@ const markForTimepoint = (
     contested: point.contested,
     contradictionId: point.temporal_contradiction_id,
     facets: facetsFromNodes(resolver, linked, [point.label ?? "", timeline.name]),
+    // A TIMELINK can outlive the node set: the snapshot carries the current
+    // nodes, and the link stays when its node is retired.
+    linkedNodesAbsent: linkedIds.length > 0 && linked.length === 0,
   };
 };
 
@@ -397,9 +402,9 @@ const describeNode = (node: NodeView): string =>
     "",
     `created   ${node.created_at}`,
     `retrieved  ${node.retrieved_at ?? "never"}`,
-    // A dash, not the 0.5 default: nobody rated this node, and printing the
+    // Words, not the 0.5 default: nobody rated this node, and printing the
     // number would claim an assessment that was never made.
-    `confidence ${node.confidence?.toFixed(2) ?? "—"}`,
+    `confidence ${node.confidence?.toFixed(2) ?? "not rated"}`,
   ].join("\n");
 
 /**
@@ -424,6 +429,7 @@ const markForNode = (resolver: Resolver, node: NodeView): DatedMark => {
     contested: false,
     contradictionId: null,
     facets: facetsFromNodes(resolver, [node]),
+    linkedNodesAbsent: false,
   };
 };
 

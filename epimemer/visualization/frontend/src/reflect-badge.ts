@@ -57,7 +57,7 @@ export const applyReflectCounterEvent = (
 });
 
 export const reflectBadgeLabel = (state: ReflectBadgeState): string =>
-  state.known ? `reflect ${state.count}/${state.threshold}` : "reflect —";
+  state.known ? `reflect ${state.count}/${state.threshold}` : "reflect ?";
 
 const BADGE_BASE = "px-1.5 py-0.5 rounded text-xs";
 
@@ -75,5 +75,5 @@ export const reflectBadgeClass = (state: ReflectBadgeState): string => {
 export const reflectBadgeTitle = (state: ReflectBadgeState): string =>
   state.known
     ? `${state.count} stores since the last reflect; ${state.threshold} suggests one` +
-      (state.suggested ? " — reflect is due" : "")
+      (state.suggested ? ". Reflect is due" : "")
     : "Reflection pressure not yet known for this session";

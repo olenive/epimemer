@@ -1,16 +1,11 @@
 # The visualisation contract
 
-A specification, live: what a client of the visualisation hub may rely on.
-
-The shapes are written down for more than one client: the TypeScript
-dashboard, and the Bevy visualiser in the `epimemer-bevy` repository
-(github.com/olenive/epimemer-bevy). Where this document quotes a shape, the
-shape was read from `epimemer/visualization/`, and the Pydantic models there
-remain the source of truth (§9).
-
-The hub's architecture, the pipeline strip and the colour customisation are
-in `VISUALISATION.md`; the event log's design is in `EVENT_LOG.md`. This
-document does not restate their reasons, only the surface they produce.
+What a client of the visualisation hub may rely on: the TypeScript dashboard,
+and the Bevy visualiser in the `epimemer-bevy` repository
+(github.com/olenive/epimemer-bevy). The Pydantic models in
+`epimemer/visualization/` are the source of truth (§9). The reasons behind the
+hub, the pipeline strip and the colour customisation are `VISUALISATION.md`;
+the event log's are `EVENT_LOG.md`.
 
 ## 1. The parts
 
@@ -43,11 +38,11 @@ call over the session's own socket (§4) and returns the session's answer.
 | Stop | `epimemer-viz --stop`, through the pidfile at `~/.epimemer/viz-hub.pid` |
 | Liveness | `GET /api/health` answers with `"service": "epimemer-viz-hub"`, which is how a probe tells a hub from anything else on the port |
 
-**CORS.** The hub sets no cross-origin headers, and the dashboard needs none
-because the hub serves it from the same origin. A browser client served from another origin, a
-wasm build served by its own development server for instance, would need
-the hub to grow CORS headers or be served from the hub's own static mount.
-A native client is unaffected.
+**CORS.** The hub sets no cross-origin headers; the dashboard needs none
+because the hub serves it from the same origin. A browser client served from
+another origin, such as a wasm build on its own development server, would need
+the hub to grow CORS headers or be served from the hub's own static mount. A
+native client is unaffected.
 
 **Exposure.** The hub is meant for loopback. One guard follows the bind: on
 a non-loopback `EPIMEMER_VIZ_HOST` a session publishes retrieval records
@@ -84,8 +79,9 @@ case.
 
 ## 4. The HTTP routes
 
-Every route returns JSON. A missing required query parameter is a `400`
-with `{"error": "<message>"}`. A route that forwards to a session returns
+Every `/api` route returns JSON. A missing required query parameter, or a
+`node_type` that is not one of the three, is a `400` with
+`{"error": "<message>"}`. A route that forwards to a session returns
 `404` when the session is unknown or not connected, `504` when the session
 did not answer within ten seconds, and `502` when the session answered with
 an error or disconnected during the call, each with the same `{"error"}`
@@ -100,7 +96,7 @@ return those three.
 | `GET /api/graphs` | `session` | session | `{"graphs": [names], "active_graph", "backend", "reflect": {"count", "threshold", "suggested"}}`. `reflect` describes the active graph only. |
 | `GET /api/snapshot` | `session`, `graph` | session | The snapshot (§5). Any graph the session's backend holds, not only its active one. |
 | `GET /api/embeddings` | `session`, `graph`, `node_type` (optional) | session | The embeddings (§6). |
-| `GET /api/warnings` | `session` | session | What the active graph does about advisories, in the shape the MCP tool `configure_warnings` returns, naming the graph. |
+| `GET /api/warnings` | `session` | session | What the active graph does about warnings, in the shape the MCP tool `configure_warnings` returns, naming the graph. |
 | `GET /api/retrievals` | `session` | session | `{"records": [...]}`: this session's retrieval records, payloads included, each a serialised `RetrievalRecord` from `epimemer/mcp/retrieval_records.py`. |
 | `WS /ws` | | hub | The client event stream (§7). |
 | `WS /ingest` | | hub | The session side (§8). A client does not use it. |
@@ -126,8 +122,7 @@ return those three.
 
 The session reads all of it inside one turn of its storage guard, so a
 snapshot describes one instant: no write lands between the nodes being read
-and the edges being read. On a real graph (the development graph, 2,026
-nodes and 16,891 edges) the document is about 6.4 MB.
+and the edges being read.
 
 What is in it and what is left out:
 
@@ -144,9 +139,9 @@ What is in it and what is left out:
 - `timelines` carry their timepoints embedded, with read-time positions for
   vague points and the occurrences of recurrence rules enumerated over a
   window the snapshot chooses (the span of the timeline's dated points,
-  widened by one period of the rule on each side; the timeline's stated
-  present when it has no dated points; no window, and no occurrences, when
-  it has neither).
+  widened on each side by one period of a periodic rule, or by 366 days for a
+  calendar rule; the timeline's stated present when it has no dated points;
+  no window, and no occurrences, when it has neither).
 - `metacontexts` and `relation_labels` ride along so a client can name what
   an edge only references by id or by string.
 
@@ -159,8 +154,10 @@ endpoint that is **not** in `nodes`:
 |---|---|---|
 | segment | nowhere in the snapshot | `about`, `contains`, `implies` have a segment as `src_id` |
 | document | nowhere in the snapshot | `sourced_from` has a document as `dst_id` |
-| metacontext | `metacontexts` | `has_metacontext` |
+| metacontext | `metacontexts` | `has_metacontext`; `based_on` has a metacontext at both ends |
 | timeline | `timelines` | `timelink`, with the timepoint named by `metadata.timepoint_id` on the edge |
+
+`related` is unrestricted, so either of its ends may be any of these.
 
 A client must tolerate an endpoint id it cannot resolve, and should treat
 the segment and document ones as what they are: the provenance a claim was
@@ -171,10 +168,8 @@ The same tolerance covers nodes. `nodes` holds the active ones, and `edges`
 holds every live edge, including those whose endpoint is a node that is no
 longer active: a retired claim's `tagged_with_topic`, `extracted_under_topic`
 and `supports` edges stay live and point at an id that is not in `nodes`.
-On the development graph on 2026-10-20 that was several hundred edges of
-each of those types. An edge to an id that is neither in `nodes` nor one of
-the endpoint kinds above is an edge to an inactive node, and a client draws
-nothing for it.
+An edge to an id that is neither in `nodes` nor one of the endpoint kinds
+above is an edge to an inactive node, and a client draws nothing for it.
 
 ### 5.2 Field tables
 
@@ -215,6 +210,7 @@ cannot get it from the snapshot; see §10.
 | `created_at` | timestamp | When the edge was recorded |
 | `graph` | string | |
 | `metadata` | dict | |
+| `label` | string or null | The descriptor of a user-defined relation (§5.3); null on the engine's own types |
 
 **ValidityInterval**, the core model sent as stored
 
@@ -276,50 +272,47 @@ graph's definitions in `relation_labels` (the MCP tools `list_relations`
 and `describe_relation` manage them). A client should treat an unknown
 `edge_type` as a line it can draw and not name.
 
-Counted on the development graph on 2026-10-18, and grouped the way a client
-should treat them:
+Grouped the way a client should treat them:
 
 **Membership**, where one end files the other under something. These say
 where a node belongs and are better turned into position, colour or a
 filter than drawn as lines.
 
-| `edge_type` | Joins | Count |
-|---|---|---|
-| `tagged_with_topic` | any node → topic (a retrieval index, not evidence) | 7,024 |
-| `has_metacontext` | any node → metacontext | 2,153 |
-| `sourced_from` | any node → document; the only type that carries `validity` | 2,096 |
-| `contains` | segment → fact | 1,313 |
-| `extracted_under_topic` | fact → topic, the topic of the segment it came from | 904 |
-| `implies` | segment → inference | 491 |
-| `abstracts` | inference → topic | 381 |
-| `about` | segment → topic | 292 |
-| `subtopic_of` | topic → topic, child to parent; the topic hierarchy | 0 on this graph |
+| `edge_type` | Joins |
+|---|---|
+| `tagged_with_topic` | any node → topic (a retrieval index, not evidence) |
+| `has_metacontext` | any node → metacontext |
+| `sourced_from` | any node → document; the only type that carries `validity` |
+| `contains` | segment → fact |
+| `extracted_under_topic` | fact → topic, the topic of the segment it came from |
+| `implies` | segment → inference |
+| `abstracts` | inference → topic |
+| `about` | segment → topic |
+| `subtopic_of` | topic → topic, child to parent; the topic hierarchy |
+| `based_on` | metacontext → metacontext, one building on another |
 
 **Claim to claim**, recorded at a moment, with no validity of their own.
 
-| `edge_type` | Joins | Count |
-|---|---|---|
-| `supports` | fact → inference, evidential | 1,486 |
-| `timelink` | any node → timeline, timepoint in `metadata.timepoint_id` | 475 |
-| `assessed` | like nodes, a review verdict that two claims differ | 77 |
-| `related` | anything, the open vocabulary | 5 |
-| `similarity` | like nodes, symmetric | 2 |
-| `derived_from`, `contradiction`, `variant_of`, `supersession_candidate` | see the enum | 0 on this graph |
+| `edge_type` | Joins |
+|---|---|
+| `supports` | fact → inference, evidential |
+| `timelink` | any node → timeline, timepoint in `metadata.timepoint_id` |
+| `assessed` | like nodes, a judge has assessed this pair, whichever way the verdict went |
+| `related` | anything, the open vocabulary |
+| `similarity` | like nodes, symmetric |
+| `derived_from`, `contradiction`, `variant_of`, `supersession_candidate`, `retracted_similarity` | see the enum |
 
 **Succession and merge**, where one node gave way to another. These are the
 edges that make a node's history legible and are the ones a client should
 always draw.
 
-| `edge_type` | Joins | Count |
-|---|---|---|
-| `temporally_followed_by` | like nodes; a world-change, the claim was right and the world moved on; not gapless, cycles legal, never deduplicate by endpoints | 77 |
-| `merged_into` | like nodes; the retired source points at the survivor | 38 |
-| `evidence_superseded` | fact → inference; the retired fact points at what depended on it | 37 |
-| `evidence_merged` | fact → inference; the merged fact points at what depended on it | 31 |
-| `superseded_by` | like nodes; a correction | 9 |
-
-Only 41 of the 16,891 edges carried a validity interval, all of them
-`sourced_from`.
+| `edge_type` | Joins |
+|---|---|
+| `temporally_followed_by` | like nodes; a world-change, the claim was right and the world moved on; not gapless, cycles legal, never deduplicate by endpoints |
+| `merged_into` | like nodes; the retired source points at the survivor |
+| `evidence_superseded` | fact → inference; the retired fact points at what depended on it |
+| `evidence_merged` | fact → inference; the merged fact points at what depended on it |
+| `superseded_by` | like nodes; a correction |
 
 ## 6. The embeddings
 
@@ -347,21 +340,18 @@ appears twice, once per `model_id`, and `models` lists every model present
 with its vector length; vectors from different models are never comparable.
 Entries come in the snapshot's node order, then by model, so a client can
 join them to `nodes` by `node_id` with nothing to reconcile. Embeddings
-exist for nodes only, never for segments (§10). The 415 topic nodes of the
-development graph come to a few hundred kilobytes under a 384-dimensional
-model; asking for every node is a multi-megabyte answer.
+exist for nodes only, never for segments (§10).
 
 **The answer has a ceiling.** A session's answer to the hub travels in one
 WebSocket message, and the hub accepts at most 16 MiB in one message. An
-answer that would pass it is replaced by an error naming
-the method, the size and the remedy, which the HTTP caller receives as the
-`502` of §4; the session stays connected. Under a 384-dimensional model the
-ceiling falls at roughly 1,900 vectors, under a 768-dimensional one at
-roughly 950, so ask by `node_type` on a large graph. The snapshot has the
+answer that would pass it is replaced by an error naming the method, the size
+and the remedy, which the HTTP caller receives as the `502` of §4; the session
+stays connected. Under a 384-dimensional model the ceiling falls at roughly
+1,900 vectors, under a 768-dimensional one at roughly 950, so ask by
+`node_type` on a large graph. The snapshot has the
 same ceiling and reaches it on a far larger graph. A denser encoding of the
-vectors (float32 bytes rather than JSON numbers, about a quarter of the size)
-would be a change of meaning for `vector` and so a new schema version; it is
-the known next step if topics alone come to outgrow the ceiling.
+vectors (float32 bytes rather than JSON numbers) would change the meaning of
+`vector` and so need a new schema version.
 
 A hub older than this route answers `404` from Starlette's router rather
 than the `{"error"}` body of §4.
@@ -388,8 +378,9 @@ recent 512 together, in arrival order) and then the retrievals ring
 session-and-graph test the live stream uses. Replay does **not** include
 `node_stored`, `edge_stored` or any other event: a client builds its picture
 of the graph from the snapshot and then applies live events to it. The rings
-belong to the session and survive a client reload and a hub blip, but a
-restarted MCP server is a new session with empty rings.
+belong to the session and survive a client reload and the session
+reconnecting to the hub, but not a hub restart, and a restarted MCP server is
+a new session with empty rings.
 
 ### 7.2 Every message
 
@@ -444,7 +435,7 @@ The graph events:
 | `graph_action_recorded` | `action_id`, `verb`, `subjects` (ids), `counts` (dict of int), `summary`, `judged_by` (or null) | One human-meaningful act at its transaction boundary; `verb` is one of `stored`, `corrected`, `world_changed`, `merged`, `archived`, `restored`, `undetermined`, or a timeline decision kind. `action_id` is monotonic per session and is the position a log should use, since `seq` is not one |
 | `advisory_raised` | `action_id`, `tool`, `kind`, `message`, `subjects`, `detail`, `action`, `surfaced`, `notify_user`, `judged_by` | A warning a tool computed, published whether or not the agent was shown it |
 | `retrieval_recorded` | `record` (dict) | What a tool handed the agent; structural only on a non-loopback bind (§2) |
-| `graph_switched` | `previous_graph`, `new_graph` | The session's active graph changed; a `session_connected` with the new `active_graph` follows |
+| `graph_switched` | `previous_graph`, `new_graph` | The session's active graph changed; a `session_connected` with the new `active_graph` is sent just before it |
 | `reflect_counter_updated` | `count`, `threshold`, `suggested` | |
 
 The pipeline events, which describe the Petri nets the session runs
@@ -502,8 +493,7 @@ number of §3 is the promise.
 ## 10. What is not promised
 
 - **As-of snapshots.** The snapshot is the graph now. The MCP tool
-  `graph_as_of` answers questions about the past, and nothing on the hub
-  does yet.
+  `graph_as_of` answers questions about the past; no hub route does.
 - **Layout.** No route returns positions. A client lays the graph out
   itself; the embeddings of §6 are the help it gets.
 - **Embeddings for segments.** Only nodes are embedded, deliberately

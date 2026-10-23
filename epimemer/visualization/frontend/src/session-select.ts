@@ -84,8 +84,8 @@ export const graphSelectorTitle = (state: GraphListState): string => {
 
 export const sessionLabel = (session: SessionInfo, unreachable: boolean): string => {
   const base = `${session.backend}:${session.active_graph} (pid ${session.pid})`;
-  if (!session.connected) return `${base} — disconnected`;
-  return unreachable ? `${base} — unreachable` : base;
+  if (!session.connected) return `${base}, disconnected`;
+  return unreachable ? `${base}, unreachable` : base;
 };
 
 /** Whatever a rejected fetch carried, as something a `title` can show. */

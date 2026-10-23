@@ -39,7 +39,8 @@ from epimemer.core.types import (
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
 from epimemer.visualization.event_bus import create_event_bus
-from epimemer.visualization.events import AdvisoryRaised, EventCategory
+from epimemer.visualization.events import AdvisoryRaised, EventCategory, GraphActionRecorded
+from epimemer.visualization.instrumented_storage import instrument_storage
 
 CRITIC = JudgeRef(agent_id="a-critic", digest="d1")
 
@@ -200,6 +201,20 @@ class TestCarryAdvisoriesPublishesOnePerWarning:
         )
 
         assert received[0].action_id < received[1].action_id
+
+    async def test_a_warning_takes_the_next_place_after_an_act_on_the_same_bus(self, storage, bus):
+        """The acts the storage wrapper publishes and the warnings the tools
+        publish are numbered from one sequence, the bus's, so the log can put a
+        warning where it arrived among the acts."""
+        acts = []
+        bus.subscribe(GraphActionRecorded, handler=lambda event: acts.append(event))
+        warnings = _recorder(bus)
+        wrapped = instrument_storage(storage, bus)
+
+        await wrapped.write_batch_tx(nodes=[Fact(content="a claim", source_id="s1")])
+        await _carry(wrapped, WarningPolicy(), [_advisory(AdvisoryKind.DISJOINT_PREMISES)], bus=bus)
+
+        assert [acts[0].action_id, warnings[0].action_id] == ["000000000001", "000000000002"]
 
 
 class TestWhatTheAgentSawIsOnTheEvent:

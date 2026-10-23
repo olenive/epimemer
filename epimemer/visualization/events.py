@@ -106,6 +106,10 @@ class EdgeView(BaseModel):
     created_at: datetime
     graph: str
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # The descriptor of a user-defined relation, the open word beside
+    # `edge_type: "related"`; absent on the engine's own edge types. The
+    # graph's definitions of these words travel separately as relation labels.
+    label: str | None = None
 
 
 class TimepointView(BaseModel):
@@ -298,6 +302,7 @@ def edge_to_view(edge: NodeEdge, graph: str) -> EdgeView:
         created_at=edge.created_at,
         graph=graph,
         metadata=edge.metadata,
+        label=edge.label,
     )
 
 

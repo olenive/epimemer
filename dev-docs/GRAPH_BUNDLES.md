@@ -1,12 +1,11 @@
 # Graph bundles: export, import, backup
 
-A design, built: the code is `epimemer/pipelines/transfer.py`, the `graphs`
-group in `epimemer/cli.py`, and the `backup_graph` and `configure_backup` tools.
-
 One graph written out as plain data files, and an import that rebuilds it on
-any backend. README.md's *Backup and restore* describes the commands and the
-bundle for someone using them; what follows is what a maintainer needs to
-change any of it safely.
+any backend. The code is `epimemer/pipelines/transfer.py`, the `graphs` group
+in `epimemer/cli.py` (`list`, `export`, `import`, `convert`, `verify`), and the
+`backup_graph` and `configure_backup` tools. README.md's *Backup and restore*
+describes the commands for someone using them; what follows is what a
+maintainer needs to change any of it safely.
 
 ---
 
@@ -17,8 +16,11 @@ A bundle is `manifest.json` plus one `.jsonl` per section, compressed into a
 `transfer.py` lists them.
 
 Every section writes a file even when it is empty, so a missing file always
-means a damaged bundle rather than an empty graph. `settings` counts 1 for the
-same reason: a zero there would read as a graph with no settings.
+means a damaged bundle rather than an empty graph. `settings` is one
+`GraphSettings` record: the graph's overrides (require judge, reflect and
+backup thresholds, merge, deferral and warning overrides), its two store
+counters and its reflect round, which deferrals are measured on. It counts 1
+for the same reason: a zero there would read as a graph with no settings.
 
 **`node_type` is recorded, not inferred.** A `Fact` and an `Inference` carry the
 same fields, so a line holding only the fields cannot say which class wrote it.
@@ -34,9 +36,8 @@ restore onto a different model reports it rather than doing it quietly.
 
 ## 2. Byte-identical, and the rules that make it so
 
-Two exports of one graph produce the same bytes. That is a property to preserve,
-not a nicety: it is what makes the round-trip test below able to say *lossless*
-rather than *nothing obviously missing*.
+Two exports of one graph produce the same bytes, which is what lets the
+round-trip test below say *lossless* rather than *nothing obviously missing*.
 
 - Records within a section are **sorted by id**. A backend may return rows in
   any order it likes.
@@ -166,11 +167,10 @@ epimemer graphs verify /tmp/<graph>-<date>.epimemer.tar.gz
 ```
 
 `verify` imports the bundle into a scratch graph named `verify-<random>`,
-exports that, compares every file, and drops the scratch graph whether the
-comparison passed or not. A mismatch names the sections that came back
-different. Run it against the largest graph available: the classes of bug it
-catches, a field nobody thought to read or a timestamp one backend renders
-differently, do not appear on a graph built by a test.
+exports that, compares every file, names any section that came back
+different, and drops the scratch graph either way. Run it against the largest
+graph available: a field nobody thought to read or a timestamp one backend
+renders differently does not appear on a graph built by a test.
 
 ---
 
@@ -199,9 +199,9 @@ Retention is a property of the destination, which one server fills for every
 graph it opens, so there is no per-graph override and no MCP tool to set it. An
 agent that could raise the count could also lower it to 1.
 
-Git hosting is not a destination. Bundles are full snapshots and private memory
-does not belong on a forge; a user who wants it points a local path at a
-repository they commit themselves.
+Git hosting is not a destination, because bundles are full snapshots of
+private memory; a user who wants one in a repository points a local path at a
+checkout and commits it themselves.
 
 ---
 
@@ -223,9 +223,8 @@ so `store_decomposition`, `apply_reflection` and `graph_stats` can report
 follows the `reflect_threshold` pattern, with `configure_backup` setting the
 per-graph override.
 
-Two counters rather than one, because they are zeroed by different acts. One
-counter would have to be reset by whichever came first, and the other question
-would go unanswered.
+Two counters rather than one, because reflecting zeroes one and a backup the
+other.
 
 The counter is bumped where the reflect counter is bumped, which is
 `store_decomposition` alone. `apply_reflection` **reports** the numbers without

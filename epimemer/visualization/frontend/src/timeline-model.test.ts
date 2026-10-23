@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { NO_FILTERS, applyFilters } from "./timeline-filter";
 import {
   allMarks,
   buildContentRows,
@@ -347,6 +348,57 @@ describe("buildContentRows", () => {
   });
 });
 
+// The snapshot holds the current node set, and a timepoint can be linked to a
+// node outside it: one retired since, whose TIMELINK edge is still there. The
+// mark's node facets come out empty, exactly as an unlinked timepoint's do, and
+// so it passed every status filter, "Historical" and "Active" alike, though
+// the panel holds no node whose status it could have.
+describe("a timepoint linked to nodes outside the node set", () => {
+  const snapshot: SnapshotLike = {
+    nodes: [node({ node_id: "here", status: "active" })],
+    edges: [
+      edge({ src_id: "gone", dst_id: "t1", metadata: { timepoint_id: "p-gone" } }),
+      edge({ src_id: "here", dst_id: "t1", metadata: { timepoint_id: "p-mixed" } }),
+      edge({ src_id: "gone", dst_id: "t1", metadata: { timepoint_id: "p-mixed" } }),
+    ],
+    timelines: [
+      timeline({
+        timeline_id: "t1",
+        timepoints: [
+          point({ timepoint_id: "p-gone", start: "2024-01-01T00:00:00Z" }),
+          point({ timepoint_id: "p-mixed", start: "2024-02-01T00:00:00Z" }),
+          point({ timepoint_id: "p-bare", start: "2024-03-01T00:00:00Z", label: "a bare label" }),
+        ],
+      }),
+    ],
+  };
+  const shownUnder = (statuses: string[]): string[] =>
+    applyFilters(allMarks(buildContentRows(snapshot)), {
+      ...NO_FILTERS,
+      statuses: new Set(statuses),
+    }).map((m) => m.id);
+
+  it("does not pass a status filter, whichever status is asked for", () => {
+    expect(shownUnder(["historical"])).not.toContain("p-gone");
+    expect(shownUnder(["active"])).not.toContain("p-gone");
+  });
+
+  it("is still decided by the linked nodes the set does hold", () => {
+    expect(shownUnder(["active"])).toContain("p-mixed");
+    expect(shownUnder(["historical"])).not.toContain("p-mixed");
+  });
+
+  it("leaves a timepoint linked to nothing to pass, as before", () => {
+    // No node at all, so a filter about nodes has nothing to say about it.
+    expect(shownUnder(["historical"])).toContain("p-bare");
+  });
+
+  it("is shown when no status filter is set", () => {
+    expect(applyFilters(allMarks(buildContentRows(snapshot)), NO_FILTERS).map((m) => m.id))
+      .toEqual(["p-gone", "p-mixed", "p-bare"]);
+  });
+});
+
 describe("a point the order places", () => {
   const bounded = (over: Partial<TimepointView>): SnapshotLike => ({
     nodes: [],
@@ -630,7 +682,7 @@ describe("buildRecordRows", () => {
     expect(buildRecordRows(snapshot)[0].dated[0].detail).toContain("never");
   });
 
-  it("shows a dash for an unrated confidence rather than the 0.5 default", () => {
+  it("says an unrated confidence is not rated rather than showing the 0.5 default", () => {
     const snapshot: SnapshotLike = {
       nodes: [node({ node_id: "n1", confidence: null })],
       edges: [],
@@ -638,7 +690,7 @@ describe("buildRecordRows", () => {
 
     const detail = buildRecordRows(snapshot)[0].dated[0].detail;
 
-    expect(detail).toContain("confidence —");
+    expect(detail).toContain("confidence not rated");
     expect(detail).not.toContain("0.50");
   });
 

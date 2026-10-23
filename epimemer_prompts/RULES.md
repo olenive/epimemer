@@ -14,10 +14,9 @@ hold on every call:
 - Claim a judge with `claim_agent` once per session before writing, and again
   after `use_graph` or a reconnect. Use whatever judge the user hands back. A
   refusal here goes to the user, never worked around. A write refused because
-  the seat changed (a new model, client or conversation) means claim again,
-  and the user will be asked.
-- Carry the `judge_token` your claim returns as `judge_token` on every write
-  that takes one.
+  the seat changed (a new model, client, client version or conversation)
+  means claim again, and the user will be asked.
+- Carry the `judge_token` your claim returns on every write that takes one.
   Several agents can share one connection, a subagent beside the agent that
   spawned it, and each claims its own judge and carries its own token; a write
   without one is credited to the most recent claim on the connection.
@@ -30,9 +29,9 @@ hold on every call:
   (`similarities`, `relation_verdicts`, `retained`, `deferred`,
   `boundaries_declined`); a verdict stops the question being offered again,
   and an unjudged one comes back on every reflect, for ever. `deferred` is
-  the one verdict that lapses: it puts a never-retrieved node off for a number
-  of reflect rounds, doubling each time. `reopen` is how a verdict you think
-  was wrong is put back in front of a judge.
+  the one verdict that lapses: it puts a `never_retrieved` nominee off for a
+  number of reflect rounds, doubling each time. `reopen` is how a verdict you
+  think was wrong is put back in front of a judge.
 - Read `warnings` before deciding what to write, not after; `notify_user: true`
   means raise it with the user.
 - One word per concept: **metacontext** (the world a claim is made in),

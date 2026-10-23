@@ -1,12 +1,11 @@
 # Lexical search: BM25 alongside vector retrieval
 
-A design, built: the code is `epimemer/pipelines/query/lexical_search.py` and `fusion.py`, over `text_search` on every storage backend.
-
 Keyword retrieval inside `search`, fused with the vector path by rank: BM25
-rather than exact-token lookup, over nodes and segments both, with declared
-`terms` driving the lexical arm and a conservative statistical fallback when
-they are omitted. `docs/RETRIEVAL.md` §1 to §4 describe what a caller sees.
-The rules are in §10.
+over nodes and segments both, with declared `terms` driving the lexical arm
+and a conservative statistical fallback when they are omitted. The code is
+`epimemer/pipelines/query/lexical_search.py` and `fusion.py`, over
+`text_search` on every storage backend. `docs/RETRIEVAL.md` §1 to §4 describe
+what a caller sees. The rules are in §10.
 
 ---
 
@@ -18,9 +17,9 @@ identifier like `JIRA-4417` into fragments, which are then mean-pooled with
 every other token in the sentence. The identifier contributes almost no
 distinguishing signal, and the query `"JIRA-4417"` embeds to approximately
 "short alphanumeric string", which is close to every other ticket id in the
-graph. The failure is not that the right node ranks low; it is that the wrong
-ticket ids rank about equally high. Cosine similarity has no notion of term
-rarity, which is exactly what BM25's IDF supplies.
+graph, so the wrong ticket ids rank about as high as the right one. Cosine
+similarity has no notion of term rarity, which is exactly what BM25's IDF
+supplies.
 
 ### 1.1 The upstream half, and why segments are indexed too
 
@@ -159,10 +158,9 @@ not achievable and no test asserts it. What the tests assert:
   `+1`-smoothed IDF that never reaches zero. The in-memory, SQLite and
   Postgres backends partition their corpus by node type to match the tables (R6).
 
-This is a real narrowing of the guarantee `get_nodes` states for itself ("a
-batching of cost, not of answer"). Lexical search is the one protocol method
-where the backends genuinely differ, and saying so here beats pretending
-otherwise.
+Lexical search is the one protocol method where the backends genuinely
+differ, a narrowing of the guarantee `get_nodes` states for itself ("a
+batching of cost, not of answer").
 
 ---
 
@@ -172,7 +170,6 @@ otherwise.
   common word contributes nothing.
 - **A separate `lexical_search` tool.** The agent would have to guess which
   tool to call; fusion makes one call do both.
-- **Score blending.** Incomparable scales (§3.1).
 - **Query length as the "is this an identifier" heuristic.** "find JIRA-123"
   and "deployment problems yesterday" are the same length with opposite
   intents. Per-term corpus rarity, which the engine already computes, is the
@@ -186,10 +183,10 @@ otherwise.
 
 - **Ranking feedback.** Retrieval must not feed ranking. RRF takes ranks from
   vector and BM25 only: no use-count, no popularity term.
-- **Embedding truncation.** `all-MiniLM-L6-v2` truncates at 256 word-pieces.
-  Measured, no node comes near it (81 word-pieces at worst), and segment
-  text, which does cross it, is never embedded at all: BM25 is the only thing
-  that reads segments, not a mitigation for a truncation that happens to them.
+- **Embedding truncation.** `all-MiniLM-L6-v2` truncates at 256 word-pieces;
+  no node comes near it, and segments, which do, are never embedded
+  (`BENCHMARKS.md`, *Node text does not reach the embedding window, and
+  segments are never embedded*). BM25 is the only thing that reads segments.
 
 ---
 
@@ -243,8 +240,7 @@ asked.
   nobody chases it as a bug. **The status filter wraps the FTS query as a
   subquery.** Inlining any non-match predicate into the OR-of-match-refs
   `WHERE` makes 3.0.5 drop the FTS index and match disjunctively, and the
-  near-miss then returns at a positive score R1 cannot catch. Proven
-  load-bearing by patching it back.
+  near-miss then returns at a positive score R1 cannot catch.
 - **R8, declared terms verify containment.** Token matching and substring
   matching fail in opposite directions, and each filters the other's false
   positives: token boundaries exclude `JIRA-44170` from a `JIRA-4417` query
@@ -266,15 +262,14 @@ asked.
   at the end would undo the rescue.
 
   The rescue needs reach: the hit it rescues sits at the bottom of a score
-  ordering, so the declared-term fetch is widened to k×100. Measured on
-  3.0.5 over 3,000 facts (median of 5): a rare declared term costs 1.6 ms with
-  containment against 1.9 ms plain; the worst case, every token in every
-  document, 24.2 ms against 16.8 ms. Residual, stated in the code: a term
-  whose tokens are common across more than about 1,000 documents can still
-  have its literal match fall outside the window. Outside the feature's
-  purpose, since identifiers have a rare token almost by definition; the
-  upgrade if it ever bites is a containment scan when a saturated window
-  comes back all zero-scored.
+  ordering, so on SurrealDB the declared-term fetch is widened to k×100
+  (`_CONTAINMENT_OVERFETCH`). Measured on 3.0.5 over 3,000 facts, that costs
+  1.6 ms for a rare declared term against 1.9 ms plain, and 24.2 ms against
+  16.8 ms in the worst case, every token in every document. A term whose
+  tokens are common across more than about 1,000 documents can still have its
+  literal match fall outside the window; identifiers have a rare token almost
+  by definition, and the upgrade if it ever bites is a containment scan when a
+  saturated window comes back all zero-scored.
 
 ---
 

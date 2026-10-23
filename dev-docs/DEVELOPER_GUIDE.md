@@ -37,29 +37,20 @@ Rules a fix keeps, whichever part it is in:
   request or a snapshot**, and says which.
 - **An enumeration of write paths in a design ages**: the guard is a test that
   exercises every path.
-- **A guard whose reach is an accident of where the code sat fails open**: a
-  guard that must not miss a site parses the source and compares what it finds
-  against a declared list, in both directions.
+- **A guard that must not miss a site parses the source** and compares what it
+  finds against a declared list, in both directions; a guard whose reach is an
+  accident of where the code sat fails open.
 - **Ask what reads this** of any field: a value nothing consumes is a defect.
-- **A suite that always builds a well-formed graph cannot see a defect whose
-  precondition is a graph nobody set up**: run a migration against real data.
+- **Run a migration against real data**: a suite that always builds a
+  well-formed graph cannot see a defect whose precondition is a graph nobody
+  set up.
 - **A rule stated only in a comment is a rule the code does not have**: make it
   a structure with a test over it, as `EDGE_SHAPES` is.
 
-### Core types
+### Core types and storage
 
-All Pydantic models live in `epimemer/core/types.py`. To inspect a model:
-
-```python
-from epimemer.core.types import Topic, Timeline, Metacontext
-
-t = Topic(content="test", source_id="s1")
-print(t.model_dump_json(indent=2))
-```
-
-### Storage layer
-
-Test with `InMemoryStorage` (no external dependencies):
+All Pydantic models live in `epimemer/core/types.py`. Test storage with
+`InMemoryStorage`, which has no external dependencies:
 
 ```python
 import asyncio
@@ -122,12 +113,10 @@ asyncio.run(main())
 
 ### Decomposition
 
-There is no in-process decomposition net to debug: Epimemer does not extract
-topics, facts and inferences itself. Decomposition is the calling agent's
-job, and ingest is a two-step flow: `segment` returns chunks, the agent
-extracts nodes, and `store_decomposition` persists them. To exercise that
-path, build the nodes by hand and call `store_decomposition` directly (see
-*MCP tools* below).
+Decomposition is the calling agent's job, so there is no in-process net to
+debug: `segment` returns passages, the agent extracts nodes, and
+`store_decomposition` persists them. To exercise that path, build the nodes by
+hand and call `store_decomposition` directly (see *MCP tools* below).
 
 ### Query layer
 
@@ -150,9 +139,8 @@ async def main():
     graph = hybrid_retrieval_net(request, emb, storage)
     ctx = RunContext(graph=graph)
 
-    # Step through transitions to see intermediate state. The first firing is
-    # plan_retrieval, which forks the request into the two arms; the next two
-    # are the arms themselves, in declaration order.
+    # The first firing is plan_retrieval, which forks the request into the two
+    # arms; the next two are the arms themselves, in declaration order.
     await Runner.step(ctx)
     print(f"Lexical terms: {graph.place_named('LexicalQuery').tokens[0].terms}")
 
@@ -171,11 +159,11 @@ asyncio.run(main())
 
 ### Reflection
 
-Reflection is not a single net: the `reflect` tool composes the analysis
-functions in `epimemer/pipelines/reflection/`, every one of which reads only.
-Results come back as candidates for the agent to act on via
-`apply_reflection` or a resolution tool, and `reflect` itself never changes
-the graph. Debug the whole thing through the tool function:
+The `reflect` tool composes the analysis functions in
+`epimemer/pipelines/reflection/`, every one of which reads only. Results come
+back as candidates for the agent to act on via `apply_reflection` or a
+resolution tool, and `reflect` itself never changes the graph. Debug the whole
+thing through the tool function:
 
 ```python
 import asyncio
@@ -204,38 +192,32 @@ To isolate one stage, call its module function directly:
 `find_similar_topic_pairs` from `topic_consolidation`, or
 `nominate_archival_candidates` from `archival`.
 
-**Two rules for any new nominator, and they are a pair.** Every sweep here is
-recomputed from the graph as it stands, which makes both failures easy to
-ship without noticing:
+**Two rules for any new nominator, and they are a pair.** Every sweep is
+recomputed from the graph as it stands:
 
-- **A sweep that records no declines is a futile cycle by construction.** It
-  re-offers what an agent already refused, on every pass, and cannot know it
-  is doing so. The cost is agent attention, and the pressure runs the wrong
-  way: *accepting* a nomination usually removes its subject from the
-  population, so acceptance is self-suppressing and refusal is not. The
-  `assessed` edge is the fix for fact pairs, `RelationVerdict` for label
-  pairs, the `retention` journal row for single nodes, and the
-  `boundary_declined` journal row for boundary proposals: a suppression
-  index the sweep reads, separate from the journal that audits it. The
-  `deferral` journal row is the one suppression that lapses by itself: it
+- **A sweep that records no declines re-offers what an agent already refused,
+  on every pass.** Accepting a nomination usually removes its subject from the
+  population and refusing does not, so the sweep needs a suppression index it
+  reads, separate from the journal that audits it: the `assessed` edge for
+  fact pairs, `RelationVerdict` for label pairs, the `retention` journal row
+  for single nodes, and the `boundary_declined` journal row for boundary
+  proposals. The `deferral` journal row is the one suppression that lapses: it
   holds a `never_retrieved` node back for a number of reflect rounds that
-  doubles with each deferral, measured from the `at_round` on the row
-  (`deferral.py`). The nominator and the tool that accepts a deferral ask
-  one predicate, `never_retrieved_exclusion`, so the tool accepts a deferral
-  only for a node the nominator's test counts as a never_retrieved nominee.
-- **And its dual: a suppression with no way back makes every wrong decline
-  permanent by construction.** `reopen` is the way back for each of
-  these indexes: it retires the `assessed` edge the way a moved `TIMELINK` is
-  retired, so the pair is nominated again and nothing is asserted about the
-  answer (`reopening.py`). A one-node reopen clears a keep and a deferral
-  still waiting alike. A new nominator needs its own way back, or it
-  inherits the permanence knowingly. The `one_claim` retraction stays
-  one-way, because a false unification manufactures agreement while a
-  withdrawal only under-counts.
+  doubles with each deferral, measured from the row's `at_round`
+  (`deferral.py`). The nominator and the tool that accepts a deferral ask one
+  predicate, `never_retrieved_exclusion`, so a deferral is accepted only for a
+  node the nominator counts as a never-retrieved nominee.
+- **A suppression with no way back makes every wrong decline permanent.**
+  `reopen` is the way back for each of these indexes: it retires the
+  `assessed` edge the way a moved `TIMELINK` is retired, so the pair is
+  nominated again and nothing is asserted about the answer (`reopening.py`). A
+  one-node reopen clears a keep and a waiting deferral alike. A new nominator
+  needs its own way back. The `one_claim` retraction stays one-way, because a
+  false unification manufactures agreement while a withdrawal only
+  under-counts.
 
-**A cycle in a feature nobody has built is a precondition, not a defect.**
-Record it against the thing that would create it rather than in a shared
-list, or the list reads as outstanding bugs.
+A cycle in a feature nobody has built is a precondition, not a defect: record
+it against the thing that would create it rather than in a shared list.
 
 ### Timeline functions
 
@@ -286,13 +268,12 @@ asyncio.run(main())
 
 ### A server that will not start
 
-Read `EPIMEMER_LOG_FILE`. A client has one thing to say about a server that
-died on the way up, that the connection failed, and everything the process put
-on stderr went with it; the lifespan writes the reason and the traceback to
-that file at ERROR before it re-raises, and writes one INFO line naming the
-version, storage backend and embedding provider when it gets through. An empty
-file means the failure came before logging was configured, which in practice
-means the log path itself could not be opened.
+Read `EPIMEMER_LOG_FILE`. A client reports only that the connection failed,
+and the process's stderr goes with it; the lifespan writes the reason and the
+traceback to that file at ERROR before it re-raises, and one INFO line naming
+the version, storage backend and embedding provider when it gets through. An
+empty file means the failure came before logging was configured, in practice
+that the log path itself could not be opened.
 
 ```bash
 # Start the server the way a client does, and print what it wrote
@@ -303,10 +284,9 @@ python scripts/check_server_starts.py
 ```
 
 The lifespan is built for the first call that needs it rather than at connect,
-so a handshake alone proves nothing: the script calls a tool, which is what
-makes startup happen. `tests/mcp/test_server_starts.py` does the same from the
-suite, and the `server-starts` CI job does it from a plain install with no
-optional extras.
+so a handshake alone proves nothing: the script calls a tool. The same check
+runs in `tests/mcp/test_server_starts.py` and, from a plain install with no
+optional extras, in the `server-starts` CI job.
 
 ## Petri net visualisation
 
@@ -344,9 +324,9 @@ thread.
 
 ## Adding a new storage backend
 
-1. Implement **every** method from `epimemer/storage/protocol.py`. There are
-   no capability flags to opt out of, so a backend implements the whole
-   protocol, with a no-op where an operation has nothing to do. This covers:
+1. Implement **every** method from `epimemer/storage/protocol.py`, with a
+   no-op where an operation has nothing to do; there are no capability flags.
+   This covers:
    - Core storage operations (documents, segments, nodes, edges, embeddings,
      timelines, metacontexts, the decision journal)
    - The multi-graph interface: `current_database`, `list_databases()`,
@@ -355,29 +335,27 @@ thread.
      the in-process pattern, `SQLiteStorage` for one file per graph and
      `PostgresStorage` for one schema per graph
    - `normalize_for_storage` on write, so `None`-valued dict keys round-trip
-     identically across backends. It drops them at every depth, a dict inside
+     identically across backends: it drops them at every depth, a dict inside
      a nested model included, as SurrealDB does
    - Timestamp comparison by instant, never by text (see *Comparing
      timestamps*)
    - `graph_guard`, with `switch_database` taking its mover turn (see *The
-     active graph holds still*). A backend that resolves its graph per call
-     (all of ours do) has this problem whether or not it has a connection
-   - If the backend talks over a socket, it owns reconnection. An MCP server
-     outlives the databases it talks to, so a dropped connection has to be
-     rebuilt rather than raised forever; see `_reconnect` in
-     `surrealdb_adapter.py` and the constraints in its comment, and `_run`
-     in `postgres_adapter.py` for the same rules on a driver that does report
-     a lost connection
-   - `write_verbatim_tx`, which stores each record exactly as given rather
-     than deriving anything, plus the whole-section reads beside it
-     (`query_documents`, `query_segments`, `query_edges`). Graph bundles are
-     built on those four, and `GRAPH_BUNDLES.md` §3 says what verbatim rules
-     out
+     active graph holds still*). Every backend resolves its graph per call,
+     so each needs it whether or not it has a connection
+   - If the backend talks over a socket, it owns reconnection: an MCP server
+     outlives the databases it talks to, so a dropped connection is rebuilt
+     rather than raised forever. See `_reconnect` in `surrealdb_adapter.py`
+     and the constraints in its comment, and `_run` in `postgres_adapter.py`
+     for the same rules on a driver that reports a lost connection
+   - `write_verbatim_tx`, which stores each record exactly as given, plus the
+     whole-section reads beside it (`query_documents`, `query_segments`,
+     `query_edges`). Graph bundles are built on those four, and
+     `GRAPH_BUNDLES.md` §3 says what verbatim rules out
    - If the backend persists, its own versioned schema stepper run on open,
      and `SchemaTooNew` (`storage/protocol.py`) for a graph stamped newer than
-     the code, raised before anything is written. SQLite and Postgres run
-     none of SurrealDB's migrations: a graph reaches a new backend through a
-     bundle, at the current version
+     the code, raised before anything is written. A graph reaches a new
+     backend through a bundle, at the current version, so a new backend ports
+     none of SurrealDB's migrations
 2. Add tests in `tests/storage/test_your_backend.py`, and add the backend to
    the parity fixtures in `tests/conftest.py` and
    `tests/storage/test_storage_parity.py`
@@ -387,14 +365,13 @@ thread.
 
 **A timestamp comparison must be about instants, not about spelling.** If a
 backend stores timestamps as text, as SurrealDB does, then `>=` compares two
-strings, and that is chronologically correct only while every rendering has
-the same shape. It is not a shape the writers guarantee: Pydantic omits the
-fractional part when it is exactly zero, so a row written on a whole second
-renders `…:41Z` while a bound renders `…:41.500000Z`, and `"Z" > "."` sorts
-the earlier row *after* the later bound. The `Z` and `+00:00` suffixes differ
-the same way. `datetime.now()` essentially never lands on a whole second, so a
-test that builds its own timestamps builds safe ones by accident and never
-sees this.
+strings, which is chronologically correct only while every rendering has the
+same shape. The writers do not guarantee that: Pydantic omits the fractional
+part when it is exactly zero, so a row written on a whole second renders
+`…:41Z` while a bound renders `…:41.500000Z`, and `"Z" > "."` sorts the
+earlier row *after* the later bound. The `Z` and `+00:00` suffixes differ the
+same way. `datetime.now()` essentially never lands on a whole second, so a
+test that builds its own timestamps never sees this.
 
 **The rule has two halves, and the index decides which applies.**
 
@@ -417,19 +394,17 @@ The measurements behind the split, taken on embedded SurrealDB on
   because wrapping the field turns `Iterate Index` into `Iterate Table`. That
   is why the journal pads on write instead, in `_decision_row`.
 
-So: a new comparison of an unindexed timestamp goes through `instant()`. A
-new indexed timestamp field takes on the writer's obligation instead, and if
-you add an index to a field something already compares through `instant()`,
-the comparison must change with it or the index is dead weight.
+So a new comparison of an unindexed timestamp goes through `instant()`. A new
+indexed timestamp field takes on the writer's obligation instead, and an index
+added to a field something already compares through `instant()` needs the
+comparison changed with it, or the index is dead weight.
 
 The SQLite backend has no `instant()` and takes the writer's half everywhere:
 every timestamp column and every bound it compares goes through `iso_micros`
 in `storage/timestamps.py`, the same function the SurrealDB adapter pads the
-journal with. `STORAGE_BACKENDS.md` §2 has the reasoning.
-
-The Postgres backend needs neither half: its timestamp columns are
-`timestamptz` and its bounds are passed as datetimes, so the type compares
-instants and nothing is rendered to text.
+journal with. `STORAGE_BACKENDS.md` §2 has the reasoning. The Postgres backend
+needs neither half: its timestamp columns are `timestamptz` and its bounds are
+passed as datetimes, so nothing is rendered to text.
 
 `EXPLAIN` is how you check which case you are in:
 
@@ -444,35 +419,26 @@ await store._query("SELECT * FROM fact WHERE created_at <= $at EXPLAIN", {"at": 
 `epimemer/cli.py` refuses every embedded backend: `mem://`, `file://`,
 `surrealkv://` and the in-memory store all live inside the server process, so
 a second connection is a separate store rather than a second view of one
-(`is_embedded_url`, `_embedded_advice`). That refusal is right, and it has a
-consequence worth stating before a design leans on it.
-
-Two audiences cannot use the CLI, and they overlap with everyone. An agent
-cannot run it at all, since it is the user's command, and nobody can run it
-against the default development configuration, which is embedded. So *"the
-user runs `epimemer <thing>`"* is a fallback for one deployment shape,
-unavailable to the caller who hit the problem.
+(`is_embedded_url`, `_embedded_advice`). An agent cannot run the CLI at all,
+since it is the user's command, and nobody can run it against an embedded
+configuration. So *"the user runs `epimemer <thing>`"* is a fallback for one
+deployment shape, unavailable to the caller who hit the problem.
 
 The rule: **a remedy the agent cannot issue, on a backend where the command
 refuses, is not a remedy.** Where a design needs data to exist before
-something works, create it on the write paths that already run, not in a CLI
-command the blocked caller is being told to ask for. `RELATION_LABELS.md` §2.3
-is the worked example. Mechanical migrations follow the same rule: they run
-on open (`_migrate_schema`), and only migrations that need a person's
-judgment (`epimemer metacontexts declare`) stay in the CLI.
-
-Settings are the exception and the reason the trap is easy to fall into: they
-have environment variables read at connect, so the CLI is one of three
-channels rather than the only one. Data operations have no equivalent escape
-hatch.
+something works, create it on the write paths that already run.
+`RELATION_LABELS.md` §2.3 is the worked example. Mechanical migrations run on
+open (`_migrate_schema`), and only migrations that need a person's judgment
+(`epimemer metacontexts declare`) stay in the CLI. Settings are different,
+because they also have environment variables read at connect.
 
 ## The active graph holds still
 
 **The active graph is process state, and one logical operation needs it not
 to move.** Every backend resolves it per call, so a switch landing between two
-steps of an operation sends the rest of that operation somewhere else. It is
-not a SurrealDB problem. `storage/active_graph.py` has the guard, and its
-docstring lists what moves the graph. Everything else takes the other side:
+steps of an operation sends the rest of that operation somewhere else.
+`storage/active_graph.py` has the guard, and its docstring lists what moves
+the graph. Everything else takes the other side:
 
 ```python
 async with storage.graph_guard.using():  # a tool call, see _run_with_timeout
@@ -494,41 +460,34 @@ required on every tool except those *about* graphs, which
 Adding a tool means adding the parameter and forwarding it; the oracle in
 `tests/mcp/test_graph_gate.py` walks the live registry and fails otherwise.
 The check itself is one call to `tools.wrong_graph`, made inside the turn in
-`_run_with_timeout` and again in `_judge_for_write`. Do not add a third. And do
-not add a *setting*: a per-graph flag would be read from whichever graph the
-call is actually in, disabling the guard in exactly the case it exists for,
-and a gate that switched on once a second graph existed would refuse calls
-that worked yesterday because of state nobody touched.
+`_run_with_timeout` and again in `_judge_for_write`. Add no third call site
+and no *setting*: a per-graph flag would be read from whichever graph the call
+is actually in, disabling the guard in exactly the case it exists for.
 
 Three rules for anything new:
 
-- **Take the turn at the logical-operation boundary.** Per query is useless:
-  a move only has to land between two of the several storage calls one tool
-  makes. The boundaries are `_run_with_timeout` and each RPC
-  `hub_client.py` answers.
+- **Take the turn at the logical-operation boundary**, because a move only has
+  to land between two of the several storage calls one tool makes. The
+  boundaries are `_run_with_timeout` and each RPC `hub_client.py` answers.
 - **A tool that moves the graph goes in `MOVES_THE_GRAPH`** (`mcp/server.py`).
-  Taking `moving()` inside `using()` raises rather than hanging, and the
-  message says so, but the tool has to be declared, because the default fails
-  open.
-- **A cross-graph read takes a mover's turn**, even though it only reads. It
-  moves the graph to get there. `review` is the worked example: its
-  `elsewhere` locator counts the journal in every other graph, so a read
-  ended up in `MOVES_THE_GRAPH`. You cannot borrow the graph while being one
-  of the calls using it, and the turn has to be taken at the boundary for the
-  whole call, which is why `review` excludes other calls for its duration and
-  reads a single instant in exchange.
+  Taking `moving()` inside `using()` raises rather than hanging, but the tool
+  has to be declared, because the default fails open.
+- **A cross-graph read takes a mover's turn**, even though it only reads,
+  because it moves the graph to get there. `review` is the worked example: its
+  `elsewhere` locator counts the journal in every other graph, so it is in
+  `MOVES_THE_GRAPH`, excludes other calls for its duration and reads a single
+  instant in exchange.
 
 **Testing concurrency here needs a real suspension point.** With in-memory
 storage and the mock embedder every await completes without suspending, so
-`asyncio.gather` runs the first call to completion and there is no race to
-lose; a test written that way passes with the guard removed. See
-`_suspending` in `tests/mcp/test_graph_turns.py`, and prove any new test
-fails without the fix before trusting it.
+`asyncio.gather` runs the first call to completion and a test written that way
+passes with the guard removed. See `_suspending` in
+`tests/mcp/test_graph_turns.py`, and prove any new test fails without the fix
+before trusting it.
 
 **And run it on SurrealDB.** The in-memory store reads another graph with a
-dict lookup and borrows nothing, and SQLite and Postgres read one without
-moving the active graph, so a cross-graph test written against any of them
-alone is green whether or not the mover turn was ever declared: green for the
-wrong reason, in a second costume. SurrealDB is the backend that borrows.
+dict lookup, and SQLite and Postgres read one without moving the active graph,
+so a cross-graph test against any of them alone is green whether or not the
+mover turn was declared. SurrealDB is the backend that borrows.
 `tests/mcp/test_review_locator.py` parameterises its end-to-end fixture over
-the in-memory store and SurrealDB for exactly this.
+the in-memory store and SurrealDB for this reason.

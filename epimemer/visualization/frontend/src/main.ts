@@ -23,7 +23,7 @@ import { initLogPanel } from "./log-panel";
 import { initWarningSettings } from "./warning-settings";
 import { initPipelineStrip } from "./pipeline-strip";
 import { initRetrievalSelector } from "./retrieval-selector";
-import { responseText, type RecordEntry } from "./retrieval-store";
+import { focusIds, responseText, type RecordEntry } from "./retrieval-store";
 import { initSplitPane } from "./split-pane";
 import { initTimelinePanel } from "./timeline-panel";
 import type { TimelineMark } from "./timeline-model";
@@ -150,7 +150,7 @@ const showDetail = (
   description = "",
 ): void => {
   drawer.showNode(
-    `${nodeType} — ${nodeId.slice(0, 8)}`,
+    `${nodeType}: ${nodeId.slice(0, 8)}`,
     nodeDetailBody(content, description),
     notRetrievedMarker(graphPanel.isInFocus(nodeId), recordSelector.selected() !== null),
   );
@@ -289,7 +289,9 @@ $("btn-warnings").addEventListener("click", () => warningsPanel.toggle());
  * the theme does.
  */
 const applyFocus = (entry: RecordEntry | null): void => {
-  const ids = entry === null ? null : entry.nodeIds;
+  // A record that never declared what it retrieved carries no focus set, so
+  // it dims nothing rather than everything.
+  const ids = focusIds(entry);
   graphPanel.setFocus(ids);
   timelinePanel.setFocus(ids);
   // Selecting a record is a deliberate act, so this is the one path allowed to
@@ -297,7 +299,7 @@ const applyFocus = (entry: RecordEntry | null): void => {
   // reaches here.
   if (entry !== null) {
     drawer.showResponse(
-      `Response — ${entry.tool.replace(/^epimemer\./, "")}`,
+      `Response: ${entry.tool.replace(/^epimemer\./, "")}`,
       responseText(entry),
     );
   }

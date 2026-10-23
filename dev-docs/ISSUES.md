@@ -39,8 +39,8 @@ means the entry is load-bearing and must be moved before it is dropped.
 
 Two agents on this file at once: name the entry you are working in your commit
 message, and check the **Files** rows before starting. Entries whose file sets
-are disjoint are safe in parallel; entries sharing one are not, however
-unrelated they read. The `dev-docs/` design documents are shared state.
+are disjoint are safe in parallel; entries sharing one are not. The `dev-docs/`
+design documents are shared state.
 
 ---
 
@@ -50,12 +50,14 @@ unrelated they read. The `dev-docs/` design documents are shared state.
 
 ⏸ **Deferred**, trigger stated below.
 
-**What breaks.** On the 2026-07-28 protocol era the mcp SDK's stdio path
-carries no server-to-client requests (`NotifyOnlyOutbound` in
-`mcp/server/connection.py`), so `ctx.elicit` raises. `claim_agent` logs "no
-elicitation channel to the user" and binds an approved judge unconfirmed
-(`description_confirmed: false`), even when the seat changed, which is the case
-the picker exists for. Seen with Claude Code 2.1.287 on 2 October 2026.
+**What breaks.** The 2026-07-28 protocol forbids server-to-client requests.
+The mcp SDK (2.3.0) installs `NotifyOnlyOutbound` (`mcp/server/connection.py`)
+on that path, which refuses them by construction, and fastmcp's
+`Context.elicit` (4.1.3) raises a `ToolError` on such a connection before
+anything reaches the wire. `claim_agent` logs "no elicitation channel to the
+user" and binds an approved judge unconfirmed (`description_confirmed: false`),
+even when the seat changed, which is the case the picker exists for. Seen with
+Claude Code 2.1.287.
 
 **Why it matters.** The user's approval on a changed seat (a new model, client
 or conversation) degrades silently to the agent's own report of who it is.
@@ -67,8 +69,10 @@ return `_NO_CHANNEL`; `tools.claim_agent` decides what `_NO_CHANNEL` means.
 **The decision.** Keep binding unconfirmed (today's behaviour, designed for
 clients without elicitation, and the only way writes work on Claude Code
 2.1.287), or refuse to bind when the seat changed and no question can be put,
-which blocks every write on that client until the SDK carries server requests
-on the modern path?
+which blocks every write on that client? The era's own route for a question is
+a multi-round-trip result: the tool returns an `InputRequiredResult` and reads
+the answer from `ctx.input_responses` when the client calls again, which
+fastmcp 4.1.3 supports and which works only where the client answers it.
 
 **Guarding tests.** In `tests/mcp/test_judge_seat.py`, a test such as
 `test_a_changed_seat_with_no_channel_to_the_user` using `_seated_ctx`, whose
@@ -80,9 +84,8 @@ pins today's behaviour for an unchanged seat and must keep passing either way.
 
 **Verify.** `uv run python -m pytest tests/ -q`.
 
-**Trigger:** the mcp SDK or Claude Code offering server-to-client requests on a
-2026-07-28 stdio connection, or a reader deciding the refusal is worth the
-outage.
+**Trigger:** Claude Code answering `input_required` results on a 2026-07-28
+connection, or a reader deciding the refusal is worth the outage.
 
 ---
 
@@ -97,8 +100,8 @@ order is not guarded: `store_decomposition` validates its passage ids, then
 awaits the embedding work, then writes through `write_batch_tx`. A re-cut of
 the same document that commits inside that window is not refused, because
 nothing cites the passages yet, and the decomposition's nodes then land
-citing passages that no longer exist. One agent cannot do this to itself; it
-takes two agents on one document in a shared graph.
+citing passages that no longer exist. It takes two agents on one document in
+a shared graph.
 
 **Smallest fix.** A check inside `write_batch_tx`, on every backend, that
 every passage a node names as its source still exists, refusing the whole
@@ -113,10 +116,10 @@ two-instance test in `test_postgres_storage.py` with a re-cut committed
 between the read and the write, the order its existing re-cut test does not
 cover.
 
-**Decision needed.** Whether the refusal names the passages or just the count,
-and whether `store_decomposition` retries against the new cut (it cannot: the
-agent's claims were extracted from the old passages) or returns the refusal
-for the agent to re-read and re-decompose. The second is the only honest one.
+**Decision needed.** Whether the refusal names the passages or just the count.
+`store_decomposition` cannot retry against the new cut, since the agent's
+claims were extracted from the old passages, so it returns the refusal for the
+agent to re-read and re-decompose.
 
 **Trigger.** A shared graph where two agents ingest and re-cut the same
 document, or the first node found whose source passage is missing.
@@ -174,10 +177,10 @@ disagreement. Recording an unrelated date, or materialising next week's market
 day, puts every held contradiction back in front of `reflect` with no new
 evidence about any of them.
 
-**Files.** `epimemer/mcp/tools.py`, `add_timeline_timepoint` (the
-`clear_holds` call at line 7334). `epimemer/pipelines/timeline/ordering.py`,
-`clear_holds` (line 532) and the per-pair rule to reuse, in `add_constraints`
-(the touched pairs at line 649, passed to `clear_holds` at line 657).
+**Files.** `epimemer/mcp/tools.py`, `add_timeline_timepoint` (its
+`clear_holds` call). `epimemer/pipelines/timeline/ordering.py`, `clear_holds`,
+and the per-pair rule to reuse in `add_constraints`, which collects the
+touched pairs and passes only those to `clear_holds`.
 
 **The decision.** Should a hold clear only when the new point touches the
 pair, and if so, what touching means for a date: a held point the new one now
@@ -204,15 +207,9 @@ every existing row the first time `_setup_schema` runs against a graph, inside
 `connect()`, before anything else can happen, with nothing visible to the
 user. `IF NOT EXISTS` means it happens exactly once per graph. The other
 backends score the corpus with `storage/bm25.py` on every call and have no
-index to build.
-
-`BENCHMARKS.md`, *What defining the full-text index costs, once*, has the
-measurements: about 19 s at 20,000 indexed nodes and segments, against about
-30 ms for a later connect. This is lifespan startup, not a tool call, so no
-timeout fires; it just looks like a hang.
-
-Deferred because nothing hurts at current graph sizes, and the next
-performance fix should come from something real.
+index to build. `BENCHMARKS.md`, *What defining the full-text index costs,
+once*, has the measurements. This is lifespan startup, not a tool call, so no
+timeout fires; it looks like a hang.
 
 **Trigger:** graphs approaching 10,000 nodes, where the first connect blocks
 for more than 10 s unexplained. **Fix then:** build the index asynchronously

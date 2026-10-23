@@ -21,7 +21,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastmcp import FastMCP
 
-from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
+from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext, NodeStatus
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import server as server_mod
 from epimemer.mcp.config import ServerConfig
@@ -55,6 +55,7 @@ async def _test_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         "storage": _graph_with_the_real(),
         "embedding_provider": MockEmbeddingProvider(model_id="mock-embed", dimension=8),
         "config": ServerConfig(storage_backend="memory", embedding_provider="mock"),
+        "version": "test",
         "event_bus": None,
         "viz_session": None,
         "viz_hub_url": None,
@@ -127,7 +128,11 @@ async def _seed(server: FastMCP) -> dict:
                     {
                         "segment_id": segment_ids[0],
                         "topics": ["Deployment"],
-                        "facts": ["The deployment rollback failed on Tuesday"],
+                        # Two facts, because the pair tools join fact to fact.
+                        "facts": [
+                            "The deployment rollback failed on Tuesday",
+                            "JIRA-4417 tracks the certificate rotation",
+                        ],
                         "inferences": ["The release process is fragile"],
                     }
                 ],
@@ -168,17 +173,83 @@ async def _seed(server: FastMCP) -> dict:
             "create_metacontext", {"expected_graph": "default", "content": "Runbook metacontext"}
         )
     )["result"]
+    historical_fact_id = await _seed_a_retired_fact(server)
 
     return {
         "document_id": document_id,
         "segment_ids": segment_ids,
         "stored": stored,
-        "node_ids": [n["id"] for n in nodes],
+        # Every node the graph holds, whatever its status and however it got
+        # there. Listing only what the seeded document sourced left out the
+        # topic node created from the `ops` tag and every retired node, so a
+        # response naming either passed the oracle without being checked.
+        "node_ids": await _every_node_id(server),
         "by_type": by_type,
         "timeline_id": timeline["timeline_id"],
         "timepoint_id": timepoint["timepoint_id"],
         "metacontext_id": metacontext["metacontext_id"],
+        "historical_fact_id": historical_fact_id,
     }
+
+
+# Word for word the content of the fact `_seed_a_retired_fact` retires, so an
+# ingest that states it again meets a historical twin.
+RETIRED_CLAIM = "The certificate rotation is pending"
+
+
+async def _seed_a_retired_fact(server: FastMCP) -> str:
+    """A fact the world moved past, from a document of its own.
+
+    A second document so the first one's `find_nodes` listing, which the recipes
+    below index into, is unchanged.
+    """
+    seg = _parse(
+        await server.call_tool(
+            "segment",
+            {
+                "expected_graph": "default",
+                "content": f"{RETIRED_CLAIM}.",
+                "source": "status page",
+            },
+        )
+    )["result"]
+    await server.call_tool(
+        "store_decomposition",
+        {
+            "expected_graph": "default",
+            "metacontext_id": "the-real",
+            "document_id": seg["document_id"],
+            "segments": [
+                {"segment_id": seg["segments"][0]["segment_id"], "facts": [RETIRED_CLAIM]}
+            ],
+        },
+    )
+    found = _parse(
+        await server.call_tool(
+            "find_nodes", {"expected_graph": "default", "sourced_from": seg["document_id"]}
+        )
+    )["result"]
+    (pending,) = [n["id"] for n in found["nodes"] if n["content"] == RETIRED_CLAIM]
+    await server.call_tool(
+        "update",
+        {
+            "expected_graph": "default",
+            "node_id": pending,
+            "new_content": "The certificate rotation completed",
+            "because": "the_world_changed",
+        },
+    )
+    return pending
+
+
+async def _every_node_id(server: FastMCP) -> list[str]:
+    """Every node in the active graph, in every status.
+
+    Read from the store rather than through a tool, because the oracle must not
+    depend on what some tool chooses to list.
+    """
+    storage = server._lifespan_result["storage"]
+    return [node.id for status in NodeStatus for node in await storage.query_nodes(status=status)]
 
 
 def _args(tool: str, seeded: dict) -> dict:
@@ -200,15 +271,21 @@ def _args(tool: str, seeded: dict) -> dict:
             "document_id": seeded["document_id"],
             "cuts": ["The deployment rollback failed"],
         },
+        # Both paths that put an existing node in the response. The `ops` tag
+        # is already described, so the supplied line is not written and the
+        # warning names the topic node; the retired claim, stated again, comes
+        # back as a historical twin naming the retired fact and the new one.
         "store_decomposition": {
             "metacontext_id": "the-real",
             "document_id": seeded["document_id"],
             "segments": [
                 {
                     "segment_id": seeded["segment_ids"][0],
-                    "facts": ["A later claim about the rollback"],
+                    "facts": ["A later claim about the rollback", RETIRED_CLAIM],
                 }
             ],
+            "tags": ["ops"],
+            "tag_descriptions": {"ops": "Keeping the service running."},
         },
         "search": {"query": "deployment rollback", "k": 5},
         "link": {"src_id": facts[0], "dst_id": topics[0], "relation": "concerns"},
@@ -220,7 +297,7 @@ def _args(tool: str, seeded: dict) -> dict:
         "rename_topic": {"topic": topics[0], "name": "Deployments"},
         "supersede_by": {
             "old_id": facts[0],
-            "existing_id": inferences[0],
+            "existing_id": facts[1],
             "because": "the_world_changed",
         },
         "judge_importance": {
@@ -229,8 +306,8 @@ def _args(tool: str, seeded: dict) -> dict:
             "reason": "central to the incident",
         },
         "check_conflicts": {"fact_ids": facts, "threshold": 0.0},
-        "record_contradiction": {"a_id": facts[0], "b_id": inferences[0]},
-        "record_variant": {"a_id": facts[0], "b_id": inferences[0]},
+        "record_contradiction": {"a_id": facts[0], "b_id": facts[1]},
+        "record_variant": {"a_id": facts[0], "b_id": facts[1]},
         # Refused (the seeded facts carry no claim_kind), and that is the
         # call worth making the oracle watch: a refusal still names the ids
         # it was handed, so it still has to declare them.
@@ -362,6 +439,26 @@ async def _tool_names() -> list[str]:
     return sorted(tool.name for tool in await epimemer_mcp.list_tools())
 
 
+async def _call(server: FastMCP, tool: str, args: dict):
+    """Call `tool` naming the graph wherever the tool takes one.
+
+    Read off the tool's own schema rather than a list, so a tool added later is
+    called the way an agent would call it. Without the name every graph-scoped
+    call is refused at the gate, names no node, and passes the oracle having
+    tested nothing.
+    """
+    (registered,) = [t for t in await server.list_tools() if t.name == tool]
+    if "expected_graph" in registered.parameters.get("properties", {}):
+        args = {"expected_graph": "default", **args}
+    return await server.call_tool(tool, args)
+
+
+def _refused_at_the_graph_gate(text: str) -> bool:
+    """Whether the call stopped at the graph guard, which answers in this shape."""
+    result = json.loads(text).get("result", {})
+    return isinstance(result, dict) and {"refused", "expected_graph", "active_graph"} <= set(result)
+
+
 def _ids_in(text: str, known: list[str]) -> set[str]:
     """Which known node ids the agent could read off this response."""
     return {node_id for node_id in known if node_id in text}
@@ -434,10 +531,15 @@ async def test_any_node_id_in_a_response_is_declared(server, captured, tool):
     seeded = await _seed(server)
     captured.clear()
 
-    result = await server.call_tool(tool, _args(tool, seeded))
+    result = await _call(server, tool, _args(tool, seeded))
 
     text = result.content[0].text
-    visible = _ids_in(text, seeded["node_ids"])
+    assert not _refused_at_the_graph_gate(text), (
+        f"{tool} was refused at the graph gate, so the oracle would pass it unchecked"
+    )
+    # The graph after the call as well as before it: a write that names a node
+    # it has just created shows the agent that id too.
+    visible = _ids_in(text, [*seeded["node_ids"], *await _every_node_id(server)])
     assert captured, f"{tool} produced no response to check"
     _, meta = captured[-1]
     declared = {node.node_id for node in (meta.retrieved or [])}
@@ -511,3 +613,85 @@ async def test_retrieved_ids_are_not_serialized_to_the_agent(server, captured):
     assert meta.retrieved  # the tool did declare
     assert "retrieved" not in json.loads(result.content[0].text)["_meta"]
     assert seeded["node_ids"]  # sanity: the graph was not empty
+
+
+async def _ingest(
+    server, captured, seeded, *, segment: dict, **fields
+) -> tuple[dict, ResponseMeta]:
+    """One `store_decomposition` into the seeded document, and the meta it declared."""
+    result = await _call(
+        server,
+        "store_decomposition",
+        {
+            "metacontext_id": "the-real",
+            "document_id": seeded["document_id"],
+            "segments": [{"segment_id": seeded["segment_ids"][0], **segment}],
+            **fields,
+        },
+    )
+    _, meta = captured[-1]
+    return _parse(result)["result"], meta
+
+
+class TestStoreDecompositionDeclaresWhatItNames:
+    """An ingest response names existing nodes on two paths, and both declare.
+
+    The dashboard caught one on 21 October: a tag supplied with a description
+    it already had, whose warning names the topic node created from the tag. The
+    other is a fact stated word for word as one the graph retired, which comes
+    back as a historical twin naming the retired fact and the new one.
+    """
+
+    async def test_the_topic_node_a_warning_names_is_declared(self, server, captured):
+        seeded = await _seed(server)
+
+        result, meta = await _ingest(
+            server,
+            captured,
+            seeded,
+            segment={"facts": ["The pager rota changed"]},
+            tags=["ops"],
+            tag_descriptions={"ops": "Keeping the service running."},
+        )
+
+        (warning,) = result["warnings"]
+        assert warning["kind"] == "description_not_written"
+        assert set(warning["subjects"]) <= {node.node_id for node in meta.retrieved}
+
+    async def test_a_historical_twin_declares_both_facts(self, server, captured):
+        seeded = await _seed(server)
+
+        result, meta = await _ingest(server, captured, seeded, segment={"facts": [RETIRED_CLAIM]})
+
+        (twin,) = result["historical_twins"]
+        assert twin["historical_id"] == seeded["historical_fact_id"]
+        assert {twin["historical_id"], twin["fact_id"]} <= {node.node_id for node in meta.retrieved}
+
+    async def test_a_muted_warning_names_nothing_and_declares_nothing(self, server, captured):
+        """`retrieved` is what the response carried. A warning the graph keeps
+        from the agent puts no id in front of it, so none is declared."""
+        seeded = await _seed(server)
+        await _call(server, "configure_warnings", {"surface": False})
+
+        result, meta = await _ingest(
+            server,
+            captured,
+            seeded,
+            segment={"facts": ["The pager rota changed"]},
+            tags=["ops"],
+            tag_descriptions={"ops": "Keeping the service running."},
+        )
+
+        assert "warnings" not in result
+        assert meta.retrieved == []
+
+    async def test_an_ingest_naming_no_node_declares_an_empty_list(self, server, captured):
+        """Declared and empty, so the dashboard reads "nothing named" rather
+        than "never said"."""
+        seeded = await _seed(server)
+
+        _, meta = await _ingest(
+            server, captured, seeded, segment={"facts": ["The pager rota changed"]}
+        )
+
+        assert meta.retrieved == []

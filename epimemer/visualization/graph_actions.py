@@ -7,23 +7,10 @@ so it can be read and tested without a storage backend behind it
 (EVENT_LOG.md §3.1).
 """
 
-from collections.abc import Iterator, Mapping, Sequence
-from itertools import count
+from collections.abc import Mapping, Sequence
 
 from epimemer.core.types import DecisionKind, JudgeRef, NodeStatus
 from epimemer.visualization.events import ActionVerb, GraphActionRecorded
-
-# One sequence per process, which is one sequence per session: `session_id` is a
-# fresh uuid4 per MCP process, so a restart is a different session with its own
-# ring and its own numbering. Zero-padded so the lexical order a JSON consumer
-# gets for free is the numeric one (§4.1).
-_ACTION_IDS: Iterator[int] = count(1)
-
-
-def next_action_id() -> str:
-    """The next action id for this process."""
-    return f"{next(_ACTION_IDS):012d}"
-
 
 # A status flip reads as the act that caused it. `SUPERSEDED` is the legacy
 # value kept for rows that predate the split; it maps to `UNDETERMINED`
@@ -145,16 +132,21 @@ def summarise(
 def graph_action(
     *,
     graph: str,
+    action_id: str,
     verb: ActionVerb | DecisionKind,
     subjects: Sequence[str],
     counts: Mapping[str, int],
     judged_by: JudgeRef | None = None,
 ) -> GraphActionRecorded:
-    """One act, ready to publish. Zero counts are dropped rather than rendered."""
+    """One act, ready to publish. Zero counts are dropped rather than rendered.
+
+    `action_id` comes from the bus the act is published on
+    (`InProcessEventBus.next_action_id`), which is the session's.
+    """
     kept = {kind: n for kind, n in counts.items() if n}
     return GraphActionRecorded(
         graph=graph,
-        action_id=next_action_id(),
+        action_id=action_id,
         verb=verb,
         subjects=list(subjects),
         counts=kept,

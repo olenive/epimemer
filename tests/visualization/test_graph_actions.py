@@ -200,3 +200,17 @@ class TestActionIds:
         ids = [a.action_id for a in actions]
         assert ids == sorted(ids)
         assert len(set(ids)) == 3
+
+    async def test_each_session_numbers_its_own_acts_from_one(self):
+        """The numbering belongs to the session's bus. A second session in the
+        same process, as the test suite runs them, starts at one whatever the
+        first one did."""
+        for _ in range(2):
+            bus = create_event_bus()
+            wrapped = instrument_storage(InMemoryStorage(), bus)
+            actions, _ = _recorder(bus)
+
+            await wrapped.write_batch_tx(nodes=[Fact(content="a claim", source_id="s1")])
+            await wrapped.write_batch_tx(nodes=[Fact(content="another claim", source_id="s1")])
+
+            assert [a.action_id for a in actions] == ["000000000001", "000000000002"]

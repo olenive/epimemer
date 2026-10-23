@@ -373,7 +373,7 @@ async def _record_response(
     lists what the agent was handed.
     """
     record = RetrievalRecord(
-        record_id=next_record_id(),
+        record_id=next_record_id(deps["retrievals"]),
         tool=tool_name,
         query=input_summary,
         graph=deps["storage"].current_database,
@@ -754,8 +754,8 @@ async def memory_store_decomposition(
               judgment, and (on topics) prose saying what the topic covers.
             importance: 0.0–1.0, default 0.5. Set it only when you already know
               a node is unusually consequential or unusually disposable —
-              importance is properly judged at reflect time, and `reinforce` is
-              how it rises later.
+              importance is properly judged at reflect time, and
+              `judge_importance` is how it changes later.
             confidence: 0.0–1.0 — how well the record would back this claim up
               if it were challenged. A property of the evidence, not of how far
               you agree with the conclusion, and not of how much it matters.
@@ -1479,8 +1479,8 @@ async def memory_check_conflicts(
 
     The verdicts:
 
-      redundant   — an *active* candidate says the same thing. Keep one; no
-                    tool call is needed for the duplicate.
+      redundant   — an *active* candidate says the same thing. The action is
+                    merge_facts, or a `similarity` edge where it refuses.
       supersedes  — your new fact replaces the candidate. Call supersede_by,
                     and say which happened: it_was_wrong, or the_world_changed.
       recurs      — a *historical* candidate says what your new fact says: the
@@ -1646,7 +1646,7 @@ async def memory_merge_facts(
     is worse than a missed one and not symmetrically so: two distinct claims
     fused into one node with two independent sources read as *better supported*
     than either was, so the mistake does not lose information, it manufactures
-    agreement. When unsure, use link(type="similarity") and keep both — nothing
+    agreement. When unsure, use link(edge_type="similarity") and keep both — nothing
     downstream is harmed by two nodes saying one thing.
 
     Merges are refused, with a reason, when: any fact is not active (a
@@ -1727,7 +1727,7 @@ async def memory_merge_inferences(
 
     **Merge only what you would defend as one conclusion.** Two inferences
     agreeing may be two readings worth keeping rather than redundancy. When
-    unsure, use link(type="similarity") and keep both; corroboration lists the
+    unsure, use link(edge_type="similarity") and keep both; corroboration lists the
     partner as agreement without counting it.
 
     Merges are refused, with a reason, when: fewer than two distinct nodes are
@@ -2831,12 +2831,10 @@ async def memory_reassign_metacontext(
         because: Why the original assignment was wrong. Required.
         assign: A metacontext id to put in its place, applied in the same call.
             **Use this whenever the claim belongs in another metacontext.**
-            Withdrawing and then linking passes through a state where the node
-            states no metacontext at all, and strands it there if the second
-            call never happens. A withdrawal that would leave no metacontexts is
-            refused outright: a node without a metacontext shares a metacontext
-            with nothing, so it is never compared, never merged, and returned by
-            no scoped search.
+            Withdrawing first and linking later is not a route: a withdrawal
+            that would leave no metacontexts is refused outright, because a
+            node without a metacontext shares a metacontext with nothing, so it
+            is never compared, never merged, and returned by no scoped search.
         expected_graph: The graph you believe you are working in. The active graph
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
@@ -3164,7 +3162,9 @@ async def memory_find_nodes(
     about billing. Every returned node carries its `metacontexts` label.
 
     Args:
-        sourced_from: A document/entity id or name — return its `sourced_from` nodes.
+        sourced_from: A document id or its `source` name: return the nodes
+            extracted from it. A publisher is linked to documents, not to nodes,
+            so it is not a target here.
         tagged_with_topic: A Topic id or name — return nodes tagged with that concept.
         node_types: Filter to "topic"/"fact"/"inference".
         status: Node status to list (default "active").
@@ -3211,8 +3211,9 @@ async def memory_list_sources(
     """Discover the distinct source/origin nodes in the active graph.
 
     Returns the documents nodes are `sourced_from`, plus publishing entities,
-    each with how many nodes reference it — so you can see what exists before
-    find_nodes(sourced_from=...).
+    each with how many nodes reference it, so you can see what exists. The
+    documents are what find_nodes(sourced_from=...) takes; a publisher is
+    linked to documents rather than to nodes.
 
     Args:
         expected_graph: The graph you believe you are working in. The active graph

@@ -3,15 +3,12 @@
 A record of measurements, taken with `scripts/bench.py` (`make bench`) and
 `scripts/corpus_measure.py`.
 
-Superseded runs are deleted rather than kept, and `git log` holds them if a
-comparison is ever wanted.
+Superseded runs are deleted rather than kept; `git log` holds them.
 
 **When a change moves one of these numbers, measure before and after on the
 same machine in the same session, then replace the numbers here with the new
-ones.** Machine state matters more than it looks: a run taken against a
-previously recorded baseline on a busier box produced a 40% discrepancy on a
-metric the change could not touch. A same-session pair with unchanged controls
-is trustworthy; a cross-run comparison is not.
+ones.** Machine state moves results by tens of percent, so a same-session pair
+with unchanged controls is trustworthy and a cross-run comparison is not.
 
 ## How to read these
 
@@ -67,20 +64,17 @@ to rank the operations and not enough to trust a third digit.
 | **`reflect`** | **~320,000** | **~26,000** | 0.99 / 1.40 |
 | ingest | not reachable | not reachable | flat |
 
-Nothing here fails at a size anyone is running. `reflect` is the first to go
-and SurrealDB is the limiting backend.
+`reflect` is the first to go and SurrealDB is the limiting backend.
 
 **Fit over at least three sizes spanning 4×, or report the measurements
 without a crossing.** A two-point fit reads fixed setup cost as curvature,
-inflates the exponent and understates the crossing badly: two points once put
-`reflect` at an exponent of 1.8 and a crossing near 7,000 for code that three
-points measured at 0.99.
+inflates the exponent and understates the crossing.
 
 **`reflect` is quadratic in principle and does not look it yet.** Both pair
-phases compare every pair, so the work really is O(N²); at these sizes it
-happens inside two matrix products whose constant is small enough that the
-linear costs (reading the vectors, walking the edges) still dominate. Expect
-the exponent to climb toward 2 well beyond 8,000 nodes.
+phases compare every pair, so the work is O(N²); at these sizes it happens
+inside two matrix products whose constant is small enough that the linear
+costs (reading the vectors, walking the edges) still dominate. Expect the
+exponent to climb toward 2 well beyond 8,000 nodes.
 
 **The crossings are time only.** `reflect` allocates about 580 bytes per
 *surviving* pair. The synthetic corpus produces almost none, so these figures
@@ -123,20 +117,17 @@ payload.
 At 4,000 nodes `reflect` is 2,032 ms, of which 1,840 ms is inside 87 queries,
 21 ms each, because those queries move whole tables: 894 ms for the two
 `get_embeddings_for_items` calls that fetch every fact and topic vector,
-430 ms of edges, 349 ms of nodes. That is close to irreducible with this
-design: pairwise comparison needs the vectors, and they are 384 floats each.
-Reducing it means moving the comparison to the server or keeping vectors
-across calls, both larger changes than anything so far, and neither worth
-making while the crossing sits at about 26,000 nodes.
+430 ms of edges, 349 ms of nodes. Pairwise comparison needs the vectors, 384
+floats each, so reducing this means moving the comparison to the server or
+keeping vectors across calls, neither worth doing while the crossing sits at
+about 26,000 nodes.
 
-**Memoising `reflect`'s repeated node reads is not built.** Several phases
-issue the same untyped scan of the active nodes; each is one batched call, so
-the round-trip count stays flat while the payload multiplies, and it is not
-what binds the crossing. If it is built: the memo is safe only because
-`reflect` writes nothing (`TestReflectWritesNothing`); it must be lazy rather
-than a prefetch, so each fetch stays attributed to the phase that first needs
-it in the pipeline strip; and it belongs on the storage handle rather than in
-a parameter on every phase function.
+Several phases issue the same untyped scan of the active nodes, one batched
+call each, so the payload multiplies while the round-trip count stays flat;
+it does not bind the crossing. A memo for it is safe only because `reflect`
+writes nothing (`TestReflectWritesNothing`), must be lazy so each fetch stays
+attributed to the phase that first needs it, and belongs on the storage
+handle.
 
 ### What the soundness check and boundary proposals add to `reflect`
 
@@ -148,18 +139,14 @@ graph with that one phase stubbed out:
 | 1,000 | **10.1 ms** (of 95.7) | **9.7 ms** (of 101.4) |
 | 3,000 | **27.7 ms** (of 295.4) | **25.6 ms** (of 324.2) |
 
-Both linear, and about 10% of a call each at both sizes. Nearly all of it is
-batched reads neither can avoid, since the graph measured carries no
-intervals at all, so the soundness check finds no dated premises and the
-boundary phase finds no dated successions. That is the shape to expect: the
-feature is sparse by design, and the common case is a phase paying its floor
-and reporting nothing.
+Both linear, and about 10% of a call each at both sizes, nearly all of it
+batched reads: the graph measured carries no intervals, so both phases pay
+their floor and report nothing, which is the common case.
 
 **Ordering the reads is worth a third of the soundness check.** Fetching
 every premise fact and then discarding the undated ones cost 41.0 ms at 3,000
 nodes; reading validity first and fetching only the premises that can still
 form a pair costs 27.7 ms. On an undated graph no nodes are fetched at all.
-Narrow before you fetch, not after.
 
 ### What retrieval reinforcement costs
 
@@ -191,29 +178,24 @@ returns, localhost SurrealDB 3.0.5 and the in-memory store, mock embeddings:
 
 The `search` column is the plain call, without corroboration.
 
-**Two costs, and they are separable.** With no similarity edges at all it is
-about 3× `review_labels_for` on SurrealDB, which is round-trips: twelve
-batched queries against that function's four. With edges it is the fan-out:
-the walk leaves the result set for each node's similarity neighbourhood, and
-nothing bounds how large that is. At degree 10 it is nearly the whole call.
+**Two costs, and they are separable.** With no similarity edges it is about
+3× `review_labels_for` on SurrealDB, which is round-trips: twelve batched
+queries against that function's four. With edges it is the fan-out into each
+node's similarity neighbourhood, which nothing bounds; at degree 10 it is
+nearly the whole call.
 
-**Default-off rests on the round-trip cost alone.** The without-edges column
-is still several times every other annotation, so
-`include_corroboration=False` and the cost is stated in the tool description.
-The similarity edges in this table are synthetic, assigned at a fixed degree
-by `--similarity-degree`. Real `similarity` edges are written one judgment at
-a time by `apply_reflection(similarities=[…], verdict="one_claim")`, so real
-degree accumulates at the rate pairs are judged, far below 10 for a long
-while. The companion `assessed` edge, written for both verdicts and so
-accumulating faster, costs corroboration nothing because corroboration does
-not read it; if this cost ever climbs, `assessed` in the neighbourhood walk
-would be a bug, not a workload. Re-measure against real degrees when a graph
-has a few dozen judged pairs.
+**Default-off rests on the round-trip cost alone**: the degree-0 column is
+still several times every other annotation, so `include_corroboration` is
+false by default and the cost is stated in the tool description. The
+similarity edges here are synthetic (`--similarity-degree`); real ones are
+written one `one_claim` verdict at a time, so real degree stays far below 10
+for a long while. Corroboration does not read `assessed` edges, so if this
+cost climbs, `assessed` in the neighbourhood walk is a bug. Re-measure against
+real degrees when a graph has a few dozen judged pairs.
 
-The lever, if it is ever wanted on the default path: the six typed
-neighbourhood queries collapse into one untyped `get_edges_for` per
-direction, trading round-trips for bytes. Indicated by the degree-0 column
-and contraindicated by the degree-10 one, which is why it was left alone.
+Collapsing the six typed neighbourhood queries into one untyped
+`get_edges_for` per direction trades round-trips for bytes: the degree-0
+column argues for it and the degree-10 one against.
 
 ---
 
@@ -237,16 +219,10 @@ graphs:
 | topic | 150 | 20 | 38 | 69 | **0** |
 | **segment** | **108** | **148** | **305** | **496** | **12 (11.1%)** |
 
-Nodes have 3× headroom at their worst, and no amount of graph growth changes
+Nodes have 3× headroom at their worst, and graph growth does not change
 that: a fact is one sentence by construction. Segments cross the window
-routinely, and it does not matter: segments are never embedded. They are
-searched by BM25 alone, which indexes the whole field, and that is precisely
-why they answer *where did I read that?* well.
-
-The rule this taught: a measured quantity is not yet a measured consequence.
-Before a distribution becomes a cost, something has to be shown to pay it.
-The precondition lives on `EmbeddingRecord.item_id`, where anyone adding
-segment embedding will meet it.
+routinely and are never embedded; BM25 indexes the whole field. Anyone adding
+segment embedding meets this precondition on `EmbeddingRecord.item_id`.
 
 ### `reflect`'s surviving-pair rate on real prose is about 0.01%
 
@@ -260,11 +236,10 @@ so this is the distribution `reflect` sees:
 | real facts, `petritype-server` | 73 | 2,628 | 0 | **0.0%** | 0.160 | 0.720 |
 | real topics, `notes` | 112 | 6,216 | 1 | 0.0161% | 0.153 | 0.707 |
 
-Read the distribution, not the rate. Four survivors is too few to trust as a
-rate, but 38,226 pairs is plenty to locate the distribution, and it sits
-nowhere near the threshold: the median real fact pair scores 0.164, and 99.9%
-stay under 0.683. At about 580 bytes per surviving pair that projects to
-about 210 pairs and 0.1 MB at 2,000 facts, 5,200 pairs and 3 MB at 10,000.
+Read the distribution, not the rate: four survivors is too few to trust as a
+rate, but 38,226 pairs locate the distribution, and it sits nowhere near the
+threshold. At about 580 bytes per surviving pair that projects to about 210
+pairs and 0.1 MB at 2,000 facts, 5,200 pairs and 3 MB at 10,000.
 
 Three things this does not establish:
 
@@ -290,9 +265,7 @@ corpus it was taken over is recorded beside it.
 
 ### Widening the vocabulary does not produce prose
 
-The obvious way to make a random corpus more realistic is a bigger word bag.
-It steps straight over real prose. 400 sentences, the real model, the fact
-threshold:
+400 sentences, the real model, the fact threshold:
 
 | corpus | survivors / 79,800 | rate | median pair |
 |---|---|---|---|
@@ -304,14 +277,12 @@ threshold:
 | this repository's own `dev-docs` prose | 1 / 46,056 | 0.0022% | 0.130 |
 
 There is nothing between 1.13% and zero, and real prose sits at about 0.01%.
-What survives a pair scorer is shared phrasing, and a random generator never
-restates anything: a 17-word bag survives because every sentence is a
-near-copy of every other, and a wide bag survives at nothing because no
-sentence is a copy of any. Real prose survives for a third reason, mostly
-unrelated claims plus a few genuine restatements, and a vocabulary dial cannot
-produce that. The same defect appears one level up: a corpus drawn from six
-domains of subject, verb and qualifier phrases still survived at 0.48%,
-because two sentences sharing a subject and a verb differ only by a qualifier.
+What survives a pair scorer is shared phrasing: a narrow bag makes every
+sentence a near-copy of every other, a wide bag makes none a copy of any, and
+real prose is mostly unrelated claims plus a few genuine restatements. A
+corpus drawn from six domains of subject, verb and qualifier phrases still
+survived at 0.48%, because two sentences sharing a subject and a verb differ
+only by a qualifier.
 
 ### The diverse corpus, and planting
 
@@ -328,10 +299,9 @@ would put it. 1,200 facts, real embeddings:
 
 Real facts in the `notes` graph sit at 0.0105%, so the diverse base is on the
 right side of real prose. The planting is exact: 2,700 planted gives 2,712
-survivors, 80 gives 81, one clique of 50 (1,225 planted) gives 1,226. The
-generator contributes a residue in the single digits and everything else is
-an input, so a survivor count can be chosen before the run rather than
-discovered afterwards.
+survivors, 80 gives 81, one clique of 50 (1,225 planted) gives 1,226, so the
+generator contributes a residue in the single digits and a survivor count can
+be chosen before the run.
 
 ### What a near-duplicate corpus costs
 
@@ -344,11 +314,9 @@ discovered afterwards.
 
 **A thousandfold more surviving pairs costs 5%.** The extra lands in
 `contradiction_detection` (57 to 68 ms); `boundary_proposals` and
-`inference_merge_nomination` get cheaper, because planting replaces facts
-rather than adding them and a planted corpus holds fewer distinct claims at
-the same node count. The nomination cap is why the alarm does not fire:
-survivors are truncated to `max_nominations` before anything downstream sees
-them.
+`inference_merge_nomination` get cheaper, because planting replaces facts and
+a planted corpus holds fewer distinct claims. Survivors are truncated to
+`max_nominations` before anything downstream sees them.
 
 ### Real embeddings end to end, and embedding on its own
 
@@ -369,8 +337,8 @@ Embedding on its own, texts per second, 12-word sentences:
 | `mock-384` | 37,400 | 38,500 | 38,200 |
 | `all-MiniLM-L6-v2` | **174** | 2,300–5,800 | 2,300–5,800 |
 
-Batching is worth 14× to 34×, and it is all won by 32. The mock is flat, as a
-hash should be, which is what makes it the right baseline.
+Batching is worth 14× to 34×, all of it won by 32. The mock is flat, which
+makes it the right baseline.
 
 ### Where `reflect`'s time goes, and what a networked backend changes
 
@@ -394,17 +362,13 @@ share. 2,400 nodes, templated, mock embeddings, recorded 2026-08-30, before
 
 Whole-operation ratios at this size: ingest 6.0×, `reflect` 4.8×, and reading
 the fact vectors 12.8× (26 ms to 334 ms). What grows over a network is
-`contradiction_detection`; what shrinks is every CPU-bound phase. The number
-to take from a phase table is which phases move, not what any one of them
-costs.
+`contradiction_detection`; what shrinks is every CPU-bound phase.
 
 **A phase share is evidence about the shape of a run, not about a function.**
-A single run once charged 58 ms to `soundness_check` on a near-duplicate
-corpus against 25 ms undated, reproducible across three seeds; timed on its
-own, `find_unsound_inferences` costs 22.8 ms on the plain corpus and 23.0 ms
-on the duplicate one. The difference was the garbage collector, and where it
-lands depends on what the process has already allocated. Where a share is
-surprising, time the function on its own before believing it.
+A run charged 58 ms to `soundness_check` on a near-duplicate corpus against
+25 ms undated, across three seeds, while `find_unsound_inferences` timed on
+its own costs 22.8 ms and 23.0 ms: the difference was the garbage collector.
+Where a share is surprising, time the function on its own.
 
 ### A corpus that carries intervals, and what the soundness check really costs
 
@@ -418,7 +382,7 @@ own, 1,200 facts and 600 inferences:
 | dated, 1,200 dated premises, two per inference | **46.4 ms** |
 
 The early-out is worth half the phase: an undated graph fetches no premise
-nodes at all, and most of every graph is undated and always will be.
+nodes at all.
 
 The quadratic part, holding the dated fact count at 1,200 and varying how
 many of them one inference rests on:
@@ -433,8 +397,7 @@ many of them one inference rests on:
 
 39× the comparisons buys 1.7× the overhead. A premise pair costs about 0.8 µs
 against a 20 µs per-premise fetch, so the fetch dominates until an inference
-carries a couple of hundred dated premises. The constant is the thing to
-watch, not the exponent.
+carries a couple of hundred dated premises.
 
 ---
 
@@ -453,35 +416,28 @@ segment a 40-word one; both corpora are indexed.
 | 10,000 | 10,000 | 20,000 | **19 s** (13–24 s) | 59 ms |
 
 Roughly 0.5 to 1 ms per indexed document, with a spread at 10,000 wider than
-the gap between the first two sizes, so treat the shape as "seconds, growing
-with the graph" rather than a clean linear law. `IF NOT EXISTS` means it
-happens once per graph. A graph in the tens of thousands makes `connect()`
-block for tens of seconds with nothing on screen; `ISSUES.md` carries the
-trigger, and the fix is progress reporting or an out-of-band build, never
-skipping the index, which would leave `text_search` silently returning
-nothing.
+the gap between the first two sizes: "seconds, growing with the graph" rather
+than a clean linear law. It happens once per graph; `ISSUES.md` carries the
+trigger and the fix.
 
 ---
 
 ## Before optimising anything here
 
-**Profile first.** Every performance fix in this project so far has
-overturned the cause its issue predicted. The recipe: seed via `bench._seed`,
-wrap one `await reflect(...)` in `cProfile`, sort by cumulative time.
+**Profile first**: seed via `bench._seed`, wrap one `await reflect(...)` in
+`cProfile`, sort by cumulative time.
 
 On a networked backend, **count round-trips before timing anything**: wrap
-`SurrealDBStorage._query` in a counter and attribute each call to its caller.
-It is cheap enough to run at 400 nodes. Attribute to the reflect phase as well
-by subscribing to the pipeline event bus; the phase boundaries are exact
-because `reflect` is sequential, and it is what showed that the enrichment
-material gather is billed to `split_detection`, whichever phase asks for it
-first.
+`SurrealDBStorage._query` in a counter and attribute each call to its caller,
+cheap enough at 400 nodes. Attribute to the reflect phase as well by
+subscribing to the pipeline event bus; the phase boundaries are exact because
+`reflect` is sequential. The enrichment material gather is billed to
+`split_detection`, whichever phase asks for it first.
 
 **Then check the query plan, not just the call count.** A call count says
-which site is hot; `EXPLAIN` says whether each call is O(1) or O(table). The
-two biggest wins so far were both plan problems no round-trip count would have
-found. `EXPLAIN` output is a nested `children` tree; walk it for `IndexScan`
-and the `index` attribute, and treat no index attribute as a full scan.
+which site is hot; `EXPLAIN` says whether each call is O(1) or O(table).
+`EXPLAIN` output is a nested `children` tree; walk it for `IndexScan` and the
+`index` attribute, and treat no index attribute as a full scan.
 
 ---
 
@@ -503,7 +459,6 @@ and the `index` attribute, and treat no index attribute as a full scan.
 - **`query_changes` with lifecycle episodes.** The window predicate adds two
   array-filter scans per row on top of the existing full scan, on SurrealDB.
   Correct, unindexed, unmeasured, and probably irrelevant at current sizes.
-  Act on a profile, not on this note.
 
 ---
 
@@ -542,23 +497,21 @@ uv run python scripts/corpus_measure.py \
 ```
 
 `scripts/corpus_measure.py`'s docstring says why it reads without opening a
-storage backend. The numbers are specific to the graphs measured and do not
-travel, which is why every table names its corpus and size.
+storage backend. The numbers are specific to the graphs measured, which is why
+every table names its corpus and size.
 
 ### Do supplied priors carry a reason?
 
-Whether tool guidance actually produces a `confidence_basis`, given it is
-asked for rather than enforced. Over both real graphs, every rated
-non-default node carried one (163 of 163), and no node written since
-confidence became optional sits at a rated `0.5`: they are stored absent
-instead, which is the ladder's own instruction and what makes absence
-informative. So the enforcement fallback stays unbuilt.
+Whether tool guidance produces a `confidence_basis`, which is asked for
+rather than enforced. Over both real graphs, every rated non-default node
+carried one (163 of 163), and no node written since confidence became
+optional sits at a rated `0.5`: they are stored absent instead. So the
+enforcement fallback stays unbuilt.
 
 ```bash
 uv run python scripts/corpus_measure.py \
   --database notes,petritype-server --skip-survival
 ```
 
-`confidence_basis` is stored in `node.metadata`, not beside the number in
-`value`; querying `value.confidence_basis` returns a clean 0% that looks like
-a finding. Asking the store the wrong question is not a null result.
+`confidence_basis` is stored in `node.metadata`; querying
+`value.confidence_basis` returns a clean 0% that looks like a finding.

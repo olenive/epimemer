@@ -1,7 +1,7 @@
 # Proposed features
 
-A backlog of proposals, none of them built: what each is, why, roughly what it
-costs and what has to be true before it starts. Defects go in `ISSUES.md`.
+Proposals not yet built: what each is, why, roughly what it costs and what
+has to be true before it starts. Defects go in `ISSUES.md`.
 
 ---
 
@@ -10,17 +10,16 @@ costs and what has to be true before it starts. Defects go in `ISSUES.md`.
 ### Sharing a graph between users
 
 **What.** A way for one user to grant another read, or read and write, access
-to a named graph and nothing else: the project's own development history, for
-example, is kept in a graph its maintainers can read and its users cannot.
+to a named graph and nothing else.
 
 **Why.** A graph is a shared understanding, and today it can be shared only by
 sharing a database.
 
 **Decisions taken.** Two tiers. The read-only tier is the graph bundle:
 `epimemer graphs export`, hand the file over or publish it, they run
-`epimemer graphs import`. That is what the project's own development history
-needs, and it needs no notion of a user. The live tier, people working on one
-graph together, is parked until a team needs it, with the shape decided:
+`epimemer graphs import`, and it needs no notion of a user. The live tier,
+people working on one graph together, waits until a team needs it, with the
+shape decided:
 
 - The server is a stdio process the user runs, so there is no client to
   authenticate: whoever launched it is the user. Any Epimemer-level user or
@@ -85,8 +84,7 @@ would meet the trap the design rules name, numbers compared as text sorting
 wrongly. `TIMELINES.md` keeps this cheap by forbidding anything that assumes a
 date where a number would do.
 
-**Blockers.** A graph that needs one. It was deliberately left out of the
-`TIMELINES.md` build.
+**Blockers.** A graph that needs one.
 
 ---
 
@@ -134,7 +132,7 @@ while the dashboard shows the graph being built, searched, corrected and
 reflected over. It is the introduction for a new user and the thing to put on a
 screen in a presentation.
 
-**Decisions taken with the owner.**
+**Decisions taken.**
 
 - The decompositions are a fixture shipped with the package, so the demo runs
   the same every time with no model in the loop. A companion prompt runs the
@@ -188,10 +186,10 @@ first.
   source it describes. It is also what a source-discredit sweep needs: when a
   document turns out fabricated, every prior derived from it overstates, and
   nothing can sweep per source today.
-- **Cross-metacontext retrieval composition.** When a query straddles metacontexts
-  ("compare real AI with sci-fi AI"), how should results from several metacontexts
-  compose? Search takes a list of metacontexts today; composition beyond the union is
-  undesigned.
+- **Cross-metacontext retrieval composition.** When a query straddles
+  metacontexts ("compare real AI with sci-fi AI"), how should results from
+  several metacontexts compose? `search` takes a list of metacontexts and
+  returns the union; anything beyond that is undesigned.
 
 ---
 

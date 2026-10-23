@@ -30,6 +30,12 @@ export interface FilterableMark {
   start: number | null;
   end: number | null;
   facets: Facets;
+  /**
+   * The mark is linked to nodes and the current node set holds none of them,
+   * so its node facets are empty because the nodes are elsewhere rather than
+   * because it has nothing to do with nodes.
+   */
+  linkedNodesAbsent: boolean;
 }
 
 export interface TimeRange {
@@ -133,6 +139,10 @@ export const matchesQuery = (mark: FilterableMark, query: string): boolean =>
  * A mark with no values at all for the facet is *not* excluded: an unlinked
  * timepoint knows nothing about node types, and hiding it would make a filter
  * that narrows the view also delete data that the filter cannot speak about.
+ *
+ * A mark whose linked nodes are all outside the node set is excluded. Every
+ * facet tested here is a node's, and the panel holds none of its nodes, so it
+ * cannot be shown to have the status, type or metacontext asked for.
  */
 const matchesFacet = (
   mark: FilterableMark,
@@ -141,7 +151,7 @@ const matchesFacet = (
 ): boolean => {
   if (allowed === null) return true;
   const values = valuesFor(mark, field);
-  if (values.length === 0) return true;
+  if (values.length === 0) return !mark.linkedNodesAbsent;
   return values.some((value) => allowed.has(value));
 };
 

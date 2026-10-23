@@ -99,10 +99,10 @@ describe("applyReflectCounterEvent", () => {
 });
 
 describe("rendering", () => {
-  it("shows a dash and a muted style until anything is known", () => {
+  it("shows a question mark and a muted style until anything is known", () => {
     const state = unknownReflectState();
 
-    expect(reflectBadgeLabel(state)).toBe("reflect —");
+    expect(reflectBadgeLabel(state)).toBe("reflect ?");
     expect(reflectBadgeClass(state)).toContain("text-content-muted");
     expect(reflectBadgeTitle(state)).toContain("not yet known");
   });

@@ -82,6 +82,46 @@ describe("the log rail", () => {
   });
 });
 
+/**
+ * The header holds a dozen controls, and at a 1600 px viewport their natural
+ * width was 1803 px: Log, the hub status, the colour picker and the theme
+ * button sat off the right edge, out of reach behind `overflow-hidden`. jsdom
+ * does no layout, so what is checked is the markup that decides it: every row
+ * may wrap, and no select may take the width of its longest option.
+ */
+describe("the header", () => {
+  const header = (): HTMLElement => {
+    const el = doc.querySelector("header");
+    if (el === null) throw new Error("index.html has no header");
+    return el;
+  };
+
+  it("wraps onto a second line rather than running off the edge", () => {
+    expect(header().className).toContain("flex-wrap");
+  });
+
+  it("lets each group of controls wrap too", () => {
+    // A group that cannot wrap is as wide as all its controls together, and
+    // the header can only move it, whole, onto the next line.
+    const groups = [...header().children].filter(
+      (el) => el.tagName === "DIV" && el.children.length > 1,
+    );
+    expect(groups.length).toBeGreaterThan(0);
+    for (const group of groups) {
+      expect(group.className, group.outerHTML.slice(0, 80)).toContain("flex-wrap");
+    }
+  });
+
+  it("caps every select, which would otherwise be as wide as its longest option", () => {
+    // A session label carries the backend, the graph and the pid, and a
+    // retrieval label carries the tool's arguments.
+    const uncapped = [...header().querySelectorAll("select")]
+      .filter((select) => !/\bmax-w-/.test(select.className))
+      .map((select) => select.id);
+    expect(uncapped).toEqual([]);
+  });
+});
+
 describe("elements the panels bind to", () => {
   const REQUIRED = [
     "split-container",
@@ -195,5 +235,47 @@ describe("colour tokens", () => {
     ]);
     expect(offenders('class="bg-white"')).toEqual(["bg-white"]);
     expect(offenders('class="bg-surface-chrome text-content-muted"')).toEqual([]);
+  });
+});
+
+/**
+ * User-visible text uses a comma, a colon or a second sentence, never an
+ * em-dash. Comments are not checked: nothing renders them.
+ *
+ * A line of a module counts as code unless it opens as a comment, and a
+ * trailing comment after code is cut off first, so what is left is what can
+ * reach the screen: string literals, template literals and markup.
+ */
+describe("em-dashes in what the dashboard shows", () => {
+  const EM_DASH = "\u2014";
+  const modules = import.meta.glob("./*.ts", { query: "?raw", import: "default", eager: true }) as Record<
+    string,
+    string
+  >;
+
+  const codeLines = (source: string): string[] =>
+    source
+      .split("\n")
+      .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+      .map((line) => line.replace(/\s\/\/\s.*$/, ""))
+      .filter((line) => line.includes(EM_DASH));
+
+  it("leaves none in the markup outside its comments", () => {
+    const visible = indexHtml.replace(/<!--[\s\S]*?-->/g, "");
+    expect(visible.split("\n").filter((line) => line.includes(EM_DASH))).toEqual([]);
+  });
+
+  it.each(
+    Object.keys(modules).filter((name) => !name.endsWith(".test.ts")),
+  )("leaves none in the strings of %s", (name) => {
+    expect(codeLines(modules[name])).toEqual([]);
+  });
+
+  it("still finds one when there is one", () => {
+    // The filter is the guard; a mistake in it would pass everything.
+    expect(codeLines('  label: "a \u2014 b",')).toHaveLength(1);
+    expect(codeLines("  // a \u2014 b")).toEqual([]);
+    expect(codeLines(" * a \u2014 b")).toEqual([]);
+    expect(codeLines('  f("a"); // a \u2014 b')).toEqual([]);
   });
 });

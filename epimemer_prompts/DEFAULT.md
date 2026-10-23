@@ -46,19 +46,15 @@ visualisation hub, the process the dashboard connects to.
 - **Look at the passages before you decompose.** `doubts` in the `segment`
   result means the server is unsure of its own cut; when it is wrong, re-cut
   with `resegment` first. See *Cutting a document into passages* below.
-- **Say which graph you mean, on every call.** See *Which graph* below; it
-  applies to reads as much as to ingest.
-- **`metacontext_id` is required.** Name the metacontext these claims are asserted
-  in: `the-real` for real-world claims (the conventional id, and the ordinary
-  answer), or another metacontext for fiction, a particular source, or a
-  perspective (see Metacontexts below). The metacontext must already exist here. It
-  is required because a claim has to say which world it is about: a node with
-  no metacontext is one nobody spoke for, and nothing compares, merges or returns
-  it. One metacontext per call, so split a mixed document into two.
+- **`metacontext_id` is required.** Name the metacontext these claims are
+  asserted in: `the-real` for real-world claims (the conventional id, and the
+  ordinary answer), or another metacontext for fiction, a particular source,
+  or a perspective (see Metacontexts below). It must already exist in this
+  graph. One metacontext per call, so split a mixed document into two.
 - An entry may carry an `importance` prior (`{"content": ..., "importance":
   0.8}`) when you already know it is unusually consequential or unusually
-  disposable. Usually leave it alone: importance is properly judged at reflect
-  time, when the surrounding graph exists to judge it against.
+  disposable. Usually leave it alone: importance is judged at reflect time,
+  against the surrounding graph.
 - **A topic entry may carry a `description`** (`{"content": "validity", "description":
   "When a claim was true, per source."}`), prose saying what the topic covers,
   beside the `content` the graph joins on. Topics only; it is an error on a fact
@@ -71,20 +67,17 @@ visualisation hub, the process the dashboard connects to.
   `tag_descriptions={"dev-session-2026-09-11": "The 11 September 2026
   development session."}`. The refusal names the tags still needing a line, so
   add them and resend; nothing was written. Only *new* tags need one, and a
-  call that creates none needs no dict. You are the only party that knows what
-  a tag means at the moment you mint it, which is why this refuses rather than
-  warns: a warning would be read by the next agent, not by you. Without a
-  description a tag is embedded on its own characters, so two dated sessions
-  score 0.99 against each other and every reflect asks you to merge two
-  different days of work. An entry for a tag that is already described is not
-  written and comes back in `warnings`: changing a live description is
-  enrichment, through `apply_reflection`. An entry for an existing tag that has
-  no description yet *is* written, which is how a graph fills in as it is used.
-  The response counts the two separately: `tags_created` is how many names this
-  call minted, `tags_described` is how many existing tags had no description and
-  have one now. A call that mints three new tags reports `tags_created: 3` and
-  `tags_described: 0`, so read the second as *no existing tag needed filling in*
-  rather than as *your descriptions were dropped*.
+  call that creates none needs no dict. Write a line that tells the tag apart
+  from its neighbours: without one a tag is embedded on its own characters, so
+  two dated sessions score 0.99 against each other and every reflect asks you
+  to merge two different days of work. An entry for a tag that is already
+  described is not written and comes back in `warnings`: changing a live
+  description is enrichment, through `apply_reflection`. An entry for an
+  existing tag that has no description yet *is* written. `tags_created` counts
+  the names this call minted and `tags_described` the existing tags that had
+  no description and have one now, so `tags_described: 0` beside new tags
+  means *no existing tag needed filling in*, not *your descriptions were
+  dropped*.
 - **Give every fact a `claim_kind`** (`{"content": ..., "claim_kind":
   "state"}`). Facts only; it is an error on a topic or an inference. Ask what
   kind of thing is being claimed:
@@ -93,21 +86,18 @@ visualisation hub, the process the dashboard connects to.
   - `"event"`: something that happened on an occasion. *"Labour won the
     election"*, *"the city was renamed"*.
 
-  This is the one judgment nothing downstream can make. Two documents years
-  apart yield near-identical sentences, and collapsing them is right for a
-  state (one condition, two periods) and fabricates history for an event (two
-  elections become one twenty-seven-year victory). Only you have the
-  document: the tense, the sentences either side, whether *"the election"* is
-  a particular one. **Omit it when you cannot tell**; the fact then never
-  merges, which costs less than a guess.
+  Nothing downstream can make this judgment: merging two near-identical
+  sentences is right for a state (one condition, two periods) and fabricates
+  history for an event (two elections become one). Only you have the tense
+  and the sentences either side. **Omit it when you cannot tell**; the fact
+  then never merges, which costs less than a guess.
 
 ### Cutting a document into passages (segment, resegment)
 
-A passage is what a reader is later shown as the context of a claim: every
-node you decompose records the passage it came from, and `search` returns
-matching passages under `segments`. A passage spanning two subjects muddies
-every claim in it; one that cuts a sentence off from its qualifier can lose a
-hedge, a date or a speaker. Nothing revisits a cut once claims cite it.
+Every node you decompose records the passage it came from, and that passage
+is what a reader is later shown as the claim's context. A passage spanning two
+subjects muddies every claim in it; one that cuts a sentence off from its
+qualifier can lose a hedge, a date or a speaker.
 
 - **Read the cut before you decompose.** `segment` cuts by rule, at blank
   lines by default, and its `doubts` say when the server suspects its own cut:
@@ -153,23 +143,15 @@ server is not on and it is refused too, with the graph you are actually on
 so you can `use_graph` and retry. If you do not know the name, `list_graphs`
 says which one is active.
 
-**Do not paste the name out of a refusal.** The check is worth something only
-because your expectation and the server's state are arrived at
-independently. Say which graph you *meant*, from what the user asked for or
-from the `use_graph` you made, and let the refusal tell you when the two
-differ.
+**Do not paste the name out of a refusal.** Say which graph you *meant*, from
+what the user asked for or from the `use_graph` you made, and let the refusal
+tell you when the two differ: the check works only because your expectation
+and the server's state are arrived at independently.
 
-**Why it matters more than it looks.** The active graph is process state and
-is **not remembered across a client reconnect**: a session that called
-`use_graph` an hour ago can come back somewhere else, with nothing to tell
-you. A write that lands in the wrong graph succeeds in every other respect. A
-*read* from the wrong graph is worse: it returns a plausible answer you then
-reason from and report, and leaves nothing behind for anyone to find later.
-
-Do not assume a failure means the graph is fine. *Node not found* from
-`merge_facts` may mean the ids are from the graph you meant and you are not
-in it; `apply_reflection` does not fail at all in that case, it silently
-applies nothing.
+The active graph is **not remembered across a client reconnect**, so a
+session can come back in another graph with nothing to tell you, and a read
+there returns a plausible answer you would reason from and report.
+`expected_graph` is what turns that into a refusal.
 
 Four tools take no `expected_graph`, because each is *about* graphs rather
 than in one: `list_graphs`, `use_graph`, `delete_graph`, `viz_status`.
@@ -189,14 +171,12 @@ from metacontexts, which change retrieval scope; these do not.
 - **A tag becomes a topic node.** Pass `tags=[...]` to `store_decomposition`
   (document level) or per node via `{"content": ..., "tags": [...]}`. A *tag*
   is the name you pass; it becomes (or reuses, by name up to case and
-  separators, reported in `tags_resolved_to`) a **Topic**, the
-  topic node created from that tag, and a `tagged_with_topic` edge links the
-  node to it. That topic node joins the metacontext you are ingesting into, so
-  a name ends up standing in every metacontext it is used from and a scoped
-  read returns it. So consolidating them is just topic merge. The edge is a
-  retrieval index
-  for `find_nodes` and carries no evidential weight: `supports` is the edge
-  corroboration reads. There are no `key=value` tags: a relationship
+  separators, reported in `tags_resolved_to`) a **Topic**, the topic node
+  created from that tag, and a `tagged_with_topic` edge links the node to it.
+  That topic node joins the metacontext you are ingesting into, so a name ends
+  up standing in every metacontext it is used from. The edge is a retrieval
+  index for `find_nodes` and carries no evidential weight: corroboration
+  never reads it. There are no `key=value` tags: a relationship
   dimension is an **edge** (`link(a, b, relation="spoken_by")`).
 - **Relations are open vocabulary.** `link(src, dst, relation="published_by",
   kind="attribution")` coins any relationship you need. `kind` is
@@ -210,21 +190,19 @@ from metacontexts, which change retrieval scope; these do not.
   your two nodes, so read it rather than trying a second type. Where the
   relationship is one the engine does not define, coin it with `relation`.
 - **Say what a label means here, once, with `describe_relation(name,
-  description)`.** The same word means different things in different graphs
-  (`advised` is a retainer in one and employment in another), and the
-  description is guidance the next agent reads, never a schema. `link`
-  hands it back to you when you reuse a described label, so you learn what
-  the word already means at the moment you use it. Nothing steers your
-  coinage: reuse the label if it fits, coin a new one if the distinction is
-  real. Refused for a label no edge carries, and for a `kind` the edges do
-  not carry: the kind is set by use.
+  description)`.** The same word means different things in different graphs,
+  and the description is guidance the next agent reads, never a schema.
+  `link` hands it back to you when you reuse a described label. Nothing
+  steers your coinage: reuse the label if it fits, coin a new one if the
+  distinction is real. Refused for a label no edge carries, and for a `kind`
+  the edges do not carry: the kind is set by use.
 
 Discovery and lookup:
 - **`find_nodes(sourced_from=…)` / `find_nodes(tagged_with_topic=…)`**:
-  exactly the nodes linked to a document or source, or to a topic node (id or
-  name). The graph-native "which nodes came from ISSUES.md" or "which nodes
-  are tagged billing". Use instead of `search` when you want provenance or
-  tagging, not similarity.
+  exactly the nodes extracted from a document (its id or `source` name), or
+  tagged with a topic node (id or name). A publisher is linked to documents,
+  not to nodes, so it is not a `sourced_from` target. Use instead of `search`
+  when you want provenance or tagging, not similarity.
 - **`find_nodes`, `query_graph` and `topic_tree` take `metacontexts` too**,
   meaning what it means on `search`. Pass it whenever the node you name is
   shared across worlds, which a topic node created from a tag often is: it
@@ -234,7 +212,7 @@ Discovery and lookup:
   either way, because you named it, and `find_nodes` returns only what points
   at it; neighbours are filtered, and the edges `query_graph` returns are only
   those between nodes you were shown. Each of the three labels every node it
-  returns with the `metacontexts` that node stands in.
+  returns that stands in a metacontext with its `metacontexts`.
 - **`list_sources`** / **`list_relations`**: discover the sources and the
   user-defined relationship labels present before filtering or coining new
   ones. `list_relations` carries each label's `description`; an empty one
@@ -246,31 +224,25 @@ Discovery and lookup:
   the user asks "do you remember…" or refers to past conversations.
 - **Pass exact strings you care about as `terms`.** A ticket id, an error
   code, a person's name, a filename, a version number. Embeddings shred
-  those: `JIRA-4417` becomes word pieces mean-pooled with the rest of the
-  sentence, so the query embeds to roughly "short alphanumeric string" and
-  *every other ticket id in the graph* scores about as well. A keyword arm
-  runs alongside the vector one and supplies the term rarity similarity has
-  no notion of. Terms are matched whole and ORed, and **each declared term's
-  best hit is kept in the results** even if rank fusion would have cut it.
-  Omit `terms` and the keyword arm falls back to the query's own words, with
-  no such guarantee. Declaring is the reliable path.
+  those: `JIRA-4417` embeds to roughly "short alphanumeric string", and every
+  other ticket id in the graph scores about as well. A keyword arm runs
+  alongside the vector one; terms are matched whole and ORed, and **each
+  declared term's best hit is kept in the results** even if rank fusion would
+  have cut it. Omit `terms` and the keyword arm falls back to the query's own
+  words, with no such guarantee.
 - Read each result's **`provenance`**: `lexical` (a term matched the node's
   content), `segment` (a term matched the passage it was extracted from),
   `vector` (similarity), `expanded` (reached by an edge from one of those).
-  When a search disappoints, this is what tells you *why* something came
-  back, or which arm failed to bring back what you wanted.
+  When a search disappoints, this tells you which arm brought what back.
 - The response also carries **`segments`**: passages that matched, whether or
-  not anything was extracted from them. *Where did I read that?* is a
-  different question from *what do I believe?*, and if you paraphrased an
-  identifier out of a fact when you stored it, the segment is the only thing
-  that still holds it.
+  not anything was extracted from them. If you paraphrased an identifier out
+  of a fact when you stored it, the segment is the only thing that still
+  holds it.
 - `search` is metacontext-scoped by a **list**: `metacontexts` returns nodes
-  standing in any of the metacontexts named, and no metacontext inherits another, so a
-  novel's world read against real history is `["<the-novel>", "the-real"]`.
-  Leave the list out to search every metacontext. It is **optional here and
-  required on ingest**, deliberately: leaving it out asks a coherent
-  question, *anything about this, wherever it was claimed*, while leaving it
-  out on a write would say nothing about which world the claim was in.
+  standing in any of the metacontexts named, and no metacontext inherits
+  another, so a novel's world read against real history is
+  `["<the-novel>", "the-real"]`. Leave the list out to search every
+  metacontext: *anything about this, wherever it was claimed*.
 - **A scoped search scopes the whole response.** `edges` keeps only edges
   between nodes you were shown, and `segments` keeps only passages with
   something extracted from them standing in a metacontext you named. So a
@@ -280,8 +252,8 @@ Discovery and lookup:
   `review` label if present (see Review labels).
 - **`include_corroboration=true` when independence is the question**: *is
   this one report repeated, or several outlets agreeing?* It is off by
-  default because it is the most expensive thing on this path, so ask for it
-  when you will act on the answer, not routinely. Read what it counts:
+  default and costly, so ask for it when you will act on the answer. Read
+  what it counts:
   **distinct publishers**, so three hedged reports from three outlets score 3
   exactly as three confident ones would. It does not interact with
   `confidence` and neither replaces the other. Documents naming no publisher
@@ -292,9 +264,8 @@ Discovery and lookup:
   **Read `adjacent_periods`; it is not a reject list.** A look-alike whose
   source dates put it in a different period stops counting: *the city was
   called Leningrad* is not a second witness to *the city is called Saint
-  Petersburg*, it is the claim about the period before. Nothing is removed
-  from the graph and both are true of their own stretch, so the uncounted
-  node comes back named there with its publisher and periods. Where a search
+  Petersburg*, it is the claim about the period before. The uncounted node
+  comes back named there with its publisher and periods, and where a search
   returns one of a pair, that block is the only place the other appears.
   Treat it as *the graph also knows what was true next door*, and say so
   rather than dropping it.
@@ -321,18 +292,12 @@ the claim was true in the world. A fact created last week can be about 1924.
   answer. Caveat: it is a node-lifecycle snapshot only. Edges, metacontexts
   and review labels are present-state, not historized, so they are omitted.
 - **`query_changes(...)`: deltas across a span.** Transaction time. Returns
-  nodes whose **birth** (`created_at`) or **retirement** (`superseded_at`,
-  covering supersede and merge) fell inside each half-open window `[start,
-  end)`, each tagged with its `events` (`created`, `corrected`, `historical`,
-  `merged`, `archived`, `restored`, with timestamps). Use for "what changed
-  recently". Specify by `last_hours` or `last_days`, an explicit `windows`
-  list, or nothing (defaults to the last 24 hours). Multiple windows are
+  nodes **born**, **retired** or **restored** inside each half-open window
+  `[start, end)`, each tagged with its `events` (`created`, `corrected`,
+  `historical`, `merged`, `archived`, `restored`, with timestamps). Use for
+  "what changed recently". Specify by `last_hours` or `last_days`, an explicit
+  `windows` list, or nothing (defaults to the last 24 hours). Multiple windows are
   returned grouped; a node that changed in several appears in each.
-
-A node born long ago but still active shows up in `graph_as_of` (it is live
-state) but not in a recent `query_changes` window (nothing happened to it
-there), unless it was retired in that window, where it appears as a
-retirement event.
 
 ### Reading a search result's history
 
@@ -384,23 +349,21 @@ renamed, a government replaced). They are opposite claims about the old node,
 and the wrong one either files history as an error or preserves a mistake as
 history. **If you cannot tell** (two undated claims, no knowledge of which
 came first), do not pick one. Use `record_contradiction(a, b)` and leave the
-pair contested for someone who can resolve it. A guessed `because` is
-indistinguishable afterwards from a judged one.
+pair contested for someone who can resolve it.
 
 **Merging is the one verdict that is worse to get wrong than to skip.** Two
 distinct claims fused into one node with two independent sources read as
-*better supported* than either was: the mistake does not lose information,
-it manufactures agreement. So `merge_facts` refuses on doubt and says why: an
-**event** never merges, nor does a pair in different metacontexts (that is
-`record_variant`), a retired twin (that is `restore`), or a fact ingested
-without a `claim_kind`. Read the `refused` line; it names which. When in
-doubt, record a `similarity` edge and keep both; nothing downstream is
-harmed by two nodes saying one thing, and corroboration already reads a
-similarity neighbourhood.
+*better supported* than either was. So `merge_facts` refuses on doubt and
+says why: an **event** never merges, nor do facts not standing in exactly
+the same metacontexts (that is `record_variant`), a retired twin (that is
+`restore`), or a fact ingested without a `claim_kind`. Read the `refused`
+line; it names which. When in doubt, record a `similarity` edge and keep
+both; nothing downstream is harmed by two nodes saying one thing.
 
 **Record verdicts.**
-- `record_contradiction(a, b)`: both facts stay active and become
-  `contested`; the response includes a `notify_user` signal.
+- `record_contradiction(a, b)`: both facts stay active and, where they share
+  a metacontext, become `contested`; the response includes a `notify_user`
+  signal.
 - `merge_facts(source_ids, content)`: collapse facts restating one claim into
   a single node. Every source is retired as `merged` and linked to the
   survivor, which keeps one `sourced_from` edge per contributing document,
@@ -408,24 +371,21 @@ similarity neighbourhood.
   than being overwritten. Write `content` as the clearest phrasing of the
   shared claim; that is what gets embedded.
 - `merge_inferences(source_ids, content)`: the same move for two readings
-  that state one conclusion. The population it exists for is one that fact
-  merges create: when four near-identical facts become one, the inferences
-  drawn on them all land on that survivor, each flagged `evidence_merged`.
-  `reflect` offers those pairs as `inference_merge_candidates`.
-  **The survivor rests on the union of the sources' premises**, which is a
-  combination neither original had, usually two pieces of evidence for one
-  conclusion. Where those premises are dated and provably fall clear of each
-  other, the response and the nomination both say so in `warnings`, and it
-  is not refused: the fix is something you write. Narrow the merged wording
-  or its period, or merge only the readings whose premises overlap. There is
-  no `claim_kind` rung here; the judgment lives in the text you write.
+  that state one conclusion, typically inferences a fact merge left on one
+  survivor, each flagged `evidence_merged`; `reflect` offers those pairs as
+  `inference_merge_candidates`. **The survivor rests on the union of the
+  sources' premises**, a combination neither original had. Where those
+  premises are dated and provably fall clear of each other, the response and
+  the nomination both say so in `warnings`, and it is not refused: narrow the
+  merged wording or its period, or merge only the readings whose premises
+  overlap.
 - `reverse_merge(survivor_id)`: undo a merge that turned out to collapse two
   different claims. The sources come back active with their own edges and
-  the survivor is deleted. This is the **only** tool that deletes a node,
-  and it is refused if anything has been added to the survivor since the
-  merge, because reversing would take those edges with it. Merging and
+  the survivor is deleted. This is the **only** tool that deletes a single
+  node, and it is refused if anything has been added to the survivor since
+  the merge, because reversing would take those edges with it. Merging and
   reversing the same facts repeatedly will refuse and ask you to bring in
-  the user; that is deliberate.
+  the user.
 - `record_variant(a, b)`: records a cross-metacontext divergence so it stays
   queryable.
 - `supersede_by(old_id, existing_id, because=…)`: retire an outdated node in
@@ -434,12 +394,11 @@ similarity neighbourhood.
   sources: it is still true of its period, and its sources are what say so.
 
 **Warnings: what the graph tells you before you decide.**
-Some calls come back with `warnings`: a list of things the system knows and
-you cannot compute, delivered *before* the decision rather than after it.
-Each has a `kind`, a one-sentence `message` and structured `detail`. Nothing
-here refuses on one. A warning reaches you while you are still choosing
-what to write, which is the only moment at which it can change the answer,
-so **read it and write differently** rather than reading it and proceeding.
+Some calls come back with `warnings`: things the system knows and you cannot
+compute, each with a `kind`, a one-sentence `message` and structured
+`detail`. Nothing refuses on one. A warning reaches you while you are still
+choosing what to write, so **read it and write differently** rather than
+reading it and proceeding.
 
 **Read the `kind`, because two of them say opposite things.**
 `disjoint_premises`, `cross_metacontext` and `same_metacontext_variant` say *this may be
@@ -458,11 +417,12 @@ before changing it.
   ask the user. On `record_contradiction` that is a same-metacontext contradiction:
   do **not** silently pick a winner unless recency or source makes the call
   obvious.
-- A cross-metacontext "conflict" is **not** a conflict. Don't interrupt the user;
-  record a variant and note the framing.
-- Metacontext-crossing: when a metacontext-scoped answer looks thin and an associated
-  metacontext may be relevant, *propose* consulting it and let the user approve.
-  Always label borrowed knowledge with the metacontext it came from.
+- A cross-metacontext "conflict" is **not** a conflict. Don't interrupt the
+  user; record a variant and say which metacontexts differ.
+- Metacontext-crossing: when a metacontext-scoped answer looks thin and an
+  associated metacontext may be relevant, *propose* consulting it and let the
+  user approve. Always label borrowed knowledge with the metacontext it came
+  from.
 
 ### Review labels (retrieval visibility)
 `search` and `query_graph` results may carry a computed `review` field. Treat
@@ -492,16 +452,15 @@ if useful.
   proving load-bearing.
 - **`direction="down"`** when a node's importance has expired rather than its
   truth: an error record that mattered until the bug was fixed, a decision
-  overtaken by events. This matters more than it sounds: importance is what
-  protects a node from the archival sweep, so a judgment nobody revisits
-  keeps junk alive for ever. Judging down hands the node back to review
-  without claiming it should be archived outright, which is a stronger claim
-  you may not be entitled to make.
+  overtaken by events. Importance is what protects a node from the archival
+  sweep, so a judgment nobody revisits keeps junk alive for ever. Judging down
+  hands the node back to review without claiming it should be archived
+  outright.
 - Don't judge a node up just because you read it; retrieval already recorded
   that.
 - `reason` is read by whoever later reviews the judgment, so write it for
-  them. There is no way to set importance directly; every judgment keeps its
-  reason, and a raw value would silently overwrite every judgment before it.
+  them. After ingest there is no way to set importance directly: every change
+  is a judgment that keeps its reason.
 
 ### When to reflect (reflect)
 - After ingesting several documents (the system suggests a reflect after the
@@ -513,73 +472,62 @@ if useful.
   it, `backup_suggested` is true. Raise it with the user, in one line, saying
   how many stores it has been. If they say yes, call `backup_graph`; if they
   say no or say nothing, leave it, and the prompt returns on the next store.
-  Reflecting does not clear it, and a backup does not clear the reflect count:
-  the two counters answer different questions.
+  Reflecting does not clear it, and a backup does not clear the reflect count.
 - **`backup_graph` takes no path and you must not look for one.** Where a graph
   goes was decided once by the user, in `EPIMEMER_BACKUP_DESTINATION`. If the
   tool refuses because nothing is configured, tell the user that and stop:
   writing the graph somewhere of your own choosing, through any other tool, is
   never the answer. The user's own route is `epimemer graphs export`, a
-  command you cannot run.
-- `reflect` returns consolidation candidates (similar pairs, splits,
-  enrichments; similar pairs also surface duplicate source, tag and entity
-  Topics), same-metacontext contradiction candidates, `recurrences`,
-  `boundary_proposals` and `unsound_inferences` (both below),
-  `inference_merge_candidates`, `similar_inferences`, `pending_review` (the
-  worklist of nodes already flagged for resolution), `archival_candidates`
-  (see below), and `similar_relations`, likely-synonymous user relationship
-  labels.
-- **Check `truncated`.** The lists built out of *pairs* grow quadratically
-  where every other list grows with the node count. Each is capped to its
-  highest-scoring `max_nominations` (200 by default), and any that was cut
-  is named in `truncated`. An empty `truncated` means no pair list was cut;
-  `archival_candidates` is a worklist with its own bound of 20, never named
-  there, that refills on the next reflect. A deferred node whose wait is over
-  is placed first among the never_retrieved nominees, so other
-  never_retrieved nominees cannot push it past the bound.
-  **When a list is named there, act on what came back and reflect again**
-  rather than raising the number: what was dropped is the weakest end of the
-  ranking, and a graph dense enough to hit the cap wants repeated passes,
-  not a longer response to read in one go.
+  command for them to run.
+- `reflect` returns `similar_pairs` (topic pairs, duplicate source, tag and
+  entity topics included), `split_candidates`, `enrichment_candidates`,
+  `contradictions` (same-metacontext fact pairs), `temporal_contradictions`
+  (see Timelines), `recurrences`, `boundary_proposals`, `unsound_inferences`,
+  `inference_merge_candidates`, `similar_inferences`, `pending_review` (nodes
+  already flagged for resolution), `archival_candidates` (see Cleanup) and
+  `similar_relations` (likely-synonymous relationship labels).
+- **Check `truncated`.** Each list built from pairs is capped to its
+  highest-scoring `max_nominations` (200 by default), and any that was cut is
+  named in `truncated`. **When a list is named there, act on what came back
+  and reflect again** rather than raising the number: what was dropped is the
+  weakest end of the ranking. `archival_candidates` has its own bound of 20,
+  is never named in `truncated`, and refills on the next reflect.
 - **`boundary_proposals`** offers to close a period where you have already
-  judged that the world moved on. Once
+  judged that the world moved on: once
   `supersede_by(because="the_world_changed")` has recorded the succession,
-  reflect can take the successor's own start date and propose it as the
-  predecessor's end: a date the *other* document gave, which is something no
-  single ingest could supply. Each proposal shows `current` and `proposed`;
-  accept the ones you agree with via `apply_reflection(boundaries=[{node_id,
-  source_id, endpoint, at, timeline_id}])`. **Check what changes before
-  accepting**: the period's basis becomes `inferred`, so one whose other end
-  a document stated stops being reportable as stated. Do not substitute a
-  date you happen to know; the prohibition on world knowledge applies here
-  exactly as it does at ingest. **Decline the ones you disagree with** via
+  reflect proposes the successor's own start date, which the *other* document
+  gave, as the predecessor's end. Each proposal shows `current` and
+  `proposed`. Accept the ones you agree with via
+  `apply_reflection(boundaries=[{node_id, source_id, endpoint, at,
+  timeline_id}])`, copying `node.id` from the proposal as `node_id` and the
+  other four as they are. **Check what changes before accepting**: the
+  period's basis becomes `inferred`, so one whose other end a document stated
+  stops being reportable as stated. Do not substitute a date you happen to
+  know; the prohibition on world knowledge applies here exactly as it does
+  to `validity` at ingest. **Decline the ones you disagree with** via
   `apply_reflection(boundaries_declined=[{node_id, source_id, endpoint, at,
-  timeline_id, reason}])`, copying `node.id` from the proposal as `node_id`
-  and the other four as they are, and saying
-  in `reason` why that date is not when the period ended or began. A decline
-  is what stops a proposal returning: an unanswered one comes back on every
-  reflect. It leaves the period open and writes nothing between the two
-  claims, so they can still be offered as a pair. A proposal for another date
-  is a different question and is offered again. `reopen(boundary={...})`
+  timeline_id, reason}])`, saying in `reason` why that date is not when the
+  period ended or began. An unanswered proposal comes back on every reflect.
+  A decline leaves the period open and writes nothing between the two claims,
+  so they can still be offered as a pair; a proposal for another date is a
+  different question and is offered again. `reopen(boundary={...})`
   withdraws a decline you think was wrong.
 - **`unsound_inferences`** names an inference whose premises no source puts
   in the same period (*"X held 1997–2010"* and *"Y held from 2024"*, combined
-  into a conclusion), with the offending pairs and their dates. It reports;
-  you decide: re-derive the inference, narrow it to a period it can support,
-  or retire it with `supersede_by(because="it_was_wrong")`. Read it as *no
-  source asserts these were ever both true*, not as *they never were*: it
-  stays silent unless both premises carry dates and those dates provably
-  fall clear, so a flag is rare and worth reading, and its absence proves
+  into a conclusion), with the offending pairs and their dates. Re-derive the
+  inference, narrow it to a period it can support, or retire it with
+  `supersede_by(because="it_was_wrong")`. Read it as *no source asserts these
+  were ever both true*, not as *they never were*: it stays silent unless both
+  premises carry dates that provably fall clear, so its absence proves
   nothing.
 - **`inference_merge_candidates`** names two near-identical active
   inferences resting on at least one common premise, the shape a fact merge
-  produces. Each candidate carries `shared_premises`, a `similarity`, and
-  any `warnings` this graph shows you about the merge that would result. Act with
+  produces. Each candidate carries `shared_premises`, a `similarity`, and any
+  `warnings` about the merge that would result. Act with
   `merge_inferences(source_ids, content)` where they are one conclusion, or
-  record `apply_reflection(similarities=[{pair, verdict: "distinct",
-  because}])` where they are two. Two inferences agreeing is **not**
-  automatically redundancy; it may be two readings worth keeping, which
-  `one_claim` records without merging them.
+  record `apply_reflection(similarities=[{pair, verdict, because}])`:
+  `distinct` where they are two, `one_claim` where they agree and are worth
+  keeping as two readings.
 - **`similar_inferences`** names two active inferences that say nearly the
   same thing and rest on no common premise, each shown with its premises.
   Judge every pair with `apply_reflection(similarities=[{pair, verdict,
@@ -587,46 +535,37 @@ if useful.
   where they only look alike. Between inferences `one_claim` adds nothing to
   a corroboration count, so the question is only whether they agree.
 - **Enrichment describes a topic; it never renames one.** The description is
-  written beside the topic's `content`, which stays exactly as it is: `content`
-  is the name a tag resolves to at ingest and the name
-  `find_nodes(tagged_with_topic=...)` resolves back, so moving it would split
-  the tag in two. Replacing a description keeps the earlier wording on the node,
-  so a better sentence costs nothing.
-- **Rename a topic with `rename_topic`, not `update`.** A topic's name is a
-  label, so a rename keeps the node's id, description and edges and records the
-  old name on the node. `update` would retire the topic as a mistake or leave
-  its material behind on the old version. After a rename the old name no longer
-  finds the topic.
+  written beside the topic's `content`, which stays exactly as it is, because
+  `content` is the name tags and `find_nodes(tagged_with_topic=...)` resolve
+  by. Replacing a description keeps the earlier wording on the node.
+- **Rename a topic with `rename_topic`, not `update`.** A rename keeps the
+  node's id, description and edges and records the old name on the node;
+  `update` would retire the topic as a mistake or leave its material behind on
+  the old version. After a rename the old name no longer finds the topic.
 - **An enrichment nomination arrives when the material under a described topic
-  changed**, and it shows you the change. The nomination carries `since`, the
-  moment somebody last wrote or confirmed the description, and
-  `changed_material`: the nodes created, archived or superseded since then,
-  newest first, each saying which of the three happened and when. `changed_count`
-  and `material_count` say how many there were in all and how much the
-  description stands over, so you can see what the cap of twenty hid. A topic
-  whose description nobody has yet written or confirmed through reflection
-  (a description minted with a tag counts) has no moment to measure from, so
-  it comes with
-  `since: null` and a `sample` of its material instead: that one is the
-  first-time question, *what is this topic about*.
+  changed**, and it shows you the change: `since`, the moment somebody last
+  wrote or confirmed the description, and `changed_material`, the nodes
+  created, archived or superseded since then, newest first, at most twenty.
+  `changed_count` and `material_count` say how many changed in all and how
+  much the description stands over. A topic whose description nobody has
+  written or confirmed (a description given with a new tag counts as written)
+  comes with `since: null` and a `sample` of its material instead: that one is
+  the first-time question, *what is this topic about*.
 - **Answer every nomination, one way or the other.**
   - `apply_reflection(enrichments=[{topic_id, description}])` where the change
     makes the description wrong or incomplete. Write what the material shows
     the topic to be about, in a sentence or two.
   - `apply_reflection(descriptions_confirmed=[topic_id])` where you read it
-    against the change and it still fits. Which, once a topic is described, is
-    the common case: it writes nothing, records that you looked, and stops the
-    topic being nominated until its material moves again.
+    against the change and it still fits, the common case once a topic is
+    described. It writes nothing and stops the topic being nominated until
+    its material moves again.
 
-  A nomination you leave unanswered comes back on the next reflect unchanged,
-  exactly as an unjudged pair does.
+  A nomination you leave unanswered comes back on the next reflect unchanged.
 - **A split nomination has the same two answers.** `splits=[{topic_id,
   subtopics}]` where the material really is two subjects, and
-  `splits_declined=[topic_id]` where you read it and it is one topic. The
-  detector is a recall device and inflates on small topics, so declining is the
-  common answer. It stamps the same review time a description confirmation
-  does, and the topic is not offered for splitting again until its material
-  moves.
+  `splits_declined=[topic_id]` where you read it and it is one topic, which is
+  the common answer. The topic is then not offered for splitting again until
+  its material moves.
 - Apply your decisions with `apply_reflection`. To resolve flagged nodes in
   batch, pass `supersessions=[{old_id, by_id, because}]`, `because` being
   `it_was_wrong` or `the_world_changed` as on `supersede_by`. Retiring the
@@ -635,8 +574,7 @@ if useful.
   Escalate anything you shouldn't decide alone to the user.
 - **Record the pairs you decline, or they come back for ever.** A nominated
   pair you take no other action on needs `apply_reflection(similarities=[{pair,
-  verdict, because}])`; otherwise nothing records that you looked, and the
-  next `reflect` offers it again. Two verdicts:
+  verdict, because}])`, or the next `reflect` offers it again. Two verdicts:
   - `"one_claim"`: the two really do say the same thing and something blocked
     the merge (an event, an unjudged `claim_kind`). Writes a `similarity`
     edge, **which corroboration counts as a second source** between facts and
@@ -653,52 +591,44 @@ if useful.
 
   **To take back a `one_claim`, record `distinct` on the same pair.** The
   count returns to what it would have been. You get one withdrawal: nothing
-  re-asserts `one_claim` afterwards, because a wrong withdrawal only
-  withholds support while a wrong re-assertion invents it. If they really
-  are one claim, `merge_facts` is the call.
+  re-asserts `one_claim` afterwards. If they really are one claim,
+  `merge_facts` is the call.
 
-  **To take back the suppression itself, call `reopen`.** `reopen(node_ids=[a,
-  b], reason=...)` retires the `assessed` edge, so the next `reflect` offers
-  the pair again, carrying `reopened` with your reason and the date. It
-  asserts nothing: it does not record the opposite verdict and does not say
-  the first judge was wrong, it only re-asks the question. Reach for it when
-  later evidence makes a decline look wrong, not when you disagree with it on
-  the same material. It is refused where the pair still carries a `similarity`,
-  `contradiction` or `variant_of` edge, because those assert something about
-  the pair and withdrawing one is a verdict rather than a question.
+  **To take back a `distinct`, call `reopen`.** `reopen(node_ids=[a, b],
+  reason=...)` retires the `assessed` edge, so the next `reflect` offers the
+  pair again, carrying `reopened` with your reason and the date. It asserts
+  nothing: it does not record the opposite verdict, it only re-asks the
+  question. Reach for it when later evidence makes a decline look wrong, not
+  when you disagree with it on the same material. It is refused where the
+  pair still carries a `similarity`, `contradiction` or `variant_of` edge,
+  because withdrawing one of those is a verdict rather than a question.
 - **Source, topic and entity consolidation** is ordinary topic merge:
   they are Topics, so pass `merges=[...]` for synonymous ones.
 - **Judge every relation pair you are shown, including the ones you
   decline.** `relation_verdicts=[{pair: [a, b], kind, verdict: "distinct" |
   "synonymous", because}]`: `distinct` for two different relationships that
-  look alike (a servant *works for* a master where no employment relation
-  exists, beside a corporation that *employs* a consultant who does very
-  little), `synonymous` for one relationship written two ways. A pair you
-  simply skip is re-offered on **every** reflect, for ever, to an agent who
-  cannot see that you already considered it. Both verdicts stop the
-  nomination, and neither rewrites an edge or removes a label: what a label
-  means here is settled with `describe_relation`. A verdict
-  that later looks wrong is put back with `reopen(relation_labels=[a, b],
-  reason=...)`, which appends a row saying the pair is open again and asserts
-  nothing about which answer is right.
+  look alike, `synonymous` for one relationship written two ways. A pair you
+  skip is re-offered on every reflect, for ever. Neither verdict rewrites an
+  edge or removes a label: what a label means here is settled with
+  `describe_relation`. A verdict that later looks wrong is put back with
+  `reopen(relation_labels=[a, b], reason=...)`, which asserts nothing about
+  which answer is right.
 
 ### Cleanup (archival_candidates, then apply_reflection archivals)
 Trivial knowledge is the counterpart to *wrong* knowledge, and it is handled
 by the same loop: nomination proposes, you judge, the **user approves**.
 - `reflect` returns `archival_candidates`, each with a `reason`: `retired`
-  (long superseded or merged and unimportant), `evidence_stale` (an inference
+  (long corrected or merged, and unimportant), `evidence_stale` (an inference
   whose basis changed), `never_retrieved` (an active node, other than an
   inference, that no search has ever returned, nothing depends on, no
   judgment has raised, and no deferral is still holding back), and
   `stale_judgment` (a node held above the importance ceiling by an upward
   judgment nobody has revisited in months).
 - **`stale_judgment` is not an archival proposal.** It asks you to re-confirm
-  or lower an assessment that may have expired: importance is what protects
-  a node from every other class here, so a judgment left unrevisited
-  protects it for ever. Answer it with `apply_reflection(judgments=[...])`,
-  in whichever direction the graph now supports. Judging it back *up* is a
-  perfectly good answer and needs no user approval, because it changes a
-  degree rather than a status.
+  or lower an assessment that may have expired. Answer it with
+  `apply_reflection(judgments=[...])`, in whichever direction the graph now
+  supports. Judging it back *up* is a good answer and needs no user approval,
+  because it changes a degree rather than a status.
 - Judge each one *with graph context*; triviality is only visible from the
   neighbourhood. "Error message X" matters while the bug is open and stops
   mattering once it is fixed. If a nominee turns out to matter, judge it up
@@ -709,16 +639,15 @@ by the same loop: nomination proposes, you judge, the **user approves**.
 - Nothing is deleted. Archived nodes leave search and every active query;
   `restore` puts them back.
 - Never archive an inference on your own initiative. A stale inference is a
-  prompt to re-derive it, and inferences are the expensive layer to
-  recreate.
-- **A nominee you looked at and kept is a verdict too**, and it has a
-  writer: `apply_reflection(retained=[{node_id, because, covers}])`. Left
-  unrecorded, the node comes back on every reflect to an agent who cannot
-  see it was already kept. `covers` is exactly the ids `pending_review`
-  lists beside the node under `evidence_stale` and `evidence_merged`; omit
-  it for a `never_retrieved` nominee, which names no reason. A reason a
-  standing keep already covers is neither listed nor accepted again, and a
-  premise that changes later is a new reason the old keep does not cover.
+  prompt to re-derive it.
+- **A nominee you looked at and kept is a verdict too**:
+  `apply_reflection(retained=[{node_id, because, covers}])`. Left
+  unrecorded, the node comes back on every reflect. `covers` is exactly the
+  ids `pending_review` lists beside the node under `evidence_stale` and
+  `evidence_merged`; omit it for a `never_retrieved` nominee, which names no
+  reason. A reason a standing keep already covers is neither listed nor
+  accepted again, and a premise that changes later is a new reason the old
+  keep does not cover.
 - **`retained` on a `never_retrieved` nominee is permanent.** The nomination
   names no reason, so nothing that happens later can be a reason the keep
   failed to cover, and the node is not offered again until `reopen`
@@ -728,27 +657,23 @@ by the same loop: nomination proposes, you judge, the **user approves**.
   nominee only. The node is left out of `archival_candidates` for 2 reflect
   rounds, then 4 after a second deferral, doubling up to 32. A round is a
   reflect that completes with at least one store since the previous reflect,
-  so reflecting twice in a row does not shorten the wait. When it comes back
-  it carries `deferred`: how many times it was put off, `rounds_waited`, the
+  so reflecting twice in a row does not shorten the wait. When the wait is
+  over the node comes back first among the `never_retrieved` nominees,
+  carrying `deferred`: how many times it was put off, `rounds_waited`, the
   `because` you gave, who gave it, and `next_wait`, the wait another deferral
-  would set.
-  Read that before answering again: if what you said last time still holds,
-  deferring again is a sound answer, and the wait grows each time up to the
-  cap. Archive or keep it once something has changed that settles the
-  question. `because` is required, and `deferrals_recorded` says how many
+  would set. If what you said last time still holds, deferring again is a
+  sound answer; archive or keep it once something has changed that settles
+  the question. `because` is required, and `deferrals_recorded` says how many
   rounds each node waits. A node also named in `archivals` is archived and its
   deferral skipped; one named in both `retained` and `deferred` is refused in
-  both, with the reason in each list's `_skipped`. `configure_deferral`
-  changes the two numbers for one graph; ask the user before changing them.
+  both, with the reason in `retained_skipped` and `deferred_skipped`.
+  `configure_deferral` changes the two numbers for one graph; ask the user
+  before changing them.
 - **A keep, or a deferral still waiting, that turns out to be wrong is
-  withdrawn with `reopen(node_ids=[node_id], reason=...)`.** The node goes
-  back on the archival worklist with the reason attached. It archives nothing
-  and decides nothing: the user still approves anything that is then
-  archived.
-- `evidence_merged` in `pending_review` asks for a re-read, not a
-  re-derivation: the premise absorbed another claim, so check the inference
-  still says what the survivor's wording supports, then record the re-read
-  with `retained`, `covers` naming the absorbed ids.
+  withdrawn with `reopen(node_ids=[node_id], reason=...)`.** The node is
+  offered on the next reflect, if it still qualifies, with the reason
+  attached. It archives nothing: the user still approves anything that is
+  then archived.
 
 ### Timelines (when things happened)
 Distinct from record time: a timeline is about the *content*, not about when
@@ -762,10 +687,9 @@ the graph learned it.
   later with `set_reference_time`) when a timeline is fictional or historical
   and its present is not today: "the novel opens in May 1897". Leave it unset
   for anything that tracks real time. Unset means *follow the clock*, which
-  is not the same as passing today's date.
-- Expect to set it *after* ingesting enough of a source to know the anchor,
-  and to revise it when you learn you read it wrong. `set_reference_time`
-  with no timestamp clears it.
+  is not the same as passing today's date. Expect to set it *after* ingesting
+  enough of a source to know the anchor; `set_reference_time` with no
+  timestamp clears it.
 - **`order_timepoints` is how a point nobody dated gets a place in time.** A
   source saying "the fire came before the flood" is recorded with that source
   and a `basis` of `stated` or `inferred`: `stated` when the source says the
@@ -819,24 +743,21 @@ the graph learned it.
   force: a later correction shows what it corrected.
 
 ### Metacontexts
-- **Absence names no metacontext.** A node with no metacontext is one nobody said
-  anything about: never compared, never merged, returned by no scoped search.
-  It does **not** mean base reality. `graph_stats.nodes_without_metacontext` counts
-  such nodes, and a person assigns them a metacontext with the `epimemer metacontexts
-  declare` CLI command.
+- **Absence names no metacontext.** A node with no metacontext is one nobody
+  said anything about: never compared, never merged, returned by no scoped
+  search. It does **not** mean base reality.
+  `graph_stats.nodes_without_metacontext` counts such nodes, and a person
+  assigns them a metacontext with the `epimemer metacontexts declare` CLI
+  command.
 - **`the-real` is a convention, not a mechanism.** The id every graph should
-  use for the metacontext holding real-world claims, so two graphs do not end up
-  with one metacontext under two strings. Nothing reads it specially, and it must
-  exist here like any other; `create_metacontext` takes a chosen id.
-- **Every ingest names its metacontext**, and one metacontext per call: a
-  discussion of a novel that also states a fact about its real author is two
-  calls.
+  use for the metacontext holding real-world claims. Nothing reads it
+  specially, and it must exist here like any other; `create_metacontext`
+  takes a chosen id.
 - **A metacontext id must resolve in the graph you are in**, and is refused
   if it does not, on `store_decomposition` and on `search`, and on every id
   in a search's list. Ids are per graph, so one remembered from another
-  names nothing here; unchecked it would leave the node in a metacontext it shares
-  with nothing. The refusal lists the metacontexts that do exist, which is the only
-  listing there is.
+  names nothing here. The refusal lists the metacontexts that do exist (the
+  first ten, and a count of the rest), which is the only listing there is.
 - **A metacontext need not be fictional.** *"What Milanese people knew by 1860"*
   and *"what Londoners knew by 1860"* are two metacontexts over the same real
   past.
@@ -844,31 +765,29 @@ the graph learned it.
   it. *"Milan is in Lombardy"* belongs in the real-world metacontext; *"Milanese
   merchants believed the pass was closed"* belongs in the perspective metacontext,
   and a reader who wants both names both.
-- **A reflect that would invent a metacontext refuses instead.** Splits inherit
-  what their parent states and a synthesised parent inherits the set its
-  children share; a `parents` or topic `merges` group standing in different
-  metacontexts comes back in `parents_refused` or `topic_merges_refused` with
-  nothing written. A merge re-states the survivor's metacontext under your judge:
-  its wording is synthesised, so nobody had yet said which world it was
-  about. The union is never taken, with one exception: a merge or a parent
-  over nothing but topic nodes created from tags, where the result stands in
-  every metacontext its sources stood in. A name is used from a world rather
-  than claimed about one, so the union is what it means.
+- **An `apply_reflection` that would invent a metacontext refuses instead.**
+  Splits inherit what their parent states and a synthesised parent inherits
+  the set its children share; a `parents` or topic `merges` group standing in
+  different metacontexts comes back in `parents_refused` or
+  `topic_merges_refused` with nothing written. A merge re-states the
+  survivor's metacontext under your judge. The union is never taken, with one
+  exception: a merge or a parent over nothing but topic nodes created from
+  tags, where the result stands in every metacontext its sources stood in.
 - **Two perspectives disagreeing about one world are not nominated as a
   contradiction**: they share no metacontext, and the sweep skips such pairs.
   Usually right: they coexist, neither claiming the other is wrong. Where
-  the disagreement *is* the finding, call `record_contradiction` directly;
-  it does not refuse, and `same_metacontext: false` marks it as cross-metacontext.
+  the disagreement *is* the finding, call `record_contradiction` directly. It
+  does not refuse: the response carries `same_metacontext: false` and a
+  `cross_metacontext` warning, the call is journalled as going ahead against
+  that warning, and neither fact becomes `contested`.
 - Never present a claim from a fictional or otherwise non-real metacontext as
-  fact; always surface the
-  `metacontexts` label, and when creating new metacontexts use clear,
-  descriptive names.
+  fact; always surface the `metacontexts` label, and when creating new
+  metacontexts use clear, descriptive names.
 
 ### Saying which judge you are (claim_agent)
-- Call it once per session, before writing anything, if the user has set up
-  agent identities. **Propose a name** and describe yourself; the user
-  approves, and may hand back a different judge. Never pick one and assume
-  it.
+- Call it once per session, before writing anything. **Propose a name** and
+  describe yourself; the user approves, and may hand back a different judge.
+  Never pick one and assume it.
 - **A different judge coming back is the normal case, not a correction.**
   The user picks from the judges this graph already knows, so a proposed new
   name usually resolves to an existing judge. Use what comes back from then
@@ -876,52 +795,45 @@ the graph learned it.
 - **Say `name` to the user, and keep `agent_id` for `review`.** The response
   carries both: `agent_id` is an opaque key not meant for showing to anybody,
   and `name` is what this judge is called. Either works on the way in, as
-  does any key the judge used to be recorded under.
-- **A name can be changed later, so do not agonise over it.** The user
-  renames a judge from this prompt or the command line, and every decision
-  it has already made follows the new name; nothing is rewritten.
+  does any key the judge used to be recorded under. The user can rename a
+  judge later and every decision it made follows the new name, so do not
+  agonise over it.
 - **`new_agent: true` means you made a judge rather than joined one.** Say
   so: near-duplicate judges are how a review of one agent's decisions ends
   up returning half of them. If two judges here are obviously the same one,
   tell the user; they can consolidate them, and only they can.
 - A refusal is not an error to work around; it is the prompt. Put its
-  message to the user and let them decide what you should be called. The
-  identity is theirs to assign, and it is what lets a later review show that
-  a *different* agent made these decisions.
+  message to the user and let them decide what you should be called.
 - **A judge can be retired**, and claiming one is refused with a message
   saying when. Its decisions are all still there and `review` still answers
-  for it; what it cannot be is claimed. Relay the refusal and ask which judge
-  you should be instead. Only the user can bring one back, from the prompt
-  this call raises or the command line.
+  for it. Relay the refusal and ask which judge you should be instead; only
+  the user can bring one back.
 - **Your description is a claim, not a credential.** Nothing verifies it.
   Describe what you are in a way that would let someone tell you from
   another agent (the model or harness, the role you were given) and do not
   overstate it. Re-describing appends a version and never edits one.
-- Approval is per graph. After `use_graph`, check whether the response says
-  your judge was unbound, and claim again if it did.
+- **Approval is per graph, so claim again after `use_graph`.** Its
+  `judge_cleared` names the judge the switch unbound from this connection. A
+  token whose judge the new graph does not approve is not refused unless the
+  graph requires a judge: its writes are recorded with no judge.
 - **Claim again after a reconnect too.** Your `judge_token` does not survive
-  one. Where the conversation, client and model are the ones the user already
-  confirmed this judge in (the seat), the claim binds without asking and says
-  it was carried over; where it asks, `asked_because` says why.
+  one. Where the conversation, the client and its version, and the model are
+  the ones the user already confirmed this judge in (the seat), the claim
+  binds without asking and says it was carried over; where it asks,
+  `asked_because` says why.
 - **A write refused because the seat changed means claim again**, and the user
   will be asked. The message names what changed, such as a new model since the
   claim; do not retry the write before claiming.
-- **Carry the `judge_token` the claim returns on every write that takes
-  one.** It names your
-  claim, so the write is credited to the judge you claimed even where another
-  agent has claimed on the same connection since. Several agents can share one
-  connection, a subagent beside the agent that spawned it, and each claims its
-  own judge and carries its own token. A write carrying no token is credited to
-  the most recent claim on the connection; a token that connection never issued
-  is refused, with a message naming `claim_agent`.
+- **Your `judge_token` names your claim**, so a write carrying it is credited
+  to the judge you claimed even where another agent has claimed on the same
+  connection since. A token that connection never issued is refused, with a
+  message naming `claim_agent`.
 - Once you have claimed one, the decisions you make carry it: who retired a
   node, who brought it back, who asserted a contradiction, who wrote a
-  synthesised topic, and every node and prior you supply at ingest. Pass your
-  `judge_token` and the rest follows from the claim.
+  synthesised topic, and every node and prior you supply at ingest.
 - If a graph requires a judge, a write without one is refused and the
-  message names `claim_agent`. That is not something to work around; put it
-  to the user, since only they can approve a judge or turn the requirement
-  off.
+  message names `claim_agent`. Put it to the user, since only they can
+  approve a judge or turn the requirement off.
 
 ### Reviewing what was decided (review)
 - `review` returns this graph's recorded decisions **least certain first**
@@ -940,8 +852,8 @@ the graph learned it.
   flagged sort above unrated ones however many signals those carry.
 - Check `unrated_count` and `unattributed_count` before reporting a
   conclusion: three shaky rows out of four hundred unrated is not three out
-  of four. Check `truncated` too; ask again rather than raising
-  `max_results`.
+  of four. Check `truncated` too; act on what came back and review again
+  rather than raising `max_results`.
 - **`by_agent` takes a handle**, not only a key: a name, a key, or a key that
   judge used to be recorded under. The `judge` block says what it resolved
   to, and `unknown_here` means it named nobody; otherwise an empty page
@@ -949,21 +861,20 @@ the graph learned it.
 - **It answers for one graph**, named in `graph`. For another, `use_graph`
   and ask again.
 - **`elsewhere` tells you whether there is anything to go and see**: a count
-  of decisions per other graph, no rows and no ids. The reviewer who needs
-  it is the one checking somebody *else's* work: an agent knows which graphs
-  it worked in, its successor does not. Counted by `agent_id`, `since` and
-  `until` only (`counted_with` says so), so a graph counted at 12 may list
-  fewer than 12 once you switch to it: wider, never narrower. Zero means
-  nothing is there; `unreadable` means it was not counted.
+  of decisions per other graph, no rows and no ids. Counted by `agent_id`,
+  `since` and `until` only (`counted_with` says so), so a graph counted at 12
+  may list fewer than 12 once you switch to it: wider, never narrower. Zero
+  means nothing is there; `unreadable` means it was not counted.
 - It sees only decisions made since the journal existed. An older graph can
   be full of judgments `review` will never show.
 - **Modes select; the other arguments narrow whatever was selected.** `all`,
   `by_agent` (needs `agent_id`), `since` (needs `since`; `until` is
   exclusive), `unreviewed`, and `warning` (operations that went ahead
   against an objecting warning). So *"what did agent-1 decide yesterday
-  that nobody checked"* is one call. `by_agent` and `since` exist to make
-  their argument mandatory: asking for `all` with an `agent_id` you forgot
-  to pass returns everything, which reads as an answer.
+  that nobody checked"* is one call. For one judge or one window, prefer
+  `by_agent` or `since` to `all`: they make their argument mandatory, and
+  `all` with a forgotten `agent_id` returns everything, which reads as an
+  answer.
 - `certainty_ceiling` is for **counting**, not browsing: *"is anything below
   0.5 still outstanding?"* It is inclusive and leaves unrated rows out
   entirely.
@@ -972,11 +883,12 @@ the graph learned it.
 - **Confirming costs something, or the next agent redoes your work.** If you
   check a decision and say nothing, `review(mode="unreviewed")` keeps
   offering it. `apply_review(confirmations=[…], dissents=[…])` is the only
-  thing that writes a review.
+  call that records a confirmation or a dissent.
 - Each entry is `{decision_id, because, subject_ids?, certainty?,
-  certainty_basis?}`. **`because` is required**: a review with no reason
-  marks the decision checked, so the next reviewer skips it without knowing
-  whether it was examined or waved through.
+  certainty_basis?}`. **`because` is required**, and an entry without one is
+  refused: a review with no reason would mark the decision checked, so the
+  next reviewer skips it without knowing whether it was examined or waved
+  through.
 - **Name `subject_ids` when you checked part of a decision.** One pointer at
   an ingest record covering forty-four facts tells the graph you checked
   forty-four. Omit it only when you really covered all of them.
@@ -988,8 +900,9 @@ the graph learned it.
   else to put the finding.
 - `certainty` here is how sure you are of **this review**, on the same
   ladder as `confidence`. Omit it for the ordinary case.
-- Confirming the same decision twice as the same judge is refused. A second
-  identical row would read as a second opinion.
+- Repeating your own confirmation or dissent over the same subjects is
+  refused, since a second identical row would read as a second opinion.
+  Naming other subjects of the decision, or the other verdict, is accepted.
 
 ### Fixing a judgment you made at ingest (rejudge)
 - `claim_kind`, `confidence` and `confidence_basis` are yours and nothing
@@ -1004,27 +917,26 @@ the graph learned it.
 - `importance` is not here; `judge_importance` already revises that one.
 - **A wrong metacontext is `reassign_metacontext`, not a supersession.**
   `reassign_metacontext(node_id, withdraw=…, because=…)` takes a metacontext
-  off a node. **Prefer
-  `assign=<other_metacontext>`** when the claim belongs somewhere else: withdrawing
-  and then linking passes through a state where the node states no metacontext at
-  all, and strands it there if the second call never happens. Withdrawing a
-  node's **last** metacontext is refused outright: a node without a metacontext
-  shares one with nothing, so name where the claim goes. A wrong metacontext is
-  not cosmetic:
-  it makes a fact permanently unmergeable with its own twin, stops it
-  corroborating, and hides it from the metacontext it belongs to.
+  off a node, and `assign=<other_metacontext>` moves the claim in the same
+  call. Withdrawing a node's **last** metacontext without `assign` is refused:
+  a node without a metacontext shares one with nothing, so name where the
+  claim goes. A wrong metacontext is not cosmetic: it makes a fact
+  permanently unmergeable with its own twin, stops it corroborating, and
+  hides it from the metacontext it belongs to.
 - **A wrong period is `correct_interval`, not a supersession.**
   `correct_interval(node_id, source_id=…, intervals=[…], because=…)`
   replaces the **whole** list for that (node, source) pair; an interval has
-  no id of its own. It is for an endpoint that is *present and wrong*;
-  `reflect`'s `boundary_proposals` is the tool for one that is still open.
+  no id of its own. It is for an endpoint that is *present and wrong*; one
+  that is still open is filled from `reflect`'s `boundary_proposals`.
   An empty list is allowed and is how a period that was invented outright
   comes off. A wrong interval moves a corroboration count as well as a date.
 
 ### Interpreting _meta
 Every tool response includes a `_meta` field:
-- `nodes_returned`: how many nodes were found or affected
+- `nodes_returned`: how many nodes were found or affected (decisions, on
+  `review`)
 - `latency_ms`: how long the operation took
-- `source_types`: breakdown by node type (topic, fact, inference)
+- `source_types`: breakdown by node type (topic, fact, inference), filled by
+  the tools that return nodes
 
 Surface this naturally: "Found 5 relevant nodes (2 topics, 2 facts, 1 inference)."

@@ -12,8 +12,12 @@ import {
   type Facets,
 } from "./timeline-filter";
 
-const mark = (facets: Facets, start: number | null = 0, end: number | null = null):
-  FilterableMark => ({ start, end, facets });
+const mark = (
+  facets: Facets,
+  start: number | null = 0,
+  end: number | null = null,
+  linkedNodesAbsent = false,
+): FilterableMark => ({ start, end, facets, linkedNodesAbsent });
 
 describe("parseQuery", () => {
   it("splits bare terms on whitespace", () => {
@@ -130,6 +134,21 @@ describe("facet filters", () => {
     const filters = { ...NO_FILTERS, nodeTypes: new Set(["fact"]) };
 
     expect(matchesFilters(unlinked, filters)).toBe(true);
+  });
+
+  it("hides a mark whose linked nodes are all outside the node set", () => {
+    // Its node facets are empty for a different reason than an unlinked
+    // mark's: it is about nodes, and the panel holds none of them, so none can
+    // be shown to have the status, type or metacontext asked for.
+    const elsewhere = mark({ label: ["a moment"] }, 0, null, true);
+
+    expect(matchesFilters(elsewhere, { ...NO_FILTERS, statuses: new Set(["historical"]) }))
+      .toBe(false);
+    expect(matchesFilters(elsewhere, { ...NO_FILTERS, nodeTypes: new Set(["fact"]) }))
+      .toBe(false);
+    expect(matchesFilters(elsewhere, { ...NO_FILTERS, metacontexts: new Set(["the-real"]) }))
+      .toBe(false);
+    expect(matchesFilters(elsewhere, NO_FILTERS)).toBe(true);
   });
 
   it("applies node type, status and metacontext together", () => {

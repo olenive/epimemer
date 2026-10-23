@@ -1,14 +1,16 @@
 # Topic nodes created from tags
 
-A design, built: the code is `tag_key` and `tag_by_key` in `epimemer/pipelines/name_resolution.py`, and `created_from_tag`, `combined_metacontext_set` and `stamp_tag_metacontexts` in `epimemer/pipelines/metacontexts.py`, called from `epimemer/mcp/tools.py`.
-
 A tag is the string passed in `tags=[...]`, and it resolves, by name, to a
-topic node created from a tag. Two decisions shape that node: which node a
-name resolves to (§1), and which metacontexts it stands in (§2).
-`TOPIC_DESCRIPTIONS.md` §2.2 answers a third question, where a name whose node
-was retired points: resolution follows `merged_into` or `superseded_by`
-forward. Resolution runs the exact name first, following any retirement
-forward, then the normalised name.
+topic node created from a tag. The code is `tag_key` and `tag_by_key` in
+`epimemer/pipelines/name_resolution.py`, and `created_from_tag`,
+`combined_metacontext_set` and `stamp_tag_metacontexts` in
+`epimemer/pipelines/metacontexts.py`, called from `epimemer/mcp/tools.py`.
+
+Two decisions shape that node: which node a name resolves to (§1), and which
+metacontexts it stands in (§2). `TOPIC_DESCRIPTIONS.md` §2.2 answers a third
+question, where a name whose node was retired points: resolution follows
+`merged_into` or `superseded_by` forward. Resolution runs the exact name
+first, following any retirement forward, then the normalised name.
 
 ---
 
@@ -40,19 +42,15 @@ answering to one name.
 
 ### 1.1 What the similarity bar sorts
 
-Topic merge requires every pair of sources to score at least 0.92 cosine.
-Scoring all 46,665 pairs of the 306 active topics on one real graph, eleven
-pairs cleared that bar. Ten were pairs of dated session tags, from
-`dev-session-2026-09-05` · `dev-session-2026-09-06` at 0.9935 down to 0.9593,
-which name different days of work and must never merge. The eleventh was
-`design-decisions` · `design decisions` at 0.9741, which should. The other
+Topic merge requires every pair of sources to score at least 0.92 cosine, and
+on bare tag names that bar sorts the wrong way. Over the 306 active topics of
+one real graph, eleven pairs cleared it: ten were dated session tags
+(`dev-session-2026-09-05` · `dev-session-2026-09-06` at 0.9935, down to
+0.9593), which name different days and must never merge, and one was
+`design-decisions` · `design decisions` (0.9741), which should. The other
 genuine duplicate, `claim-kind` · `claim_kind`, sat below the bar at 0.9196.
-On the twelve pairs it has an opinion about, the bar is right twice.
-
-Normalising the 88 active tags on that graph collapses them to 86 keys, and
-the two collisions are exactly those two duplicates. Widened to all 306
-topics, the same two collide and no others. `tag_key` gets all twelve pairs
-right. The bar's failure is one of sorting rather than calibration (§1.3).
+`tag_key` gets all twelve pairs right: normalising the graph's topics
+collapses exactly those two duplicates and no others.
 
 ### 1.2 An equal key clears the similarity bar
 
@@ -70,24 +68,17 @@ are a same-metacontext pair (§2), so `one_claim` is available for them.
 
 ### 1.3 Rejected, on measurement
 
-- **Moving the similarity threshold.** Lowering it to anything down to 0.85
-  admits exactly one new pair on that graph, the one that should merge, and
-  it still fails. The ten pairs that must not merge score 0.959 to 0.994,
-  above both pairs that should, so no single value separates them. And *one
-  new pair on this graph* is a fact about 306 topics on one day, while the bar
-  is a default in force on every graph, there to stop a false merge, which is
-  the most damaging thing this system can do.
+- **Moving the similarity threshold.** The pairs that must not merge score
+  above both pairs that should, so no single value separates them, and the
+  bar is a default on every graph, there to stop a false merge, the most
+  damaging thing this system can do.
 - **Comparing tags by the material they tag.** The cosine between the
-  centroids of each tag's tagged nodes sorts worse: `claim-kind` ·
-  `claim_kind` scores 0.4305, the lowest of the twelve pairs and below every
-  date pair (0.70 to 0.77). Two tags marking three facts between them have
-  centroids drawn from almost nothing, and a day's session tag averages a
-  whole day of mixed work into something bland enough to resemble any other
-  day's. The signal is weakest exactly where a tag is newest, which is where a
-  duplicate is most likely to have just been coined.
+  centroids of each tag's tagged nodes sorts worse (`claim-kind` ·
+  `claim_kind` at 0.43, below every date pair), because a new tag's centroid
+  is drawn from almost nothing, and that is where a duplicate is most likely
+  to have just been coined.
 - **Edit distance.** `claim-kind` differs from `claim_kind` by one character,
-  and `dev-session-2026-09-05` differs from `dev-session-2026-09-06` by one
-  character too.
+  and so do two consecutive dated session tags.
 
 The description field remains the fix for retrieval, which none of this
 touches: a tag embedded on its name alone is invisible to a search on
@@ -101,9 +92,9 @@ meaning, and the material it marks is not a usable substitute.
 2. **First written wins**, since resolution returns the existing node, and
    `tags_resolved_to` reports the difference.
 3. **No stored key yet.** A `tag_key` field with its own index would make the
-   miss path indexed rather than a scan, and a scan over 88 rows on a path
-   that was about to write a node is not worth a field. Add it when a graph
-   makes the cost measurable.
+   miss path indexed rather than a scan, which is not worth a field on a path
+   that was about to write a node. Add it when a graph makes the cost
+   measurable.
 4. **Reflect keeps nominating tag pairs on name similarity.** With `tag_key`
    in force the equal-key class cannot recur, and skipping every tag pair
    would also hide real synonyms that share no key, `reflect` and
@@ -162,10 +153,10 @@ stopped at the nodes the tag reaches, not at the tag (`docs/RETRIEVAL.md` §8).
   for tags too, but it doubles every tag that crosses a world, breaks one name
   being one node (§1), and makes `find_nodes(tagged_with_topic=...)`
   ambiguous. A name is one thing.
-- **Derive at read time instead of writing the edge.** Correct by
-  construction and never stale, but a second way of answering the question
-  every reader already answers by scanning `has_metacontext`, with a join over
-  every `tagged_with_topic` edge on the read path.
+- **Derive at read time instead of writing the edge.** A second way of
+  answering the question every reader already answers by scanning
+  `has_metacontext`, with a join over every `tagged_with_topic` edge on the
+  read path.
 
 ### 2.3 Accepted limit
 

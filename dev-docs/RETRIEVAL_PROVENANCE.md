@@ -1,11 +1,10 @@
 # Retrieval provenance: seeing what the agent was actually given
 
-A design, built: the records are `epimemer/mcp/retrieval_records.py`, and focus
-mode lives in the dashboard's graph and timeline panels.
-
 A focus mode over the graph and timeline that dims everything the last
 retrieval did *not* return, plus a record of the response text the agent
-received, reachable from a list of recent retrievals.
+received, reachable from a list of recent retrievals. The records are
+`epimemer/mcp/retrieval_records.py`; focus mode lives in the dashboard's graph
+and timeline panels.
 
 The question it answers is not "what is in the graph" but **"what did the agent
 see, and what did it miss?"** The second half is why the non-returned nodes
@@ -53,13 +52,18 @@ close that gap:
 - The coverage test is an **oracle**, not a list: parametrised over all
   registered tools, it seeds a known graph, calls each, and asserts that any
   known node id appearing in the serialised response also appears in
-  `retrieved`. Walking a result for id-shaped keys is wrong in the wrapper
-  (§2.1) and safe in a test, where a miss merely under-checks. This test is
-  what finds the next tool that forgot to declare.
+  `retrieved`. The known ids are every node the graph holds before and after
+  the call, each call names the graph, and a call stopped at the graph gate
+  fails the test rather than passing it unchecked. Walking a result for
+  id-shaped keys is wrong in the wrapper (§2.1) and safe in a test, where a
+  miss merely under-checks. This test is what finds the next tool that forgot
+  to declare.
 
-`reflect` declares by walking its own result. Its nominee lists have as many
-shapes as there are nominators, and a hand-written list of key paths is how the
-next one would go undeclared. §2.1's objection to walking is about the choke
+`reflect`, and every tool whose response carries `warnings`, declares by
+walking its own result: a warning names its nodes in `subjects` and in a
+`detail` whose shape depends on its kind, and `reflect`'s nominee lists have as
+many shapes as there are nominators. A hand-written list of key paths is how
+the next one would go undeclared. §2.1's objection to walking is about the choke
 point guessing across tools it knows nothing about; a tool reading the
 structure it built three lines earlier is the opposite case. Its record names
 the nominees, never the scan.
@@ -95,15 +99,13 @@ label, `direct`, covers tools that return nodes without ranking them
 `vector` with the cosine similarity as `score`: they genuinely are
 vector-similarity results.
 
-**`score` is blank for `search` today.** `QueryResult` carries `provenance` and
-no fused score, and a fused RRF number is not a similarity, so exposing one
-would need its own explanation before it was worth showing. `check_conflicts`
-is the one tool that declares a score. The field is there for whoever wants
-the "matched at 0.82" line on a `search` record.
+**`score` is blank for `search`.** `QueryResult` carries `provenance` and no
+fused score, and a fused RRF number is not a similarity, so showing one would
+need its own explanation. `check_conflicts` is the one tool that declares a
+score.
 
 **Failed calls write no record.** There is no response to record, and the
-selector lists what the agent was handed. The opposite is defensible (a failed
-retrieval is interesting), so this is stated rather than left to be inferred.
+selector lists what the agent was handed.
 
 **One call, one record.** The record is written by the wrapper, which sees the
 tool call and not the metacontext-widening loop inside `search`, so the loop
@@ -202,8 +204,7 @@ Making them inert would remove the answer to the question the mode exists to
 ask. Clicking a dimmed node opens its detail with a **"not in this
 retrieval"** marker, so the absence is stated rather than implied by the
 colour. The marker shows only when focus mode is on *and* the node was absent:
-outside focus mode there is no retrieval to be absent from. This is also
-cheaper: no hit-testing changes, no second interaction model.
+outside focus mode there is no retrieval to be absent from.
 
 ---
 

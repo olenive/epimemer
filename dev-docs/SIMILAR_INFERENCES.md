@@ -1,10 +1,11 @@
 # Similar-inference edges
 
-A design, built: the code is `epimemer/pipelines/reflection/similar_inferences.py` for the nomination and `epimemer/pipelines/query/corroboration.py` for the consequence.
-
 `reflect` offers pairs of inferences that say nearly the same thing from
 evidence they do not share, the agent records whether they agree, and
-corroboration shows that agreement beside its count rather than in it.
+corroboration shows that agreement beside its count rather than in it. The
+code is `epimemer/pipelines/reflection/similar_inferences.py` for the
+nomination and `epimemer/pipelines/query/corroboration.py` for the
+consequence.
 
 ---
 
@@ -26,12 +27,10 @@ evidence is what the agent is judging. The sweep is global over active
 inferences, and every read after the scoring is asked only about inferences
 in a pair that cleared the bar.
 
-**On the graphs measured so far this list is empty.** The merge sweep's
-header records 123 real inferences, 5,053 pairs and none at the bar (maximum
-0.66), with the best-scoring pairs sharing vocabulary while saying different
-things. The list costs a read of the active inferences, their embeddings and
-one matrix product to establish that, and fills as a graph accumulates
-readings of the same conclusion.
+On real graphs so far this list is empty (`inference_dedup.py`'s header has
+the measurement). It costs a read of the active inferences, their embeddings
+and one matrix product, and fills as a graph accumulates readings of the same
+conclusion.
 
 ## 2. Why a pair sharing a premise is not nominated here
 

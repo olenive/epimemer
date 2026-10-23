@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Epimemer — Live Visualization</title>
+    <title>Epimemer: Live Visualization</title>
     <script>
       // Inline and before first paint, so a dark-mode user never sees a white
       // flash while the module bundle loads. Mirrors resolveTheme() in theme.ts.
@@ -27,19 +27,23 @@
   <body class="h-full bg-surface-page text-content-strong overflow-hidden">
     <div id="app" class="flex flex-col h-full">
       <!-- Header -->
-      <header class="flex items-center justify-between px-4 py-2 border-b border-line bg-surface-chrome shrink-0">
-        <div class="flex items-center gap-3">
+      <!-- Wraps rather than overflowing: at 1600 px its controls need about
+           1800, and the body's overflow-hidden would put the rest out of reach.
+           The buttons keep to the right edge when they move to a line of
+           their own. -->
+      <header class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 px-4 py-2 border-b border-line bg-surface-chrome shrink-0">
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 min-w-0">
           <h1 class="text-sm font-semibold tracking-wide text-content-primary">Epimemer</h1>
           <div class="flex items-center gap-1.5 text-xs">
             <span class="text-content-muted">Session:</span>
-            <select id="session-selector" class="text-xs bg-surface-raised text-content-primary border-line rounded px-1.5 py-0.5 border" title="MCP session to view">
+            <select id="session-selector" class="text-xs bg-surface-raised text-content-primary border-line rounded px-1.5 py-0.5 border max-w-56" title="MCP session to view">
               <option value="">No sessions</option>
             </select>
           </div>
           <div class="relative flex items-center gap-1.5 text-xs text-content-muted">
             <span>MCP:</span>
             <span id="mcp-active-graph" class="text-content-secondary" title="active graph (backend) of the selected session">-</span>
-            <span id="reflect-badge" class="px-1.5 py-0.5 rounded text-xs bg-surface-raised text-content-muted" title="Reflection pressure not yet known for this session">reflect —</span>
+            <span id="reflect-badge" class="px-1.5 py-0.5 rounded text-xs bg-surface-raised text-content-muted" title="Reflection pressure not yet known for this session">reflect ?</span>
             <!-- What this graph does about warnings. Read-only: a write from
                  the browser would be the first write into a graph with no
                  author (EVENT_LOG.md §12.4). -->
@@ -53,7 +57,7 @@
           </div>
           <div class="flex items-center gap-1.5 text-xs">
             <span class="text-content-muted">Viewing:</span>
-            <select id="graph-selector" class="text-xs bg-surface-raised text-content-primary border-line rounded px-1.5 py-0.5 border" title="loading graphs...">
+            <select id="graph-selector" class="text-xs bg-surface-raised text-content-primary border-line rounded px-1.5 py-0.5 border max-w-48" title="loading graphs...">
               <!-- Replaced on first render, including by an "unavailable" that
                    carries the reason in the title. Nothing else may leave this
                    placeholder standing. -->
@@ -68,17 +72,17 @@
           <div class="flex items-center gap-1.5 text-xs">
             <span class="text-content-muted">Retrieval:</span>
             <select id="record-selector" class="text-xs bg-surface-raised text-content-primary border-line rounded px-1.5 py-0.5 border max-w-64" title="Dim everything this retrieval did not return">
-              <option value="">No retrievals</option>
+              <option value="">No retrievals yet</option>
             </select>
             <span id="record-unread" class="hidden px-1.5 py-0.5 rounded text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"></span>
           </div>
         </div>
-        <div class="flex gap-2">
+        <div class="flex flex-wrap items-center gap-2 ml-auto">
           <button id="btn-toggle-graph" class="px-2 py-1 text-xs rounded bg-surface-raised hover:bg-surface-raised-hover text-content-secondary transition-colors" title="Show or hide the graph">Graph</button>
           <button id="btn-toggle-timeline" class="px-2 py-1 text-xs rounded bg-surface-raised hover:bg-surface-raised-hover text-content-secondary transition-colors" title="Show or hide the timeline">Timeline</button>
           <button id="btn-toggle-pipeline" class="px-2 py-1 text-xs rounded bg-surface-raised hover:bg-surface-raised-hover text-content-secondary transition-colors" title="Toggle pipeline strip">Pipelines</button>
           <button id="btn-toggle-log" class="px-2 py-1 text-xs rounded bg-surface-raised hover:bg-surface-raised-hover text-content-secondary transition-colors" title="Show or hide what the agent did to this graph">Log</button>
-          <span id="ws-status" class="px-2 py-1 text-xs rounded bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400" title="this browser's socket to the visualization hub — it says nothing about whether a session can answer">Hub disconnected</span>
+          <span id="ws-status" class="px-2 py-1 text-xs rounded bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400" title="This browser's socket to the visualization hub. It says nothing about whether a session can answer.">Hub disconnected</span>
           <!-- The colour picker hangs off this wrapper rather than the header,
                so the dropdown is positioned by the button it belongs to. -->
           <div class="relative">
@@ -138,8 +142,8 @@
           <span class="text-xs font-medium text-content-muted uppercase tracking-wider">Timeline</span>
           <select id="timeline-select" class="text-xs bg-surface-raised text-content-secondary border-line rounded px-1.5 py-0.5 border" title="Which timeline is on the axis"></select>
           <select id="timeline-mode" class="text-xs bg-surface-raised text-content-secondary border-line rounded px-1.5 py-0.5 border" title="Which time the axis measures">
-            <option value="record">Record time — when the graph learned it</option>
-            <option value="content">Content time — when it happened</option>
+            <option value="record">Record time: when the graph learned it</option>
+            <option value="content">Content time: when it happened</option>
           </select>
           <select id="timeline-type" class="text-xs bg-surface-raised text-content-secondary border-line rounded px-1.5 py-0.5 border" title="Linked node type">
             <option value="all">All types</option>
@@ -190,7 +194,7 @@
         </div>
         <div class="flex flex-col gap-1 px-2 py-1.5 border-b border-line shrink-0">
           <div id="log-verbs" class="flex flex-wrap gap-1"></div>
-          <input id="log-node-id" type="search" placeholder="node id (exact)" class="text-xs bg-surface-raised text-content-primary border-line rounded px-1.5 py-0.5 border" title="Show only acts involving this node. Exact — an id is a lookup, not a search." />
+          <input id="log-node-id" type="search" placeholder="node id (exact)" class="text-xs bg-surface-raised text-content-primary border-line rounded px-1.5 py-0.5 border" title="Show only acts involving this node. Exact: an id is a lookup, not a search." />
           <input id="log-text" type="search" placeholder="text in the summary" class="text-xs bg-surface-raised text-content-primary border-line rounded px-1.5 py-0.5 border" title="Plain substring over the summary line" />
           <div class="flex items-center gap-1 text-[10px] text-content-muted">
             <input id="log-range-start" type="date" class="text-xs bg-surface-raised text-content-secondary border-line rounded px-1 py-0.5 border" title="Acts from" />
@@ -218,7 +222,7 @@
                response follows the selected record — different drivers, and in
                focus mode you want both at once (RETRIEVAL_PROVENANCE.md §5.1). -->
           <button id="tab-node" class="px-2 py-0.5 text-xs rounded-t border-b-2 border-blue-500 text-content-strong" title="The node you clicked">Node</button>
-          <button id="tab-response" class="px-2 py-0.5 text-xs rounded-t border-b-2 border-transparent text-content-muted" title="What epimemer returned for the selected retrieval — not what the agent's client rendered">Response</button>
+          <button id="tab-response" class="px-2 py-0.5 text-xs rounded-t border-b-2 border-transparent text-content-muted" title="What epimemer returned for the selected retrieval, not what the agent's client rendered">Response</button>
           <span id="detail-title" class="text-xs font-medium text-content-secondary truncate"></span>
           <button id="btn-close-detail" class="ml-auto text-xs text-content-muted hover:text-content-strong">&times;</button>
         </div>

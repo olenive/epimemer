@@ -151,7 +151,6 @@ from epimemer.storage.protocol import (
 )
 from epimemer.visualization.event_bus import InProcessEventBus
 from epimemer.visualization.events import AdvisoryRaised
-from epimemer.visualization.graph_actions import next_action_id
 
 
 async def _run_net(
@@ -231,19 +230,23 @@ def _declare(
     return list(declared.values())
 
 
-_NESTED_ID_KEYS = ("id", "node_id", "topic_id")
+_NESTED_ID_KEYS = ("id", "node_id", "topic_id", "fact_id", "historical_id")
+# Keys holding a list of node ids. A warning's `subjects` is one, and a warning
+# is where a write tool's response names nodes the caller never passed in.
+_NESTED_ID_LIST_KEYS = ("subjects",)
 
 
 def _ids_within(value: object) -> Iterator[str]:
     """Every node id nested anywhere in a result structure this tool just built.
 
-    Used by `reflect` alone, whose nominee lists each have their own shape and
-    have outnumbered the seven that existed when this was written — which is the
-    argument making itself. Reading them off a hand-written list of key paths is
-    how the next one would go undeclared, and §2.1's objection does not apply
-    here: it is about the *choke point* guessing across tools it knows nothing
-    about, where this is a tool reading the structure it wrote three lines
-    earlier.
+    Used by `reflect`, whose nominee lists each have their own shape and have
+    outnumbered the seven that existed when this was written, and by every tool
+    whose response carries `warnings`, since a warning names its nodes in
+    `subjects` and in a `detail` whose shape is per kind. Reading them off a
+    hand-written list of key paths is how the next one would go undeclared, and
+    §2.1's objection does not apply here: it is about the *choke point*
+    guessing across tools it knows nothing about, where this is a tool reading
+    the structure it wrote three lines earlier.
 
     `truncated` rides along harmlessly: it is a list of bare key names, and a
     string outside a mapping matches no id key.
@@ -252,6 +255,12 @@ def _ids_within(value: object) -> Iterator[str]:
         for key, item in value.items():
             if key in _NESTED_ID_KEYS and isinstance(item, str):
                 yield item
+            elif key in _NESTED_ID_LIST_KEYS and isinstance(item, (list, tuple)):
+                for entry in item:
+                    if isinstance(entry, str):
+                        yield entry
+                    else:
+                        yield from _ids_within(entry)
             else:
                 yield from _ids_within(item)
     elif isinstance(value, (list, tuple)):
@@ -446,6 +455,7 @@ def _advisory_event(
     advisory: Advisory,
     *,
     graph: str,
+    action_id: str,
     tool: str,
     action: AdvisoryAction,
     shown: bool,
@@ -454,12 +464,12 @@ def _advisory_event(
 ) -> AdvisoryRaised:
     """One `advisory_raised`, ready to publish.
 
-    `action_id` comes from the sequence the acts are numbered in, so a replay
-    puts a warning where it arrived rather than at the end.
+    `action_id` comes from the bus's numbering, the one the acts are numbered
+    in, so a replay puts a warning where it arrived rather than at the end.
     """
     return AdvisoryRaised(
         graph=graph,
-        action_id=next_action_id(),
+        action_id=action_id,
         tool=tool,
         kind=advisory.kind,
         message=advisory.message,
@@ -508,6 +518,7 @@ async def publish_advisories(
             _advisory_event(
                 advisory,
                 graph=graph,
+                action_id=event_bus.next_action_id(),
                 tool=tool,
                 action=action,
                 shown=shown,
@@ -1715,6 +1726,12 @@ async def store_decomposition(
     meta = ResponseMeta(
         nodes_returned=total_topics + total_facts + total_inferences,
         source_types={k: v for k, v in nodes_created.items() if v > 0},
+        # The nodes this response names: a historical twin's retired fact and
+        # the new one, and whatever a surfaced warning is about, such as the
+        # topic node created from a tag whose description was not written. The
+        # response counts the other nodes it created rather than naming them,
+        # so those are not declared.
+        retrieved=_declare(_ids_within(result)),
     )
     return result, meta
 
@@ -3661,7 +3678,9 @@ async def record_contradiction(
         tool="record_contradiction",
         event_bus=event_bus,
     )
-    meta = ResponseMeta(nodes_returned=2)
+    # The pair reaches the response through the warning's `subjects`, so it is
+    # declared from there: a graph that mutes warnings shows the agent no id.
+    meta = ResponseMeta(nodes_returned=2, retrieved=_declare(_ids_within(result)))
     return result, meta
 
 
@@ -3744,7 +3763,9 @@ async def record_variant(
         tool="record_variant",
         event_bus=event_bus,
     )
-    meta = ResponseMeta(nodes_returned=2)
+    # As `record_contradiction`: the pair is named only by a warning, and a
+    # cross-metacontext variant raises none, so it declares an empty list.
+    meta = ResponseMeta(nodes_returned=2, retrieved=_declare(_ids_within(result)))
     return result, meta
 
 
@@ -3781,9 +3802,8 @@ async def merge_facts(
     **`merge_cycle_limit` refuses an oscillation** (REVIEW_MODE.md §7.8): a fact
     already merged and un-merged this many times is refused with a message
     asking the caller to bring in the user, rather than a warning it would read
-    and proceed past. Dormant until merge reversal exists, since nothing writes
-    the `restored_at` the count reads — built alongside the episodes it counts,
-    because a limit added after an oscillation has run has nothing to look at.
+    and proceed past. It counts the merge episodes whose `restored_at` a
+    reversal wrote.
 
     **Inferences drawn on the sources are flagged `evidence_merged`**, not
     `evidence_stale`: their premise was reworded and better sourced, not
@@ -3974,7 +3994,10 @@ async def merge_inferences(
     meta = ResponseMeta(
         nodes_returned=1,
         source_types={"inferences": 1},
-        retrieved=_declare([merged.id, *source_ids]),
+        # A disjoint-premises warning names the two premises in its `detail`,
+        # and the agent reads them there, so they follow the survivor and its
+        # sources.
+        retrieved=_declare([merged.id, *source_ids, *_ids_within(result)]),
     )
     return result, meta
 
@@ -6784,8 +6807,8 @@ async def reassign_metacontext(
     silently.
 
     **Use `assign` whenever the claim belongs in another metacontext.**
-    Withdrawing and then linking passes through a state where the node states no
-    metacontext at all, and strands it there if the second call never happens.
+    Withdrawing first and linking later is not a route, because the withdrawal
+    is refused.
 
     **A withdrawal that would leave no metacontexts is refused.** A node without
     a metacontext shares one with nothing: never compared, never merged,

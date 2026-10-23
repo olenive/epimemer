@@ -82,6 +82,23 @@ export const recordsInGraph = (
   graph: string,
 ): RecordEntry[] => entries.filter((entry) => entry.graph === graph);
 
+/**
+ * The ids focus mode keeps bright for a record, or null to leave focus off.
+ *
+ * Null for a record whose tool never declared what it retrieved: its id list is
+ * empty because nothing was said, and dimming every node on the strength of it
+ * would draw a search that came back empty. A declared empty retrieval is that
+ * search, and dims everything.
+ */
+export const focusIds = (entry: RecordEntry | null): readonly string[] | null =>
+  entry === null || !entry.declared ? null : entry.nodeIds;
+
+/** The selector's tooltip, which says why nothing dimmed when nothing could. */
+export const selectorTitle = (entry: RecordEntry | null): string =>
+  entry !== null && !entry.declared
+    ? "This record's tool did not declare which nodes it retrieved, so nothing is dimmed"
+    : "Dim everything this retrieval did not return";
+
 /** "search · deployment rollback · 5 nodes" — enough to pick one out. */
 export const selectorLabel = (entry: RecordEntry): string => {
   const tool = entry.tool.replace(/^epimemer\./, "");
@@ -118,7 +135,7 @@ export const unreadCount = (
 export const responseText = (entry: RecordEntry): string => {
   if (entry.responseText) {
     return entry.truncated
-      ? `${entry.responseText}\n\n[truncated — the record caps what it keeps]`
+      ? `${entry.responseText}\n\n[truncated: the record caps what it keeps]`
       : entry.responseText;
   }
   return (

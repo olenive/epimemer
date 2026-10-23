@@ -1,9 +1,5 @@
 # Reflection: the review loop
 
-Ingestion is mechanical and cheap. Organisation is deliberate and, where it
-matters, done by an agent. That is the "write fast, organize slow" rhythm,
-and `reflect` is the slow half.
-
 **`reflect` reads and never writes.** It scans the graph, nominates
 candidates, and hands them back. Every change goes through
 `apply_reflection`, and the judgment in between belongs to the agent, or, for
@@ -19,12 +15,8 @@ Embeddings are a good **candidate generator** (*these two facts are about the
 same thing*) and a poor **judge** (*do they contradict, supersede, or
 coexist?*).
 
-So similarity nominates and an agent decides. Everything in this document
-follows from that split, including the parts that look like restraint:
-`reflect` returns pairs with their scores rather than verdicts, because a
-verdict computed from a cosine number is a guess dressed as a decision.
-
-Two further principles shape it:
+So similarity nominates and an agent decides: `reflect` returns pairs with
+their scores rather than verdicts. Two further principles:
 
 - **Nothing is destroyed; ambiguity is made visible.** Outdated and contested
   nodes stay `active` and retrievable, carrying a computed label so anything
@@ -38,8 +30,7 @@ Two further principles shape it:
 ## 2. The verdict taxonomy
 
 When a new claim is similar to an existing one, the agent classifies the
-pair, and the value of the table is that each verdict has exactly one recorded
-consequence:
+pair. Each verdict has exactly one recorded consequence:
 
 | Verdict | Meaning | Action |
 |---|---|---|
@@ -59,8 +50,7 @@ change in the world as an error is how a graph forgets its own history, so
 leave the pair contested rather than guessing. See
 [VALIDITY.md](VALIDITY.md#5-the-world-changing-is-not-the-same-as-being-wrong).
 
-There are two non-similarity triggers, and they are deliberately different
-labels. When a fact is superseded, inferences derived from it become
+Two flags arrive without any similarity check. When a fact is superseded, inferences derived from it become
 **evidentially stale** and are flagged automatically. When a fact is
 *merged*, its dependents are flagged **`evidence_merged`** instead: the claim
 under them did not change, only the wording that states it and the documents
@@ -92,22 +82,15 @@ far back along a chain of merges the graph keeps what a reversal needs
 
 ### Inferences merge too, and are warned rather than refused
 
-`merge_inferences(source_ids, content)` is the sibling tool, and the
-population it exists for is one that fact merges create: collapsing four
-near-identical facts lands the four inferences drawn on them onto that one
-survivor, each carrying an `evidence_merged` flag naming the wording it lost.
+`merge_inferences(source_ids, content)` is the sibling tool, typically for
+the inferences a fact merge left resting on one survivor. The gate is the
+same without the `claim_kind` rung.
 
-The gate is the same minus one rung: there is **no `claim_kind`**, because
-whether combining premises is legitimate is answered in the text the agent
-writes.
-
-What replaces it is a warning. The survivor rests on the **union** of its
-sources' premises, and where two of them are dated and provably fall clear of
-each other, the merged claim rests on premises no source puts in one period,
-which `unsound_inferences` will flag on the next reflect. The usual answer is
-to narrow the merged wording or its period, so the merge is warned rather
-than refused, and the warning arrives **with the nomination and in the
-response, before the content is written**. Going ahead past it writes a
+The survivor rests on the **union** of its sources' premises. Where two of
+them are dated and provably fall clear of each other, the merge is warned
+rather than refused, and the warning arrives **with the nomination and in the
+response, before the content is written**; the usual answer is to narrow the
+merged wording or its period. Going ahead past it writes a
 `proceeded_despite_warning` row, read back by `review(mode="warning")`
 ([ATTRIBUTION.md](ATTRIBUTION.md)).
 
@@ -141,23 +124,17 @@ constraints and timepoints rather than nodes. Its verdicts, including the
 
 Not every key is a worklist. `truncated` names any of the lists that hit
 `max_nominations` and were cut. `relation_pairs_suppressed` counts the label
-pairs that standing verdicts kept out of `similar_relations`; the suppression
-is silent by design, so without the count an empty list on a well-judged graph
-would look the same as a graph with nothing similar in it.
-`stores_since_last_reflect` is the store count this call reset to zero.
+pairs that standing verdicts kept out of `similar_relations`, so an empty list
+beside a non-zero count means *already judged*. `stores_since_last_reflect` is
+the store count this call reset to zero.
 
 **The lists built out of pairs are capped**: `similar_pairs`,
 `contradictions`, `recurrences`, `inference_merge_candidates`,
-`similar_inferences` and `similar_relations`. Pairs grow faster than the node
-set where every other list is linear in it. Each is cut to its highest-scoring `max_nominations` (200 by default), and a
-cut list is named in `truncated` rather than silently shortened, because a
-caller otherwise cannot tell an exhausted graph from a trimmed answer. **When
-a list is named there, act on what came back and reflect again** rather than
-raising the number: the remainder is the weakest end of the ranking, and a
-graph that dense wants a different operation than a longer list.
-
-The cap bounds the **response**, not `reflect`'s peak allocation: the scored
-pairs still exist upstream (§8).
+`similar_inferences` and `similar_relations`. Each is cut to its
+highest-scoring `max_nominations` (200 by default), and a cut list is named in
+`truncated`. **When a list is named there, act on what came back and reflect
+again** rather than raising the number: the remainder is the weakest end of
+the ranking.
 
 `inference_merge_candidates` compares inferences only where they rest on a
 shared premise, which is where near-duplicates land after a fact merge.
@@ -166,10 +143,8 @@ resting on no common premise, so the two lists never offer one pair twice. A
 `one_claim` on one of its pairs writes a `similarity` edge that corroboration
 reports beside the count rather than in it (§6), because two conclusions
 agreeing is not a second witness to either.
-`dev-docs/SIMILAR_INFERENCES.md` has the design.
 
-Two of the lists exist to keep a distinction that a single one would
-destroy:
+Two of the lists keep a distinction apart:
 
 - **`recurrences` is separate from `contradictions`** because a claim
   standing beside its own successor is not in conflict with it. Only *mixed*
@@ -180,19 +155,14 @@ destroy:
   contradiction is the misreading metacontexts exist to prevent.
 
 `unsound_inferences` and `boundary_proposals` are covered in
-[VALIDITY.md](VALIDITY.md#7-what-reflect-does-with-validity). The
-disjointness that makes an inference unsound is the same computation that
-produces an `inference_merge_candidate`'s warning, one asked of an inference
-that exists, the other of one that would.
+[VALIDITY.md](VALIDITY.md#7-what-reflect-does-with-validity).
 
 ### When it runs
 
 Never on its own. `configure_reflection` sets a per-graph threshold on
 stores; once it is crossed, `store_decomposition` **flags a suggestion** in
-its response and `graph_stats` reports the pressure. Nothing schedules a
-reflect, and nothing triggers one. The suggestion is information for the
-agent, and running it stays a deliberate act: an automatic reflect on a timer
-would be a consolidation nobody asked for over a graph nobody was looking at.
+its response and `graph_stats` reports the pressure. Nothing schedules or
+triggers a reflect: running it is the agent's deliberate act.
 
 A completed reflect also advances the graph's **reflect round** by one when
 there was at least one store since the previous reflect, in the same atomic
@@ -201,21 +171,16 @@ on, and it travels in a bundle with the rest of the graph's settings.
 
 ### Backing up runs the same way
 
-Backups are prompted rather than scheduled, on exactly this pattern and for
-this reason. A second counter, `stores_since_backup`, moves store for store
-with the reflect one and is zeroed by a successful backup rather than by a
-reflect. `configure_backup` sets its per-graph threshold.
-`store_decomposition` and `graph_stats` report `backup_suggested` beside
-`reflect_suggested`, and `apply_reflection` reports it too.
+Backups are prompted on the same pattern. A second counter,
+`stores_since_backup`, is zeroed by a successful backup rather than by a
+reflect, and `configure_backup` sets its per-graph threshold.
+`store_decomposition`, `graph_stats` and `apply_reflection` report
+`backup_suggested`.
 
-What the agent does with it differs in one way, and the difference is the
-point. A reflect is the agent's to run. A backup is the user's, so the agent
-raises the suggestion and waits: `backup_graph` writes to the destination the
-server was configured with (`EPIMEMER_BACKUP_DESTINATION`) and takes **no
-path**, so an agent acting on the prompt cannot choose where a graph goes. With
-no destination configured it refuses and names the variable. It requires no
-judge, because a backup asserts nothing about the graph: it writes down what
-is already there.
+A backup is the user's call, so the agent raises the suggestion and calls
+`backup_graph` only if they agree. It writes to `EPIMEMER_BACKUP_DESTINATION`,
+takes **no path**, refuses when no destination is configured, and needs no
+judge.
 
 ---
 
@@ -242,9 +207,8 @@ archival class (§5), and a merged premise is not, since nothing was overturned.
 
 ## 5. Archival: the hygiene arm
 
-Archival is the same loop with a fourth outcome, *triviality*, rather than a
-separate subsystem. `nominate_archival_candidates` proposes, worst first, in
-four classes:
+Archival is the same loop with one more outcome, *triviality*. Reflect's
+`archival_candidates` proposes nodes, worst first, in four classes:
 
 | Class | What it catches |
 |---|---|
@@ -261,13 +225,10 @@ it behind nodes nobody has looked at yet.
 world changed, not because they were wrong, so they remain true of their
 period and age alone is not grounds to discard them.
 
-`stale_judgment` is the class that keeps the others honest. Importance
-protects a node from every class above it, so without this an assessment
-that has since expired would protect a node for ever and the cheap tier
-would never look at it again. Its resolution is `judgments`: *"keep it, and
-stop treating it as important"*, or *"still important, and now recently
-confirmed"*. Either verdict moves the clock, so the node leaves the stale set
-either way.
+`stale_judgment` exists because importance protects a node from every class
+above it. Its answer is `judgments`, in either direction: *"keep it, and stop
+treating it as important"*, or *"still important, and now recently
+confirmed"*. Either moves the clock, so the node leaves the stale set.
 
 The `importance_ceiling` is **inclusive** of the default: an un-judged node is
 not a node judged worth keeping, and nomination is a proposal rather than a
@@ -313,14 +274,11 @@ topics that are merely related rather than duplicates, use `parents`.
 
 **`enrichments` writes a description beside a name that does not change.** Each
 entry is `{topic_id, description}`, and the write is in place: the topic keeps
-its id, its content byte for byte and every edge it holds. That matters because
-`content` is the name a tag resolves to at ingest and the name
-`find_nodes(tagged_with_topic=...)` resolves back, and an enrichment that moved
-it would split the tag in two. It is most worth doing for a topic node created
-from a tag, whose bare name says nothing about what it covers, and such a node
-is embedded on its name and description together. A description that replaces
-an earlier one keeps the earlier wording on the node, so improving one loses
-nothing.
+its id, its content (the name tags and `find_nodes(tagged_with_topic=...)`
+resolve by) and every edge it holds. It is most worth doing for a topic node
+created from a tag, whose bare name says nothing about what it covers; such a
+node is embedded on its name and description together. A description that
+replaces an earlier one keeps the earlier wording on the node.
 
 **A description is reviewed when the material under it moves.** Each topic
 carries `description_reviewed_at`, the moment somebody last wrote the
@@ -329,30 +287,25 @@ material was created, archived or superseded after that moment, and the
 nomination carries the change: `since`, a `changed_material` list of at most
 twenty entries newest first, each saying what happened and when, plus
 `changed_count` and `material_count` for what the cap hid and how much the
-description stands over. Archival and supersession count because a description
-standing over material that has since been retired is as stale as one written
-before half of it arrived.
+description stands over.
 
-A topic nobody has described has no moment to measure from, so it falls back to
-the older test: its material is at least three times the length of its name and
-description together. That question, *is this topic thin*, answers identically
-on every run, so on its own it would nominate a good description over forty
-facts for ever. Once a topic has been reviewed, the ratio is never consulted
-for it again.
+A topic nobody has described has no moment to measure from, so it is nominated
+when its material is at least three times the length of its name and
+description together, and arrives with `since: null` and a `sample` of its
+material. Once a topic has been reviewed, the length test is never applied to
+it again.
 
 **Both answers clear the nomination, and one of them is required.**
 `enrichments` writes a new sentence; `descriptions_confirmed`, a list of topic
 ids, records that the description was read against the change and still fits.
 Both stamp `description_reviewed_at`, and a confirmation journals its own
-`description_review` row rather than an enrichment with unchanged text. A
-nomination nobody answers comes back on the next reflect unchanged, which is
-the rule an unjudged pair already follows.
+`description_review` row. A nomination nobody answers comes back on the next
+reflect unchanged.
 
-**A split nomination is answered the same way.** Most split nominations are
-read and kept whole, and `splits_declined` records that on the same
+**A split nomination is answered the same way.** Most are read and kept
+whole, and `splits_declined` records that on the same
 `description_reviewed_at` a confirmation stamps, so the split scan skips a
-topic whose material has not moved since. Without it, every topic read and
-kept whole would come back on every reflect.
+topic whose material has not moved since.
 
 The enrichment scan reaches a topic node created from a tag through the nodes
 tagged with it. New ones arrive described, because `store_decomposition` refuses to create one
@@ -367,8 +320,7 @@ every source stands in exactly the same set. An all-tag merge and an all-tag
 parent are exempt from those two gates: a tag names something rather than
 asserting it, so it stands in every metacontext it is used from, and a node
 gathering names is used from every world they were. Union is never the answer
-for anything else: one node asserted in two worlds is the worst outcome
-available.
+for anything else.
 
 **A merge re-states the survivor's metacontext under the merging agent's
 judge rather than migrating it**, because the survivor's wording is new and
@@ -382,17 +334,12 @@ declines in `boundaries_declined_refused`: a decline naming a claim or source
 that is not there, an endpoint that is not `start` or `end`, or a proposal
 already declined.
 
-### A batch applies, or it never existed
+### A malformed batch writes nothing
 
-The steps share no transaction, and cannot: their order matters, so
-judgments are recorded before the steps that retire the nodes those
-judgments name. The guarantee comes from the other end instead: **every
-entry is checked before the first step writes**, and a batch containing one
-that cannot be applied at all is refused whole, with nothing written and
-every problem listed at once. That matters most for `similarities` and
-`relation_verdicts`, which suppress: a half-applied batch would
-leave the fixed-and-resent version refused as a repeat verdict on the pairs
-that had gone through.
+**Every entry is checked before the first step writes**, and a batch
+containing one that cannot be applied at all is refused whole, with nothing
+written and every problem listed at once, so the corrected batch can be resent
+as it is.
 
 The check is about *shape*, not judgment: a missing key, a value of the
 wrong type, a reason outside a closed set, an unparseable date, a blank
@@ -404,8 +351,7 @@ already-judged pair never costs a batch.
 ### `similarities`: recording a verdict on a nominated pair
 
 Declining a pair needs a record as much as acting on one does: without it,
-nothing shows the pair was ever looked at, and the same pair is nominated
-again on every pass.
+the same pair is nominated again on every pass.
 
 Each entry is `{pair: [a_id, b_id], verdict, because}`, and the verdict picks
 what is written:
@@ -416,15 +362,9 @@ what is written:
 | `distinct` | they are different claims that merely look alike | `assessed` only |
 | `distinct`, over a pair you earlier called `one_claim` | you got it wrong and want the count back | `retracted_similarity` plus `assessed` |
 
-**Both stop the pair being nominated; only `one_claim` corroborates.** That
-split is the whole design. A decline is two populations, and one edge cannot
-serve both readers: the nomination sweep wants every judged pair suppressed,
-while corroboration wants only restatements of one claim. Record a decline as
-a `similarity` and *"these are different claims"* starts counting as a second
-source: manufactured support, which is the failure this system treats as its
-worst, since a false unification does not lose information, it inverts the
-quantity corroboration measures. So reach for `one_claim` only where you
-would have merged.
+**Both stop the pair being nominated; only `one_claim` corroborates.**
+Recording a decline as `one_claim` would count *"these are different claims"*
+as a second source, so reach for `one_claim` only where you would have merged.
 
 **Between two inferences, `one_claim` records agreement and adds nothing to
 the count.** Corroboration lists the partner under `agreeing_inferences`
@@ -433,16 +373,9 @@ instead, whichever list nominated the pair, so the verdict for a
 
 **A `one_claim` can be withdrawn, once.** Recording `distinct` over a pair
 you earlier called one claim retracts that verdict: the pair stops
-corroborating and the count returns to what it would have been. The
-`similarity` edge is not removed, since nothing in this system deletes, so
-the withdrawal is a second edge that disqualifies the first, the same way a
-`contradiction` between two facts stops them counting as support for each
-other.
-
-**The withdrawal is final**, and the asymmetry is deliberate: nothing
-re-asserts `one_claim` afterwards. Withdrawing costs a count the graph will
-no longer make; re-asserting invents agreement. If the pair really is one
-claim, `merge_facts` is the call that says so.
+corroborating. The `similarity` edge stays, disqualified by a second edge.
+**The withdrawal is final**: nothing re-asserts `one_claim` afterwards, and if
+the pair really is one claim, `merge_facts` is the call that says so.
 
 Suppression is untouched either way. The pair has now been judged twice and
 stays out of every future nomination, until `reopen` puts it back (below).
@@ -453,8 +386,8 @@ adjacent. `one_claim` over a cross-metacontext pair is refused in favour of
 `record_variant`, and `distinct` is accepted there.
 
 Similarities are applied **first** in the call, before any argument that can
-retire a node. A judgment is about the wording it was made against, so a
-supersession later in the same batch must not turn it into a skip.
+retire a node, so a supersession later in the same batch cannot turn one into
+a skip.
 
 **`relation_verdicts` is the same machinery one tier down**, for label pairs
 from `similar_relations`: `{pair: [label_a, label_b], kind, verdict:
@@ -465,8 +398,7 @@ rather than clearing the list.
 What was decided is read back on `list_relations`, where each label carries
 its standing verdicts, and `reflect` counts what suppression held back in
 `relation_pairs_suppressed`. Refusals come back in
-`relation_verdicts_refused`. They are applied right after `similarities`,
-for the same anchoring reason.
+`relation_verdicts_refused`. They are applied right after `similarities`.
 
 ### `retained`: recording that a nominee stands
 
@@ -491,62 +423,51 @@ The keep stands until `reopen` withdraws it, so the node is not offered as
 *keep it*, use `deferred`.
 
 Use `judgments` where the importance was wrong; use `retained` where the
-importance is right and the node has been re-read. Raising importance to stop
-a nomination would make one field mean both *how consequential this is* and
-*do not nominate this*. Entries not recorded come back in `retained_skipped`
-with the reason; a node named in both `archivals` and `retained` is archived.
+importance is right and the node has been re-read, rather than raising
+importance to stop a nomination. Entries not recorded come back in
+`retained_skipped` with the reason; a node named in both `archivals` and
+`retained` is archived.
 
 ### `deferred`: not now, ask again later
 
-`deferred` is the third answer to a `never_retrieved` nominee, for a node that
-is not worth the user's attention today and may be once the graph has grown
-around it. Each entry is `{node_id, because}`, and `because` is required.
+`deferred` is the third answer to a `never_retrieved` nominee. Each entry is
+`{node_id, because}`, and `because` is required.
 
-The node is left out of `archival_candidates` for a number of **reflect
-rounds**: 2 after its first deferral, doubling with each one after it, up to
-32. A round is a reflect that completes with at least one store since the
-previous reflect, so a graph nobody stores into does not age a deferral, and
-reflecting twice in a row does not count twice. A reflect that fails or times
-out counts for nothing. When the wait is over the node comes back first among
-the `never_retrieved` nominees, carrying `deferred`: `count`, `last_round`,
-`rounds_waited`, the `because` given, `judged_by`, and `next_wait`, the wait
-another deferral would set.
+The node is left out of `archival_candidates` for 2 **reflect rounds** after
+its first deferral, doubling with each one after it, up to 32. A round is a
+reflect that completes with at least one store since the previous reflect; a
+reflect that fails or times out counts for nothing. When the wait is over the
+node comes back first among the `never_retrieved` nominees, carrying
+`deferred`: `count`, `last_round`, `rounds_waited`, the `because` given,
+`judged_by`, and `next_wait`, the wait another deferral would set.
 
-A deferral is accepted only for a node the nominator's test counts as a
-`never_retrieved` nominee at the moment of the call, so it cannot be used to
-hide a node reflect would not have offered. Anything else comes back in
-`deferred_skipped` with the reason. A node named in `archivals` as well is
-archived and its deferral skipped; a node named in both `retained` and
-`deferred` is refused in both, since the two answers contradict each other.
-`deferrals_recorded` lists each one written, with its `count` and
-`due_after_rounds`.
+Only a node that is a `never_retrieved` nominee at the moment of the call can
+be deferred, including one past the twenty-nominee limit. Anything else, a
+node still waiting included, comes back in `deferred_skipped` with the reason.
+A node also named in `archivals` is archived; one named in both `retained` and
+`deferred` is refused in both. `deferrals_recorded` lists each deferral written
+as `{node_id, count, due_after_rounds}`.
 
-Each deferral is a `deferral` journal row carrying the round it was written in
-as `at_round`, credited to the judge that wrote it. A later `retained` verdict
-for the node clears its deferral state, and so does `reopen` while the node is
-still waiting; a deferral whose wait is over holds nothing back, so `reopen`
-refuses it as it refuses a node nothing suppresses. A deferral after a clear
-starts counting from one again.
+Each deferral is a `deferral` journal row carrying the round as `at_round`. A
+later `retained` verdict for the node clears its deferral state, and so does
+`reopen(node_ids=[node_id])` while the node is still waiting; `reopen` refuses
+a deferral whose wait is over, since it holds nothing back. The next deferral
+after a clear counts from one again.
 
-`configure_deferral` reads and sets the two numbers for one graph,
-`first_wait` and `cap`, and `clear=["first_wait"]` returns a named one to the
-process default. A change is refused when a value named is below 1 or above
-1024 rounds, or when `cap` is below the `first_wait` it would resolve against:
-a deferral promises the node is reviewed again, so neither can be set to amount
-to never. A read is never refused. The ceiling is enforced where a value is
-written, by this tool and when the server loads its configuration, and applied
-where one is read: a value above it, stored before it existed or carried in by
-a bundle, is read and exported as stored, behaves as 1024, and is reported
-under `clamped`. Any change the tool writes stores it at the ceiling.
-`EPIMEMER_DEFERRAL_FIRST_WAIT` and `EPIMEMER_DEFERRAL_CAP` set the process
-defaults.
+`configure_deferral` reads and sets one graph's `first_wait` and `cap`;
+`clear=["first_wait"]` returns a named setting to the process default, which
+`EPIMEMER_DEFERRAL_FIRST_WAIT` and `EPIMEMER_DEFERRAL_CAP` set. A change is
+refused unless each value is from 1 to 1024 rounds and `cap` is at least
+`first_wait`; a read is never refused. A stored value above 1024, from a
+bundle for instance, behaves as 1024 and is reported under `clamped`. Every
+wait is computed at the reflect that reads it, so a change applies to
+deferrals already written.
 
 ### `reopen`: taking a suppression back
 
-A verdict is what stops a question being asked again, so without a way back
-a pair judged `distinct` in error would never return, however much later
-evidence said it should. `reopen` withdraws one suppression, and the target
-says which layer:
+A verdict stops a question being asked again. `reopen` withdraws one
+suppression when later evidence says the question is worth asking again, and
+the target says which layer:
 
 | Call | Withdraws | Effect |
 |---|---|---|
@@ -567,8 +488,7 @@ decision carrying your `reason`. So a pair reopened and judged `distinct` a
 second time carries both rounds, and the second verdict suppresses it again.
 
 **The nomination says it was reopened**, with the reason, the date and the
-judge, so the next reader sees the history instead of re-deriving it. It
-appears as `reopened` on `similar_pairs`, `contradictions`, `recurrences`,
+judge. It appears as `reopened` on `similar_pairs`, `contradictions`, `recurrences`,
 `inference_merge_candidates`, `similar_inferences`, `archival_candidates`,
 `boundary_proposals` and `similar_relations`. On `boundary_proposals` the note
 is matched by claim and source, so a reopen of one endpoint also shows on a
@@ -576,7 +496,7 @@ proposal for the other endpoint of the same source's period; the note names
 the one it was about.
 
 **Refused when nothing is suppressed for the target**, naming what it looked
-for: *there was nothing to undo* must not read like *done*. Refused too when
+for. Refused too when
 the pair carries a standing `similarity`, `contradiction` or `variant_of`
 edge, because those assert something about the pair rather than declining it,
 and withdrawing one is a verdict. Recording `distinct` through `similarities`
@@ -587,14 +507,11 @@ is still what withdraws a standing `one_claim`.
 ## 7. What reflect deliberately does not do
 
 - **It does not judge succession.** Boundary proposals are drawn from a
-  `temporally_followed_by` edge the agent already wrote. Guessing that two
-  similar facts are successive is exactly the judgment the taxonomy reserves
-  for the agent.
+  `temporally_followed_by` edge the agent already wrote.
 - **It does not write value signals.** It reads `importance`, `confidence`
   and the two clocks to nominate. Importance moves only through
   `judge_importance` and `apply_reflection(judgments=...)`, and confidence
-  comes from ingest, with `rejudge` the one tool that revises it. A decayed
-  judgment would be a number nobody stands behind.
+  comes from ingest, with `rejudge` the one tool that revises it.
 - **It does not resolve contradictions.** It surfaces them. Resolution is a
   separate, explicit act, and the genuinely contested ones go to a human.
 - **It does not block anything.** The soundness check flags; ingest still
@@ -605,11 +522,7 @@ is still what withdraws a standing `one_claim`.
 ## 8. Cost, and the one real limit
 
 `reflect` is the slowest operation in the system and the only one that fails
-at a size real use reaches. Against the 30 s default tool timeout it crosses
-at roughly **320,000 nodes in-memory and 26,000 on SurrealDB**.
-
-Memory grows with the pairs that clear the bar rather than with the graph,
-and `dev-docs/BENCHMARKS.md` has the measurements and the worst case.
-
-Practical consequence: run `reflect` deliberately, on a graph you know the
-size of, rather than on a schedule against an unbounded one.
+at a size real use reaches: against the 30 s default tool timeout it crosses
+at roughly **320,000 nodes in-memory and 26,000 on SurrealDB**
+(`dev-docs/BENCHMARKS.md`). Run it deliberately, on a graph you know the size
+of.
