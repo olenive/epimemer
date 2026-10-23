@@ -30,6 +30,7 @@ from epimemer.mcp.config import (
     create_storage,
     deferral_defaults,
     load_config,
+    merge_defaults,
 )
 from epimemer.mcp.retrieval_records import (
     RetrievalRecord,
@@ -345,10 +346,20 @@ def _log(
     )
 
 
-def _error_response(error: str) -> str:
-    """Build a JSON error response."""
-    meta = ResponseMeta()
+def _error_response(error: str, latency_ms: float) -> str:
+    """Build a JSON error response, carrying the time the call took.
+
+    The latency is required rather than defaulted: a failure's time is as much
+    a fact about the call as a success's, and a default would report 0 for
+    every caller that forgot it.
+    """
+    meta = ResponseMeta(latency_ms=latency_ms)
     return json.dumps({"error": error, "_meta": meta.model_dump()})
+
+
+def _elapsed_ms(start: float) -> float:
+    """Milliseconds since `start`, a `time.monotonic()` reading."""
+    return (time.monotonic() - start) * 1000
 
 
 _tool_logger = logging.getLogger("epimemer.mcp.tools")
@@ -523,25 +534,25 @@ async def _run_with_timeout(
                 result, meta = await (
                     coro() if timeout is None else asyncio.wait_for(coro(), timeout=timeout)
                 )
-        latency = (time.monotonic() - start) * 1000
+        latency = _elapsed_ms(start)
         _log(tool_name, input_summary, summarise(result, meta), meta)
         response_text = _build_response(result, meta, latency)
         await _record_response(deps, tool_name, input_summary, response_text, meta)
         return response_text
     except TimeoutError:
-        latency = (time.monotonic() - start) * 1000
+        latency = _elapsed_ms(start)
         error_msg = f"{tool_name} timed out after {timeout}s"
         _tool_logger.error(error_msg)
         meta = ResponseMeta(latency_ms=latency)
         _log(tool_name, input_summary, "TIMEOUT", meta, error=error_msg)
-        return _error_response(error_msg)
+        return _error_response(error_msg, latency)
     except Exception as e:
-        latency = (time.monotonic() - start) * 1000
+        latency = _elapsed_ms(start)
         error_msg = f"{tool_name} failed: {e}"
         _tool_logger.exception(error_msg)
         meta = ResponseMeta(latency_ms=latency)
         _log(tool_name, input_summary, "ERROR", meta, error=str(e))
-        return _error_response(str(e))
+        return _error_response(str(e), latency)
 
 
 # --- Tools ---
@@ -1689,6 +1700,7 @@ async def memory_merge_facts(
             storage=deps["storage"],
             embedding_provider=deps["embedding_provider"],
             judge=judge,
+            merge_defaults=merge_defaults(deps["config"]),
         ),
         ctx,
         f"sources={len(source_ids)}",
@@ -1767,6 +1779,7 @@ async def memory_merge_inferences(
             judge=judge,
             warning_policy=deps["config"].warning_policy,
             event_bus=deps.get("event_bus"),
+            merge_defaults=merge_defaults(deps["config"]),
         ),
         ctx,
         f"sources={len(source_ids)}",
@@ -1862,13 +1875,15 @@ async def memory_configure_merge(
 
     Args:
         undo_depth: How far back along a chain of merges the graph keeps what a
-            reversal needs (default 10). **Lowering this cannot be undone**: the
-            record it drops exists only at merge time, so a merge made under a
-            lower setting is permanently irreversible.
+            reversal needs (the server default, 10 unless the server sets
+            another). **Lowering this cannot be undone**: the record it drops
+            exists only at merge time, so a merge made under a lower setting is
+            permanently irreversible.
         cycle_limit: How many times one fact may be merged and un-merged before
-            the next merge refuses and asks for a human (default 2). Raise it
-            when a refusal is wrong and the merge is right.
-        clear: Return both to the defaults.
+            the next merge refuses and asks for a human (the server default, 2
+            unless the server sets another). Raise it when a refusal is wrong
+            and the merge is right.
+        clear: Return both to the server defaults.
         expected_graph: The graph you believe you are working in. The active graph
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
@@ -1882,6 +1897,7 @@ async def memory_configure_merge(
             undo_depth=undo_depth,
             cycle_limit=cycle_limit,
             clear=clear,
+            merge_defaults=merge_defaults(deps["config"]),
         ),
         ctx,
         f"undo_depth={undo_depth} cycle_limit={cycle_limit} clear={clear}",
@@ -2257,7 +2273,9 @@ async def memory_apply_reflection(
             contradiction. Nothing is deleted: the response carries an
             archive_data export, and `restore` puts a node back. Never archive
             an inference on its own initiative; a flagged one means its evidence
-            changed, which is a reason to re-derive it.
+            changed, which is a reason to re-derive it. Only an active node is
+            archived: any other id comes back in `archivals_skipped` with the
+            reason: unknown, already archived, or not active, with its status.
         retained: *Reviewed, and it stands* — the verdict opposite to
             `archivals`, for a nominee you looked at and decided to keep. Each:
             {node_id: str, because: str, covers: [str] | None}.
@@ -2405,6 +2423,7 @@ async def memory_apply_reflection(
             similarities=similarities,
             judge=judge,
             deferral_defaults=deferral_defaults(deps["config"]),
+            merge_defaults=merge_defaults(deps["config"]),
         )
         # Reported, not moved. Applying a reflection is the moment an agent is
         # already thinking about the state of the graph, which makes it the
@@ -2445,6 +2464,11 @@ async def memory_apply_reflection(
             )
             + (f" parents_refused={len(r['parents_refused'])}" if r["parents_refused"] else "")
             + (f" deferred_skipped={len(r['deferred_skipped'])}" if r["deferred_skipped"] else "")
+            + (
+                f" archivals_skipped={len(r['archivals_skipped'])}"
+                if r["archivals_skipped"]
+                else ""
+            )
             + (
                 f" topic_merges_refused={len(r['topic_merges_refused'])}"
                 if r["topic_merges_refused"]
@@ -4756,22 +4780,25 @@ async def _judge_for_write(
     site of one function, not a second policy, and the boundary keeps the
     backstop for the tools that never come through here.
     """
+    # A refusal from here is the whole of the call, so its latency is the time
+    # this check took, measured as the choke point measures a tool's.
+    start = time.monotonic()
     deps = ctx.lifespan_context
     mismatch = tools.wrong_graph(deps["storage"], expected_graph)
     if mismatch is not None:
         result, meta = mismatch
-        return None, _build_response(result, meta, 0.0)
+        return None, _build_response(result, meta, _elapsed_ms(start))
     if judge_token is None:
         stored = await _judge_state(ctx)
     else:
         tokens = await _judge_tokens(ctx)
         if judge_token not in tokens:
-            return None, _error_response(_UNKNOWN_JUDGE_TOKEN)
+            return None, _error_response(_UNKNOWN_JUDGE_TOKEN, _elapsed_ms(start))
         stored = tokens[judge_token]
     if stored is not None:
         refusal = _changed_seat_refusal(stored, _current_seat(ctx))
         if refusal is not None:
-            return None, _error_response(refusal)
+            return None, _error_response(refusal, _elapsed_ms(start))
     judge = await _approved_judge(ctx, stored)
     if judge is not None:
         return judge, None
@@ -4782,7 +4809,8 @@ async def _judge_for_write(
     storage = deps["storage"]
     approved = await storage.get_approved_agent_ids()
     return None, _error_response(
-        tools.judge_required_reason(tools.approved_labels(approved, await storage.list_agents()))
+        tools.judge_required_reason(tools.approved_labels(approved, await storage.list_agents())),
+        _elapsed_ms(start),
     )
 
 

@@ -78,7 +78,9 @@ survivor merged again since or one whose replay record has aged out.
 `configure_merge` reads and sets the two settings involved: `undo_depth`, how
 far back along a chain of merges the graph keeps what a reversal needs
 (default 10), and `cycle_limit` (default 2). Its response reports them as
-`merge_undo_depth` and `merge_cycle_limit`.
+`merge_undo_depth` and `merge_cycle_limit`; `clear=True` returns both to the
+process defaults, which `EPIMEMER_MERGE_UNDO_DEPTH` and
+`EPIMEMER_MERGE_CYCLE_LIMIT` set.
 
 ### Inferences merge too, and are warned rather than refused
 
@@ -237,7 +239,10 @@ verdict.
 Archival itself is an **export**: `apply_reflection(archivals=[…])` returns
 `archive_data` (keep it; that copy *is* the archive) and atomically flips the
 nodes to `archived`, which removes them from every active-status query.
-Nothing is deleted, and `restore` reverses it.
+Nothing is deleted, and `restore` reverses it. Only an active node is
+archived: any other id named comes back in `archivals_skipped` as
+`{node_id, why}`, saying whether it is unknown, already archived, or not
+active, with its status.
 
 ---
 

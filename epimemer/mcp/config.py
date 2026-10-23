@@ -14,8 +14,11 @@ from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.storage.protocol import (
     DEFAULT_DEFERRAL_CAP,
     DEFAULT_DEFERRAL_FIRST_WAIT,
+    DEFAULT_MERGE_CYCLE_LIMIT,
+    DEFAULT_MERGE_UNDO_DEPTH,
     MAX_DEFERRAL_CAP,
     DeferralSettings,
+    MergeSettings,
     StorageBackend,
 )
 
@@ -78,6 +81,13 @@ class ServerConfig(BaseModel):
     # `configure_deferral`.
     deferral_first_wait: int = DEFAULT_DEFERRAL_FIRST_WAIT
     deferral_cap: int = DEFAULT_DEFERRAL_CAP
+
+    # How far back along a chain of merges a graph keeps what a reversal needs,
+    # and how many merge-and-reverse cycles a node may have behind it before
+    # the next merge refuses. Process defaults on the reflect threshold's
+    # pattern, which a graph overrides with `configure_merge`.
+    merge_undo_depth: int = DEFAULT_MERGE_UNDO_DEPTH
+    merge_cycle_limit: int = DEFAULT_MERGE_CYCLE_LIMIT
 
     # Stores into a graph before the response suggests backing it up, on the
     # reflect threshold's pattern: process default here, per-graph override on
@@ -222,10 +232,37 @@ class ServerConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _merge_settings_make_sense(self):
+        """The same floors `configure_merge` enforces on a graph's override.
+
+        Refused at load, on `backup_keep`'s terms: the user meant something a
+        merge cannot do, and clamping it would hide that.
+        """
+        if self.merge_undo_depth < 1:
+            raise ValueError(
+                f"EPIMEMER_MERGE_UNDO_DEPTH must be at least 1, got "
+                f"{self.merge_undo_depth}: the merge being made is level 1, so a "
+                f"lower bound would capture what a reversal needs and discard it "
+                f"in the same call."
+            )
+        if self.merge_cycle_limit < 1:
+            raise ValueError(
+                f"EPIMEMER_MERGE_CYCLE_LIMIT must be at least 1, got "
+                f"{self.merge_cycle_limit}: zero refuses every merge of a node that "
+                f"has ever been un-merged, including the first ordinary correction."
+            )
+        return self
+
 
 def deferral_defaults(config: ServerConfig) -> DeferralSettings:
     """The process defaults a graph's deferral overrides fall back to."""
     return DeferralSettings(first_wait=config.deferral_first_wait, cap=config.deferral_cap)
+
+
+def merge_defaults(config: ServerConfig) -> MergeSettings:
+    """The process defaults a graph's merge overrides fall back to."""
+    return MergeSettings(undo_depth=config.merge_undo_depth, cycle_limit=config.merge_cycle_limit)
 
 
 def load_config() -> ServerConfig:
@@ -247,6 +284,8 @@ def load_config() -> ServerConfig:
         "reflect_threshold": "EPIMEMER_REFLECT_THRESHOLD",
         "deferral_first_wait": "EPIMEMER_DEFERRAL_FIRST_WAIT",
         "deferral_cap": "EPIMEMER_DEFERRAL_CAP",
+        "merge_undo_depth": "EPIMEMER_MERGE_UNDO_DEPTH",
+        "merge_cycle_limit": "EPIMEMER_MERGE_CYCLE_LIMIT",
         "backup_threshold": "EPIMEMER_BACKUP_THRESHOLD",
         "backup_destination": "EPIMEMER_BACKUP_DESTINATION",
         "backup_keep": "EPIMEMER_BACKUP_KEEP",

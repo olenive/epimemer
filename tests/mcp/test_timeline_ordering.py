@@ -172,6 +172,27 @@ class TestAddTimepointRunsTheChecks:
         assert result["temporal_contradictions"] == []
         assert result["kind"] == "vague"
 
+    async def test_a_dated_point_unrelated_to_a_held_pair_leaves_the_hold(self, storage):
+        timeline_id, contradiction_id = await _disputed(storage)
+        await tools.resolve_temporal_contradiction(
+            timeline_id,
+            storage,
+            contradiction_id=contradiction_id,
+            verdict="hold",
+            because="nothing settles it",
+            judge=ARCHIVIST,
+        )
+        # A date with no stated relation to the fire or the flood is not
+        # evidence about their order, so the judge is not asked again.
+        await tools.add_timeline_timepoint(
+            timeline_id, storage, start=_dt(1901), label="the harvest festival"
+        )
+        stored = await storage.get_timeline(timeline_id)
+        held = next(c for c in stored.temporal_contradictions if c.id == contradiction_id)
+        assert held.held is True
+        nominated, _ = await tools.reflect(storage, MockEmbeddingProvider())
+        assert nominated["temporal_contradictions"] == []
+
 
 class TestQueryTimeline:
     async def test_the_ordering_modes_answer_for_a_point_with_no_date(self, storage):

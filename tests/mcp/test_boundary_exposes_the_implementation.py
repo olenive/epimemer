@@ -170,6 +170,22 @@ NOT_AGENT_SETTABLE: dict[tuple[str, str], str] = {
     ): "as reflect: whether a deferral is still holding a node back is the "
     "nominator's question, asked against the same settings",
     (
+        "configure_merge",
+        "merge_defaults",
+    ): "as configure_deferral: the process default from ServerConfig, which the "
+    "agent's per-graph override falls back to and cannot choose",
+    (
+        "merge_facts",
+        "merge_defaults",
+    ): "as configure_merge: a caller passing its own could raise the cycle limit "
+    "its own merge is gated at",
+    ("merge_inferences", "merge_defaults"): "as merge_facts",
+    (
+        "apply_reflection",
+        "merge_defaults",
+    ): "as merge_facts: a topic merge keeps the undo record to the depth the "
+    "graph resolves, which a caller must not choose",
+    (
         "graph_stats",
         "default_backup_threshold",
     ): "as default_reflect_threshold, for the other counter",

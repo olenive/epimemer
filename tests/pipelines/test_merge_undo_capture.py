@@ -17,7 +17,6 @@ from datetime import UTC, datetime
 import pytest
 
 from epimemer.core.types import (
-    DEFAULT_MERGE_UNDO_DEPTH,
     MERGE_UNDO_KEY,
     EdgeType,
     EmbeddingRecord,
@@ -30,6 +29,7 @@ from epimemer.core.types import (
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.pipelines.graph_construction.versioning import merge_nodes
+from epimemer.storage.protocol import DEFAULT_MERGE_UNDO_DEPTH
 
 
 @pytest.fixture

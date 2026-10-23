@@ -6,6 +6,28 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+- A new dated point no longer clears every held temporal contradiction on its
+  timeline. A hold now waits for an ordering assertion that touches one of its
+  points, which is the only thing that is evidence about it; an unrelated
+  date, or a recurrence materialising next week's occurrence, leaves it held.
+- `EPIMEMER_MERGE_UNDO_DEPTH` and `EPIMEMER_MERGE_CYCLE_LIMIT` set the process
+  defaults for `configure_merge`'s `undo_depth` (10) and `cycle_limit` (2). A
+  graph's own setting still overrides them, and `clear=True` returns a graph
+  to them. Each must be at least 1, or the server refuses to start.
+- `apply_reflection` returns `archivals_skipped`, one `{node_id, why}` for
+  each id in `archivals` it did not archive: unknown, already archived, or not
+  active, with its status. Such ids used to be dropped without a word; what is
+  archived is unchanged.
+- An error response's `_meta.latency_ms` reports how long the call took, as a
+  result's does. It was always 0 for a call that failed or timed out, and for
+  a write refused over its judge or its graph before it ran.
+- `_meta.source_types` uses the singular node types, `topic`, `fact` and
+  `inference`, on every tool, matching `nodes_by_type` in `graph_stats`.
+  `store_decomposition`, `merge_facts`, `merge_inferences` and `reverse_merge`
+  used the plurals, and `reverse_merge` counted every restored node as a fact
+  whatever its type; a client reading the plural keys should read the singular
+  ones. The `nodes_created` count in `store_decomposition`'s result keeps its
+  plural keys.
 - The dashboard's graph panel no longer freezes the page on large graphs.
   Above 300 nodes the Hierarchy layout keeps dagre's ranks and wraps each into
   rows, so a graph of over 2,000 nodes draws in under a second instead of about

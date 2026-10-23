@@ -1275,21 +1275,6 @@ class NodeEdge(BaseModel):
 # — and `metadata` already holds `merged_from` beside it.
 MERGE_UNDO_KEY = "merge_undo"
 
-# How far back along a `merged_into` chain the partitions are retained. Ten
-# levels of one lineage stay reversible; the eleventh and beyond become
-# permanent. Not aimed at storage — a merge retires its sources rather than
-# deleting them, so what it already keeps and never reclaims (~3.4 KB of husk
-# and vector) dwarfs the payload it adds (~190 B). It bounds the one claim that
-# keeps absorbing restatements, whose history otherwise grows without limit.
-DEFAULT_MERGE_UNDO_DEPTH = 10
-
-# How many completed merge/reverse cycles a fact may have behind it before the
-# next merge refuses. One is an ordinary correction; two can be two judges
-# disagreeing; the third attempt is an oscillation nobody wants, and an agent
-# can run it indefinitely without noticing.
-DEFAULT_MERGE_CYCLE_LIMIT = 2
-
-
 def completed_merge_cycles(node: EpistemicNode) -> int:
     """How many times this node has been merged and then brought back.
 

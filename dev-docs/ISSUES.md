@@ -162,42 +162,6 @@ worth keeping, or only the label and the timepoint do.
 labelled relations to one neighbour, which any graph built with the timeline
 tools will be.
 
-### A new dated point clears every hold on its timeline
-
-🟡 **Open.**
-
-**What breaks.** `add_timeline_timepoint` hands the id of every timepoint on
-the timeline to `clear_holds`, so any new dated point, a materialised
-occurrence included, un-holds every held temporal contradiction there,
-whatever points it concerns. An ordering constraint clears only the holds that
-touch the pair it asserts. `docs/TIMELINES.md` states the behaviour as it is.
-
-**Why it matters.** A hold is a judge's decision that nothing on hand settles a
-disagreement. Recording an unrelated date, or materialising next week's market
-day, puts every held contradiction back in front of `reflect` with no new
-evidence about any of them.
-
-**Files.** `epimemer/mcp/tools.py`, `add_timeline_timepoint` (its
-`clear_holds` call). `epimemer/pipelines/timeline/ordering.py`, `clear_holds`,
-and the per-pair rule to reuse in `add_constraints`, which collects the
-touched pairs and passes only those to `clear_holds`.
-
-**The decision.** Should a hold clear only when the new point touches the
-pair, and if so, what touching means for a date: a held point the new one now
-orders directly, or one whose derived bounds it changes? Or keep the rule that
-a dated point is evidence about everything it orders, and say so where a hold
-is described to the agent.
-
-**Guarding tests.** In `tests/mcp/test_timeline_ordering.py`, beside
-`TestAddTimepointRunsTheChecks`, a test such as
-`test_a_dated_point_unrelated_to_a_held_pair_leaves_the_hold`: hold a cycle
-between two vague points, add a dated point that orders neither, and assert
-the contradiction is still `held`. It fails on `main` because every id reaches
-`clear_holds`. `TestHoldVerdict` in `tests/pipelines/test_ordering.py` covers
-the constraint side and must keep passing.
-
-**Verify.** `uv run python -m pytest tests/ -q`.
-
 ### FTS index backfill runs inside `connect()` with no progress reporting
 
 ⏸ **Deferred**, trigger stated below.

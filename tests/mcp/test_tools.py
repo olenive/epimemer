@@ -1741,6 +1741,19 @@ class TestApplyReflectionArchivals:
         assert (await storage.get_node(approved.id)).status == NodeStatus.ARCHIVED
         assert (await storage.get_node(spared.id)).status == NodeStatus.ACTIVE
 
+    async def test_an_id_named_twice_is_archived_once(self, storage, embedding_provider):
+        approved = await self._trivial_fact(storage, "named twice")
+
+        result, _ = await apply_reflection(
+            storage,
+            embedding_provider,
+            archivals=[approved.id, approved.id],
+        )
+
+        assert result["nodes_archived"] == 1
+        assert [n["id"] for n in result["archive_data"]["nodes"]] == [approved.id]
+        assert result["archivals_skipped"] == []
+
         exported = {n["id"] for n in result["archive_data"]["nodes"]}
         assert exported == {approved.id}
 
@@ -1847,6 +1860,42 @@ class TestApplyReflectionArchivals:
 
         assert result["nodes_archived"] == 0
         assert (await storage.get_node(node.id)).status == NodeStatus.ARCHIVED
+
+    async def test_each_skipped_id_comes_back_with_its_reason(self, storage, embedding_provider):
+        """The nominator offers active nodes only, so an id that cannot be
+        archived is a stale worklist or a mistake, and the caller is told which
+        rather than left to compare counts."""
+        archived = await self._trivial_fact(storage, "archived earlier")
+        await apply_reflection(storage, embedding_provider, archivals=[archived.id])
+        retired = await self._trivial_fact(storage, "superseded since")
+        await storage.set_node_status_tx(
+            [retired], status=NodeStatus.SUPERSEDED, at=datetime.now(UTC)
+        )
+        approved = await self._trivial_fact(storage, "approved for archival")
+
+        result, _ = await apply_reflection(
+            storage,
+            embedding_provider,
+            archivals=[archived.id, "no-such-node", retired.id, approved.id],
+        )
+
+        assert result["nodes_archived"] == 1
+        assert result["archivals_skipped"] == [
+            {"node_id": archived.id, "why": "already archived"},
+            {"node_id": "no-such-node", "why": "unknown here"},
+            {
+                "node_id": retired.id,
+                "why": "not active: its status is superseded, and only an active node is archived",
+            },
+        ]
+        assert (await storage.get_node(retired.id)).status == NodeStatus.SUPERSEDED
+
+    async def test_nothing_is_listed_when_every_id_is_archived(self, storage, embedding_provider):
+        approved = await self._trivial_fact(storage)
+
+        result, _ = await apply_reflection(storage, embedding_provider, archivals=[approved.id])
+
+        assert result["archivals_skipped"] == []
 
 
 # --- Apply Reflection (merge) tests ---

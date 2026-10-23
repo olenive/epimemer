@@ -19,8 +19,6 @@ from epimemer.core.advisories import (
 )
 from epimemer.core.seat import JudgeConfirmation
 from epimemer.core.types import (
-    DEFAULT_MERGE_CYCLE_LIMIT,
-    DEFAULT_MERGE_UNDO_DEPTH,
     Agent,
     DecisionKind,
     DecisionRecord,
@@ -106,6 +104,21 @@ def resolve_require_judge(override: bool | None, default: bool) -> bool:
     return default if override is None else override
 
 
+# How far back along a `merged_into` chain the partitions are retained. Ten
+# levels of one lineage stay reversible; the eleventh and beyond become
+# permanent. Not aimed at storage: a merge retires its sources rather than
+# deleting them, so what it already keeps and never reclaims (~3.4 KB of husk
+# and vector) dwarfs the payload it adds (~190 B). It bounds the one claim that
+# keeps absorbing restatements, whose history otherwise grows without limit.
+DEFAULT_MERGE_UNDO_DEPTH = 10
+
+# How many completed merge/reverse cycles a fact may have behind it before the
+# next merge refuses. One is an ordinary correction; two can be two judges
+# disagreeing; the third attempt is an oscillation nobody wants, and an agent
+# can run it indefinitely without noticing.
+DEFAULT_MERGE_CYCLE_LIMIT = 2
+
+
 class MergeOverrides(BaseModel):
     """A graph's own answers about merging, where it has any.
 
@@ -121,23 +134,32 @@ class MergeOverrides(BaseModel):
 
 
 class MergeSettings(BaseModel):
-    """The numbers actually in force for a merge on this graph."""
+    """The numbers actually in force for a merge on this graph.
+
+    Built with no arguments it carries the built-in defaults, which is what a
+    caller with no `ServerConfig` in reach falls back to; the server passes the
+    process defaults from its config instead.
+    """
 
     undo_depth: int = DEFAULT_MERGE_UNDO_DEPTH
     cycle_limit: int = DEFAULT_MERGE_CYCLE_LIMIT
 
 
-def resolve_merge_settings(overrides: MergeOverrides | None) -> MergeSettings:
-    """The merge numbers in force: the graph's overrides, else the defaults.
+def resolve_merge_settings(
+    overrides: MergeOverrides | None, defaults: MergeSettings
+) -> MergeSettings:
+    """The merge numbers in force: the graph's overrides, else the process
+    defaults.
 
-    Shared for the reason `resolve_reflect_threshold` is shared — the tools, the
+    Shared for the reason `resolve_reflect_threshold` is shared: the tools, the
     merge path and anything reporting the settings all resolve them, and a
     second copy is how a reported number drifts from the one the gate applies.
     """
     if overrides is None:
-        return MergeSettings()
+        return defaults
     return MergeSettings(
-        **{field: value for field, value in overrides.model_dump().items() if value is not None}
+        **defaults.model_dump()
+        | {field: value for field, value in overrides.model_dump().items() if value is not None}
     )
 
 

@@ -136,6 +136,7 @@ from epimemer.storage.protocol import (
     DeferralOverrides,
     DeferralSettings,
     MergeOverrides,
+    MergeSettings,
     StorageBackend,
     TimelineConflict,
     WarningOverrides,
@@ -1723,9 +1724,16 @@ async def store_decomposition(
         # spelling, and can use it next time instead of finding out from a
         # search that returns nothing.
         result["tags_resolved_to"] = dict(sorted(tags_resolved_to.items()))
+    # Keyed by node type, as every tool's `source_types` is and as `graph_stats`
+    # counts `nodes_by_type`; the result's `nodes_created` keeps its own plurals.
+    created_by_type = {
+        NodeType.TOPIC.value: total_topics,
+        NodeType.FACT.value: total_facts,
+        NodeType.INFERENCE.value: total_inferences,
+    }
     meta = ResponseMeta(
         nodes_returned=total_topics + total_facts + total_inferences,
-        source_types={k: v for k, v in nodes_created.items() if v > 0},
+        source_types={k: v for k, v in created_by_type.items() if v > 0},
         # The nodes this response names: a historical twin's retired fact and
         # the new one, and whatever a surfaced warning is about, such as the
         # topic node created from a tag whose description was not written. The
@@ -3777,6 +3785,7 @@ async def merge_facts(
     *,
     similarity_threshold: float = SIMILARITY_NOMINATION_THRESHOLD,
     judge: JudgeRef | None = None,
+    merge_defaults: MergeSettings | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Collapse facts that restate one claim into a single node.
 
@@ -3834,7 +3843,10 @@ async def merge_facts(
         storage,
         model_id=embedding_provider.model_id,
         similarity_threshold=similarity_threshold,
-        cycle_limit=resolve_merge_settings(await storage.get_merge_overrides()).cycle_limit,
+        cycle_limit=resolve_merge_settings(
+            await storage.get_merge_overrides(),
+            merge_defaults if merge_defaults is not None else MergeSettings(),
+        ).cycle_limit,
     )
     if refusal is not None:
         return (
@@ -3858,7 +3870,14 @@ async def merge_facts(
         judged_by=judge,
         metadata=({"merged_from": source_ids} | ({"confidence_basis": basis} if basis else {})),
     )
-    await merge_nodes(list(sources), merged, storage, embedding_provider, judge=judge)
+    await merge_nodes(
+        list(sources),
+        merged,
+        storage,
+        embedding_provider,
+        merge_defaults=merge_defaults,
+        judge=judge,
+    )
     # The survivor first, so a reversal looking for *the merge that made this
     # node* finds it by the id it holds.
     await journal(storage, DecisionKind.MERGE, [merged.id, *source_ids], judge=judge)
@@ -3871,7 +3890,7 @@ async def merge_facts(
     }
     meta = ResponseMeta(
         nodes_returned=1,
-        source_types={"facts": 1},
+        source_types={NodeType.FACT.value: 1},
         retrieved=_declare([merged.id, *source_ids]),
     )
     return result, meta
@@ -3887,6 +3906,7 @@ async def merge_inferences(
     judge: JudgeRef | None = None,
     warning_policy: WarningPolicy | None = None,
     event_bus: InProcessEventBus | None = None,
+    merge_defaults: MergeSettings | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Collapse inferences that state one conclusion into a single node.
 
@@ -3942,7 +3962,10 @@ async def merge_inferences(
         storage,
         model_id=embedding_provider.model_id,
         similarity_threshold=similarity_threshold,
-        cycle_limit=resolve_merge_settings(await storage.get_merge_overrides()).cycle_limit,
+        cycle_limit=resolve_merge_settings(
+            await storage.get_merge_overrides(),
+            merge_defaults if merge_defaults is not None else MergeSettings(),
+        ).cycle_limit,
     )
     if refusal is not None:
         return (
@@ -3972,7 +3995,14 @@ async def merge_inferences(
         judged_by=judge,
         metadata=({"merged_from": source_ids} | ({"confidence_basis": basis} if basis else {})),
     )
-    await merge_nodes(list(sources), merged, storage, embedding_provider, judge=judge)
+    await merge_nodes(
+        list(sources),
+        merged,
+        storage,
+        embedding_provider,
+        merge_defaults=merge_defaults,
+        judge=judge,
+    )
     # The survivor first, so a reversal looking for *the merge that made this
     # node* finds it by the id it holds.
     await journal(storage, DecisionKind.MERGE, [merged.id, *source_ids], judge=judge)
@@ -3993,7 +4023,7 @@ async def merge_inferences(
     )
     meta = ResponseMeta(
         nodes_returned=1,
-        source_types={"inferences": 1},
+        source_types={NodeType.INFERENCE.value: 1},
         # A disjoint-premises warning names the two premises in its `detail`,
         # and the agent reads them there, so they follow the survivor and its
         # sources.
@@ -4067,9 +4097,16 @@ async def reverse_merge(
         reviews=overturned,
         supersedes=overturned,
     )
+    # Counted from the restored nodes rather than assumed: a merge of facts,
+    # of inferences and of topics all reverse here.
+    restored = await storage.get_nodes(outcome["restored_ids"])
+    source_types: dict[str, int] = {}
+    for node in restored.values():
+        key = _node_type_key(node)
+        source_types[key] = source_types.get(key, 0) + 1
     return outcome, ResponseMeta(
         nodes_returned=len(outcome["restored_ids"]),
-        source_types={"facts": len(outcome["restored_ids"])},
+        source_types=source_types,
         retrieved=_declare(outcome["restored_ids"]),
     )
 
@@ -4080,6 +4117,7 @@ async def configure_merge(
     undo_depth: int | None = None,
     cycle_limit: int | None = None,
     clear: bool = False,
+    merge_defaults: MergeSettings | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Set the active graph's merge settings, or clear them back to the defaults.
 
@@ -4096,6 +4134,8 @@ async def configure_merge(
     `clear=True` returns both to the process defaults — deliberately the
     defaults *at the time*, not today's values frozen in, so a default changed
     later still reaches a graph that was once configured and then cleared.
+    `merge_defaults` is that process default, which the server takes from
+    `EPIMEMER_MERGE_UNDO_DEPTH` and `EPIMEMER_MERGE_CYCLE_LIMIT`.
     """
     if undo_depth is not None and undo_depth < 1:
         raise ValueError(
@@ -4128,7 +4168,9 @@ async def configure_merge(
         )
 
     overrides = await storage.get_merge_overrides()
-    settings = resolve_merge_settings(overrides)
+    settings = resolve_merge_settings(
+        overrides, merge_defaults if merge_defaults is not None else MergeSettings()
+    )
     result = {
         "graph": storage.current_database,
         "merge_undo_depth": settings.undo_depth,
@@ -4961,6 +5003,7 @@ async def apply_reflection(
     merge_similarity_threshold: float = 0.92,
     judge: JudgeRef | None = None,
     deferral_defaults: DeferralSettings | None = None,
+    merge_defaults: MergeSettings | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Apply agent-provided reflection decisions to the graph.
 
@@ -5021,8 +5064,10 @@ async def apply_reflection(
         archival_candidates. Exports each node with its edges (returned as
         ``archive_data`` — keep it; that copy is the archive) and atomically
         flips them to ARCHIVED, which removes them from every active-status
-        query. Nothing is deleted, and ``restore`` reverses it. Unknown or
-        already-retired ids are skipped, as supersessions are.
+        query. Nothing is deleted, and ``restore`` reverses it. Only an active
+        node is archived; any other id comes back in ``archivals_skipped`` as
+        {node_id, why}, saying whether it is unknown, already archived, or not
+        active and what its status is.
     retained: [{node_id: str, because: str, covers: [str] | None}] —
         *reviewed, and it stands*. The verdict opposite to `archivals`, and the
         one that had no writer: a nominator recomputed from current state
@@ -5613,7 +5658,14 @@ async def apply_reflection(
                 **({"description_history": description.history} if description.history else {}),
             },
         )
-        await merge_nodes(sources, merged_topic, storage, embedding_provider, judge=judge)
+        await merge_nodes(
+            sources,
+            merged_topic,
+            storage,
+            embedding_provider,
+            merge_defaults=merge_defaults,
+            judge=judge,
+        )
         await journal(
             storage,
             DecisionKind.MERGE,
@@ -5647,10 +5699,28 @@ async def apply_reflection(
     # 7. Archive the approved trivial nodes: export first, then one atomic flip.
     #    Ordering matters — the export is the archive, so it must be taken
     #    before anything about the nodes changes.
+    #    An id that cannot be archived is skipped and said, as a keep or a
+    #    deferral is below: the nominator offers active nodes only, so one that
+    #    is not is a stale worklist or a mistake, and the caller is told which.
     to_archive: list[EpistemicNode] = []
-    for node_id in archivals or []:
+    archivals_skipped: list[dict] = []
+    # An id named twice is one node: archived once, counted once, exported once.
+    for node_id in dict.fromkeys(archivals or []):
         node = await storage.get_node(node_id)
-        if node is None or node.status is not NodeStatus.ACTIVE:
+        if node is None:
+            archivals_skipped.append({"node_id": node_id, "why": "unknown here"})
+            continue
+        if node.status is NodeStatus.ARCHIVED:
+            archivals_skipped.append({"node_id": node_id, "why": "already archived"})
+            continue
+        if node.status is not NodeStatus.ACTIVE:
+            archivals_skipped.append(
+                {
+                    "node_id": node_id,
+                    "why": f"not active: its status is {node.status.value}, and only an "
+                    f"active node is archived",
+                }
+            )
             continue
         to_archive.append(node)
 
@@ -6036,6 +6106,7 @@ async def apply_reflection(
         "topic_merges_refused": topic_merges_refused,
         "supersessions_applied": supersessions_applied,
         "nodes_archived": len(to_archive),
+        "archivals_skipped": archivals_skipped,
         "retentions_recorded": retentions_recorded,
         "retained_skipped": retained_skipped,
         "deferrals_recorded": deferrals_recorded,
@@ -7630,9 +7701,13 @@ async def add_timeline_timepoint(
     appeared to be checking for one. A materialised occurrence is a dated point
     like any other and runs them too. A vague point orders nothing by itself, so
     it runs nothing.
+
+    **A new point clears no hold.** A held contradiction waits for evidence
+    about its points, and a point nothing ties to them yet is not that; the
+    ordering assertion that ties it in clears the holds it touches.
     """
     from epimemer.pipelines.timeline.functions import add_timepoint
-    from epimemer.pipelines.timeline.ordering import clear_holds, run_checks
+    from epimemer.pipelines.timeline.ordering import run_checks
     from epimemer.pipelines.timeline.recurrence import materialise
 
     materialising = recurrence_id is not None or occurrence_start is not None
@@ -7672,9 +7747,10 @@ async def add_timeline_timepoint(
     opened = []
     if dated and created:
         at = datetime.now(UTC)
-        # A dated point is new evidence about every point it now orders, so a
-        # contradiction being held for want of evidence stops being held.
-        tl = clear_holds(tl, [point.id for point in tl.timepoints])
+        # No hold is cleared here. A new point arrives with no constraint tying
+        # it to anything, so it is not yet evidence about a held contradiction;
+        # the ordering assertion that ties it in, recorded by
+        # `order_timepoints`, is what clears the holds it touches.
         tl, opened = run_checks(tl, at=at)
     if created:
         try:

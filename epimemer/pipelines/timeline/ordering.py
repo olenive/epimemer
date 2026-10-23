@@ -533,9 +533,10 @@ def clear_holds(timeline: Timeline, touched: Iterable[str]) -> Timeline:
     """Un-hold every open contradiction touching one of `touched`.
 
     A hold says nothing on hand settles the disagreement, so it waits for
-    evidence, and a constraint or a dated point about any point in it is that
-    evidence. Nothing else clears a hold: this is not a snooze, and nothing
-    reopens one on a schedule.
+    evidence, and a constraint about any point in it is that evidence. A new
+    dated point on its own is not: nothing ties it to a held point until a
+    constraint does, so adding one passes no ids here. Nothing else clears a
+    hold: this is not a snooze, and nothing reopens one on a schedule.
     """
     points = set(touched)
     updated = [

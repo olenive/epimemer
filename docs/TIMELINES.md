@@ -143,8 +143,9 @@ in `nodes_to_move`; anything not named stays where it is.
 **`hold`.** The sources genuinely disagree and nothing on hand settles it. The
 contradiction stays open, the point stays contested, and `reflect` stops
 nominating it. Only new evidence clears a hold: an ordering assertion touching
-any point in the contradiction, or a new dated point anywhere on the timeline.
-Nothing reopens it on a schedule.
+any point in the contradiction. A new dated point clears nothing by itself,
+since nothing ties it to a held point until an assertion does. Nothing reopens
+a hold on a schedule.
 
 ### Two points that turn out to be one moment
 

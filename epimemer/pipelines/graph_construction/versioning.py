@@ -25,7 +25,7 @@ from epimemer.core.types import (
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.pipelines.embedding_text import embedding_text
-from epimemer.storage.protocol import StorageBackend, resolve_merge_settings
+from epimemer.storage.protocol import MergeSettings, StorageBackend, resolve_merge_settings
 
 
 async def supersede_node(
@@ -282,6 +282,7 @@ async def merge_nodes(
     embedding_provider: EmbeddingProvider,
     *,
     undo_depth: int | None = None,
+    merge_defaults: MergeSettings | None = None,
     judge: JudgeRef | None = None,
 ) -> list[NodeEdge]:
     """Merge multiple nodes into one.
@@ -327,12 +328,18 @@ async def merge_nodes(
             be at least 1 — the merge being made now is level 1, and a depth
             below that would discard the payload in the same breath as
             capturing it.
+        merge_defaults: The process defaults the graph's setting falls back
+            to, which the server takes from its config. `None` is the built-in
+            `MergeSettings()`, for a caller with no config in reach.
 
     Returns:
         A list of merged_into edges, one per source node.
     """
     if undo_depth is None:
-        undo_depth = (resolve_merge_settings(await storage.get_merge_overrides())).undo_depth
+        undo_depth = resolve_merge_settings(
+            await storage.get_merge_overrides(),
+            merge_defaults if merge_defaults is not None else MergeSettings(),
+        ).undo_depth
     if undo_depth < 1:
         raise ValueError(
             f"undo_depth must be at least 1, got {undo_depth}: the merge being "

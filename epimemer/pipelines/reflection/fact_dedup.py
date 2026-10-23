@@ -25,7 +25,6 @@ from collections.abc import Sequence
 from pydantic import BaseModel
 
 from epimemer.core.types import (
-    DEFAULT_MERGE_CYCLE_LIMIT,
     ClaimKind,
     EpistemicNode,
     Fact,
@@ -34,7 +33,7 @@ from epimemer.core.types import (
 )
 from epimemer.pipelines.reflection.review import SIMILARITY_NOMINATION_THRESHOLD, metacontexts_for
 from epimemer.pipelines.reflection.topic_consolidation import all_pairs_above_threshold
-from epimemer.storage.protocol import StorageBackend
+from epimemer.storage.protocol import DEFAULT_MERGE_CYCLE_LIMIT, StorageBackend
 
 
 class MergeRefused(BaseModel):

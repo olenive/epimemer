@@ -170,7 +170,7 @@ class TestTwoReadingsBecomeOne:
             for edge in await storage.get_edges_from(survivor.id, edge_type=EdgeType.DERIVED_FROM)
         }
         assert premises == {premise.id, other_premise.id}
-        assert meta.source_types == {"inferences": 1}
+        assert meta.source_types == {"inference": 1}
 
     async def test_the_survivor_is_searchable_and_in_a_metacontext(
         self, storage, embedding_provider

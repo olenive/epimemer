@@ -54,7 +54,6 @@ from pydantic import BaseModel, Field
 
 from epimemer.core.advisories import Advisory, AdvisoryKind
 from epimemer.core.types import (
-    DEFAULT_MERGE_CYCLE_LIMIT,
     Inference,
     NodeStatus,
     NodeType,
@@ -79,7 +78,7 @@ from epimemer.pipelines.reflection.soundness import (
 from epimemer.pipelines.reflection.topic_consolidation import (
     all_pairs_above_threshold,
 )
-from epimemer.storage.protocol import StorageBackend
+from epimemer.storage.protocol import DEFAULT_MERGE_CYCLE_LIMIT, StorageBackend
 
 
 class InferenceMergeCandidate(BaseModel):
