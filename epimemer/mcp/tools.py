@@ -132,11 +132,16 @@ from epimemer.pipelines.review.modes import (
     passes_ceiling,
 )
 from epimemer.storage.protocol import (
+    MAX_DEFERRAL_CAP,
+    DeferralOverrides,
+    DeferralSettings,
     MergeOverrides,
     StorageBackend,
     TimelineConflict,
     WarningOverrides,
+    clamped_deferral_overrides,
     resolve_backup_threshold,
+    resolve_deferral_settings,
     resolve_merge_settings,
     resolve_reflect_threshold,
     resolve_require_judge,
@@ -4110,6 +4115,126 @@ async def configure_merge(
     return result, ResponseMeta()
 
 
+# The fields `configure_deferral` can clear, in the order it reports them.
+DEFERRAL_FIELDS: tuple[str, ...] = ("first_wait", "cap")
+
+
+async def configure_deferral(
+    storage: StorageBackend,
+    *,
+    first_wait: int | None = None,
+    cap: int | None = None,
+    clear: Sequence[str] | None = None,
+    deferral_defaults: DeferralSettings | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Read or change how long a deferred `never_retrieved` nominee waits.
+
+    Both numbers are counted in reflect rounds. A round is a reflect that
+    completes with at least one store since the previous reflect. `first_wait`
+    is the wait after a node's first deferral; each further deferral doubles
+    it, and `cap` is the longest any wait may grow to.
+
+    A named field sets that override; a name in `clear` returns it to the
+    process default, deliberately the default *at the time*, so a default
+    changed later still reaches a graph that was once configured and then
+    cleared; an omitted field keeps whatever override it had. Naming a field
+    both ways is refused rather than guessed at.
+
+    A change is checked before anything is written: each value named at least
+    1 and at most `MAX_DEFERRAL_CAP`, and the result, as it would resolve, with
+    `cap` at least `first_wait`. A cap below the first wait would make the
+    first deferral wait less than it was asked to, and a value past the
+    ceiling would let a deferral amount to never, so both are refused with the
+    numbers named. A call that changes nothing, the read with no arguments
+    included, is never refused: a stored override that disagrees with a
+    process default changed since has to stay visible, and the wait rule caps
+    either way.
+
+    **The ceiling is enforced on write and applied on read.** A stored value
+    above it, from before it existed or from a bundle, is read as stored,
+    resolves to the ceiling, and is reported under `clamped` with what is
+    stored; any write this tool makes stores it at the ceiling. Changing the
+    settings moves no deferral already written: each is measured against the
+    settings in force at the reflect that reads it.
+    """
+    defaults = deferral_defaults if deferral_defaults is not None else DeferralSettings()
+    # A bare string is one name rather than a list of its characters.
+    cleared = list(dict.fromkeys([clear] if isinstance(clear, str) else (clear or [])))
+    unknown = [name for name in cleared if name not in DEFERRAL_FIELDS]
+    if unknown:
+        raise ValueError(
+            f"clear names {', '.join(repr(name) for name in unknown)}, which is not "
+            f"a deferral setting. The settings are {', '.join(DEFERRAL_FIELDS)}."
+        )
+    supplied = {
+        name: value
+        for name, value in (("first_wait", first_wait), ("cap", cap))
+        if value is not None
+    }
+    both = [name for name in cleared if name in supplied]
+    if both:
+        raise ValueError(
+            f"{', '.join(both)} is both set and cleared in one call; send one or the other."
+        )
+
+    for name, value in supplied.items():
+        if value < 1:
+            raise ValueError(
+                f"{name} must be at least 1 reflect round, got {value}: a wait of "
+                f"zero rounds would offer the node again on the very next reflect. "
+                f"Nothing was changed."
+            )
+        if value > MAX_DEFERRAL_CAP:
+            raise ValueError(
+                f"{name} must be at most {MAX_DEFERRAL_CAP} reflect rounds, got "
+                f"{value}: a deferral promises the node is reviewed again, and a "
+                f"wait that long amounts to never. Nothing was changed."
+            )
+
+    current = await storage.get_deferral_overrides()
+    clamped = clamped_deferral_overrides(current)
+    proposed = DeferralOverrides(
+        **{**current.model_dump(), **supplied, **{name: None for name in cleared}}
+    )
+    # Checked only for a change. A read, or a clear of what is already clear,
+    # writes nothing, and refusing it would hide what is in force exactly when
+    # an override and a newer process default disagree. A write stores any
+    # value above the ceiling at the ceiling, which is what it resolved to.
+    if proposed != current:
+        written = DeferralOverrides(
+            **{
+                name: None if value is None else min(value, MAX_DEFERRAL_CAP)
+                for name, value in proposed.model_dump().items()
+            }
+        )
+        resolved = resolve_deferral_settings(written, defaults)
+        if resolved.cap < resolved.first_wait:
+            raise ValueError(
+                f"cap ({resolved.cap}) must be at least first_wait "
+                f"({resolved.first_wait}): the cap is the longest a wait may grow to, "
+                f"so it cannot be shorter than the first one. Nothing was changed."
+            )
+        await storage.set_deferral_overrides(written)
+
+    overrides = await storage.get_deferral_overrides()
+    settings = resolve_deferral_settings(overrides, defaults)
+    result = {
+        "graph": storage.current_database,
+        "deferral_first_wait": settings.first_wait,
+        "deferral_cap": settings.cap,
+        "overridden": overrides.model_dump(exclude_none=True),
+        "default_first_wait": defaults.first_wait,
+        "default_cap": defaults.cap,
+        "reflect_round": await storage.get_reflect_round(),
+        "ceiling": MAX_DEFERRAL_CAP,
+    }
+    if clamped:
+        # What was stored above the ceiling when this call began, and is in
+        # force as the ceiling. A write in this call stored it at the ceiling.
+        result["clamped"] = clamped
+    return result, ResponseMeta()
+
+
 async def configure_warnings(
     storage: StorageBackend,
     *,
@@ -4272,6 +4397,7 @@ async def reflect(
     max_nominations: int = MAX_NOMINATIONS,
     warning_policy: WarningPolicy | None = None,
     event_bus: InProcessEventBus | None = None,
+    deferral_defaults: DeferralSettings | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Analyse the memory graph and return candidates for the agent to act on.
 
@@ -4286,8 +4412,17 @@ async def reflect(
     it (`boundaries_declined`); a declined one is left out here until
     `reopen(boundary=...)` withdraws the decline, and then comes back carrying
     `reopened` with the reason.
+
+    A `never_retrieved` archival nominee somebody deferred is left out until
+    its wait is over, counted in reflect rounds and resolved from
+    `deferral_defaults` and the graph's overrides, and then comes back first in
+    its class carrying `deferred`. `deferral_defaults` is the process default
+    from `ServerConfig`; `None` is the built-in one.
     """
-    from epimemer.pipelines.reflection.archival import nominate_archival_candidates
+    from epimemer.pipelines.reflection.archival import (
+        candidate_payload,
+        nominate_archival_candidates,
+    )
     from epimemer.pipelines.reflection.boundaries import propose_boundaries
     from epimemer.pipelines.reflection.contradiction_detection import detect_contradictions
     from epimemer.pipelines.reflection.inference_dedup import nominate_inference_merges
@@ -4581,7 +4716,12 @@ async def reflect(
     #    embeddings. The agent judges, the human approves, and
     #    apply_reflection(archivals=[...]) applies.
     async def _archival():
-        return [c.model_dump(mode="json") for c in await nominate_archival_candidates(storage)]
+        return [
+            candidate_payload(c)
+            for c in await nominate_archival_candidates(
+                storage, deferral_defaults=deferral_defaults
+            )
+        ]
 
     # 8. Find likely-synonymous user relationship labels (open vocabulary captured
     #    fast, organized slow). Judged via apply_reflection relation_verdicts,
@@ -4760,6 +4900,22 @@ async def reflect(
 # --- Apply Reflection (stores agent decisions) ---
 
 
+def _entry_node_id(entry: object) -> str:
+    """The `node_id` an `apply_reflection` entry names, or "" where it names none."""
+    if not isinstance(entry, Mapping):
+        return ""
+    node_id = entry.get("node_id")
+    return node_id.strip() if isinstance(node_id, str) else ""
+
+
+# Why a node named in both `retained` and `deferred` is refused in both.
+_KEEP_AND_DEFER = (
+    "named in both `retained` and `deferred`, which contradict each other: "
+    "a keep holds a never_retrieved node back for good, a deferral only for a "
+    "while. Neither was recorded; send the one you mean"
+)
+
+
 async def apply_reflection(
     storage: StorageBackend,
     embedding_provider: EmbeddingProvider,
@@ -4773,6 +4929,7 @@ async def apply_reflection(
     supersessions: list[dict] | None = None,
     archivals: list[str] | None = None,
     retained: list[dict] | None = None,
+    deferred: list[dict] | None = None,
     judgments: list[dict] | None = None,
     relation_verdicts: list[dict] | None = None,
     boundaries: list[dict] | None = None,
@@ -4780,6 +4937,7 @@ async def apply_reflection(
     similarities: list[dict] | None = None,
     merge_similarity_threshold: float = 0.92,
     judge: JudgeRef | None = None,
+    deferral_defaults: DeferralSettings | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Apply agent-provided reflection decisions to the graph.
 
@@ -4848,8 +5006,9 @@ async def apply_reflection(
         re-offers what was already kept and cannot know it. Records that
         somebody looked; moves no value, retires nothing.
         **`covers` must be exactly the node's outstanding reasons** — not merely
-        enough of them. One edge is written per id, so a *further* change is a
-        reason no confirmation covers and the node is nominated again. Missing
+        enough of them. They are stored on the verdict's journal row, so a
+        *further* change is a reason no confirmation covers and the node is
+        nominated again. Missing
         ids are refused, and **surplus ids are refused too**, because an anchor
         on a reason nobody named would pre-cover a change nobody has seen, which
         is the one thing anchoring exists to prevent. Naming every premise to be
@@ -4863,8 +5022,12 @@ async def apply_reflection(
         nothing links to and nothing has retrieved (`never_retrieved`). Then the
         node is kept for its own sake and the verdict's `covers` is empty, which
         is sound because nothing about that nomination can change without
-        removing it from the set anyway. Passing any id for such a node is
-        refused, since the reader will only ever ask about the node itself.
+        removing it from the set anyway. **That keep is permanent for the same
+        reason**: no reason arriving later can outrank it, so the node is not
+        offered again unless `reopen` withdraws the keep. Where you mean *not
+        now* rather than *keep it*, use `deferred`. Passing any id for such a
+        node is refused, since the reader will only ever ask about the node
+        itself.
         Omitting `covers` on a node that *does* carry reasons is refused the
         other way, naming them: an empty keep there covers nothing, so the node
         returns on the next reflect while this call reported success. The ids are
@@ -4879,7 +5042,26 @@ async def apply_reflection(
         not recorded comes back in `retained_skipped` with the reason, which is
         also where a node named in both `archivals` and `retained` is reported —
         archival wins, and the collision is said rather than resolved in
-        silence.
+        silence. A node named in both `retained` and `deferred` is refused in
+        both lists, since the two answers contradict each other.
+    deferred: [{node_id: str, because: str}]: *not now, ask again later*,
+        the third answer to a `never_retrieved` nominee from reflect's
+        archival_candidates. Writes one `deferral` journal row per node,
+        stamped with the graph's current reflect round as `at_round`, and the
+        node is left out of `archival_candidates` until that many rounds have
+        passed: `first_wait` after the first deferral, doubling with each one
+        after it, up to `cap` (`configure_deferral`). A round is a reflect that
+        completes with at least one store since the previous reflect. When the
+        wait is over the node comes back first among the never_retrieved
+        nominees, carrying `deferred` with what was said last time.
+        ``because`` is required. Accepted only for a node the nominator's test
+        (`never_retrieved_exclusion`) counts as a ``never_retrieved`` nominee
+        right now; anything else comes back in
+        ``deferred_skipped`` with the reason, including a node named in
+        ``archivals`` (archival wins) and one named in ``retained`` as well
+        (refused in both). Each recorded deferral comes back in
+        ``deferrals_recorded`` as {node_id, count, due_after_rounds}.
+        ``reopen(node_ids=[id])`` withdraws a deferral still waiting.
     judgments: [{node_id: str, direction: "up"|"down", reason: str,
         related_id: str | None}] — re-judge a node's importance, typically a
         `stale_judgment` nominee from reflect's archival_candidates. The verdict
@@ -4997,6 +5179,7 @@ async def apply_reflection(
             "supersessions": supersessions,
             "archivals": archivals,
             "retained": retained,
+            "deferred": deferred,
             "judgments": judgments,
             "boundaries": boundaries,
             "boundaries_declined": boundaries_declined,
@@ -5490,6 +5673,11 @@ async def apply_reflection(
         retained_skipped.append({"node_id": node_id, "why": why})
 
     archived_ids = {node.id for node in to_archive}
+    # A keep and a deferral of the same node contradict each other (*for good*
+    # against *not now*), and neither outranks the other the way archival
+    # outranks both, so the collision refuses the node in both lists.
+    deferred_ids = {_entry_node_id(entry) for entry in (deferred or [])} - {""}
+    retained_ids = {_entry_node_id(entry) for entry in (retained or [])} - {""}
     # Both reads batched over the whole batch rather than per entry: this is the
     # per-node round-trip pattern already measured and removed from
     # `gather_pending_review`, and re-adding it one loop at a time is how it got
@@ -5522,6 +5710,9 @@ async def apply_reflection(
                 "also named in `archivals`, which won — a batch "
                 "cannot both keep and retire one node",
             )
+            continue
+        if node_id in deferred_ids:
+            _skip(node_id, _KEEP_AND_DEFER)
             continue
         node = by_id.get(node_id)
         if node is None or node.status is not NodeStatus.ACTIVE:
@@ -5612,6 +5803,113 @@ async def apply_reflection(
             _skip(node_id, f"the keep verdict was not stored ({failed}); retry this node")
             continue
         retentions_recorded += 1
+
+    # 7c. Record the deferrals. After the keeps for the same reason they follow
+    #     the archivals: a node this batch archived is refused here as it is
+    #     there, and the archive is the answer that stands.
+    from epimemer.pipelines.reflection.archival import (
+        knowledge_in_degree_for,
+        never_retrieved_exclusion,
+    )
+    from epimemer.pipelines.reflection.deferral import (
+        deferral_settings_for,
+        deferral_wait,
+        deferrals_for,
+        record_deferral,
+    )
+
+    deferrals_recorded: list[dict] = []
+    deferred_skipped: list[dict] = []
+
+    def _skip_deferral(node_id: str, why: str) -> None:
+        deferred_skipped.append({"node_id": node_id, "why": why})
+
+    # Batched over the whole list, on the keep step's terms, and read after the
+    # keeps above have landed, so the nominee test sees the graph as this batch
+    # left it.
+    to_defer = sorted(deferred_ids)
+    defer_by_id = await storage.get_nodes(to_defer)
+    defer_in_degree = await knowledge_in_degree_for(list(defer_by_id), storage)
+    defer_retained = await confirmed_reasons_for(list(defer_by_id), storage)
+    defer_states = await deferrals_for(list(defer_by_id), storage)
+    current_round = await storage.get_reflect_round()
+    deferral_settings = await deferral_settings_for(storage, deferral_defaults)
+    deferred_now: set[str] = set()
+
+    for entry in deferred or []:
+        if not isinstance(entry, Mapping):
+            _skip_deferral(
+                "", f"entry is {type(entry).__name__}, not an object {{node_id, because}}"
+            )
+            continue
+        node_id = _entry_node_id(entry)
+        because = entry.get("because")
+        because = because.strip() if isinstance(because, str) else ""
+        if not node_id:
+            _skip_deferral("", "no node_id")
+            continue
+        if not because:
+            _skip_deferral(
+                node_id,
+                "`because` is required: the next judge to see this node is "
+                "owed why it was put off, which is what it is shown",
+            )
+            continue
+        if node_id in deferred_now:
+            _skip_deferral(node_id, "named twice in `deferred`; deferred once")
+            continue
+        if node_id in archived_ids:
+            _skip_deferral(
+                node_id,
+                "also named in `archivals`, which won: a batch cannot both "
+                "retire a node and ask about it again later",
+            )
+            continue
+        if node_id in retained_ids:
+            _skip_deferral(node_id, _KEEP_AND_DEFER)
+            continue
+        node = defer_by_id.get(node_id)
+        if node is None:
+            _skip_deferral(node_id, "unknown here")
+            continue
+        excluded = never_retrieved_exclusion(
+            node,
+            in_degree=defer_in_degree.get(node_id, 0),
+            retained=defer_retained,
+            deferral=defer_states.get(node_id),
+            current_round=current_round,
+            settings=deferral_settings,
+        )
+        if excluded is not None:
+            _skip_deferral(
+                node_id,
+                f"not a never_retrieved nominee: {excluded}. A deferral answers "
+                f"only that nomination",
+            )
+            continue
+        # The row is the deferral, so a store failure is reported per node,
+        # as a keep's is above.
+        try:
+            await record_deferral(
+                storage,
+                node_id=node_id,
+                because=because,
+                at_round=current_round,
+                judge=judge,
+            )
+        except Exception as failed:
+            _skip_deferral(node_id, f"the deferral was not stored ({failed}); retry this node")
+            continue
+        deferred_now.add(node_id)
+        state = defer_states.get(node_id)
+        count = 1 if state is None else state.count + 1
+        deferrals_recorded.append(
+            {
+                "node_id": node_id,
+                "count": count,
+                "due_after_rounds": deferral_wait(count, deferral_settings),
+            }
+        )
 
     # 8. Re-judge importance. Separate from archivals on purpose: archiving is a
     #    status verdict wanting human approval, while a change of degree is
@@ -5717,6 +6015,8 @@ async def apply_reflection(
         "nodes_archived": len(to_archive),
         "retentions_recorded": retentions_recorded,
         "retained_skipped": retained_skipped,
+        "deferrals_recorded": deferrals_recorded,
+        "deferred_skipped": deferred_skipped,
         "archive_data": archive_data,
         "judgments_applied": judgments_applied,
         "relation_verdicts_recorded": relation_verdicts_recorded,
@@ -5757,6 +6057,7 @@ async def reopen(
     boundary: dict | None = None,
     reason: str,
     judge: JudgeRef | None = None,
+    deferral_defaults: DeferralSettings | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Put a question somebody already answered back on the worklist.
 
@@ -5775,8 +6076,13 @@ async def reopen(
       when it stopped counting and by whom, and left in the graph.
     - **Two relation labels**: a label pair carrying a verdict. A new verdict
       row says `reopened`, and the sweep reads the newest row for a pair.
-    - **One node id**: a node a `retained` verdict kept. A journal row says the
-      keep no longer covers it.
+    - **One node id**: a node a `retained` verdict kept, or one a `deferred`
+      verdict is still holding back. A journal row says the keep no longer
+      covers it and the deferral no longer stands, so the node is offered on
+      the next reflect if it still qualifies. A deferral whose wait is over is
+      keeping nothing out, so it alone is refused like a node nothing
+      suppresses; `deferral_defaults` is the process default the wait is
+      resolved against.
     - **A boundary**, `{node_id, source_id, endpoint, at, timeline_id?}` copied
       from the proposal: one declined through
       `apply_reflection(boundaries_declined=[...])`. The journal row alone is
@@ -5805,6 +6111,11 @@ async def reopen(
         boundary_question,
         declined_boundaries_for,
     )
+    from epimemer.pipelines.reflection.deferral import (
+        deferral_due,
+        deferral_settings_for,
+        deferrals_for,
+    )
     from epimemer.pipelines.reflection.retention import confirmed_reasons_for
     from epimemer.pipelines.reflection.similarity_decisions import symmetric_edges_between
 
@@ -5820,7 +6131,7 @@ async def reopen(
     if sum(bool(target) for target in (nodes, labels, boundary)) != 1:
         return refused(
             "name exactly one target: `node_ids` with one node to withdraw a "
-            "retention, `node_ids` with two to withdraw a pair's assessment, "
+            "retention or a deferral, `node_ids` with two to withdraw a pair's assessment, "
             "`relation_labels` with two label names, or `boundary` with the "
             "identity of a declined boundary proposal."
         )
@@ -5835,8 +6146,8 @@ async def reopen(
         return refused(f"a label pair needs two labels; {len(labels)} were named.")
     if nodes and len(nodes) not in (1, 2):
         return refused(
-            f"{len(nodes)} node ids name no target: one node is a retention, two "
-            f"are a pair, and there is no suppression over more."
+            f"{len(nodes)} node ids name no target: one node is a retention or a "
+            f"deferral, two are a pair, and there is no suppression over more."
         )
 
     retired_edges: list[NodeEdge] = []
@@ -5918,9 +6229,18 @@ async def reopen(
             return refused(f"no such node: {', '.join(missing)}.")
         if len(nodes) == 1:
             node_id = nodes[0]
-            if node_id not in await confirmed_reasons_for([node_id], storage):
+            # Either suppression is worth withdrawing, and one row withdraws
+            # both: a keep holds the node back for good, a deferral for a while.
+            kept = node_id in await confirmed_reasons_for([node_id], storage)
+            deferral = (await deferrals_for([node_id], storage)).get(node_id)
+            put_off = deferral is not None and not deferral_due(
+                deferral,
+                await storage.get_reflect_round(),
+                await deferral_settings_for(storage, deferral_defaults),
+            )
+            if not kept and not put_off:
                 return refused(
-                    f"no standing retention verdict for {node_id}: nothing is "
+                    f"no standing retention or deferral for {node_id}: nothing is "
                     f"keeping it out of the archival worklist, so there is "
                     f"nothing to reopen."
                 )

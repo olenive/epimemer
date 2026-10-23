@@ -150,6 +150,26 @@ NOT_AGENT_SETTABLE: dict[tuple[str, str], str] = {
         "default_threshold",
     ): "as graph_stats: the agent sets the per-graph override, never the default it falls back to",
     (
+        "configure_deferral",
+        "deferral_defaults",
+    ): "as configure_reflection: the process default from ServerConfig, which the "
+    "agent's per-graph override falls back to and cannot choose",
+    (
+        "reflect",
+        "deferral_defaults",
+    ): "as configure_deferral: the nominator resolves the graph's override against "
+    "the process default, and a caller passing its own could shorten every wait",
+    (
+        "apply_reflection",
+        "deferral_defaults",
+    ): "as reflect: the wait a deferral is reported with has to be the one the "
+    "nominator will apply",
+    (
+        "reopen",
+        "deferral_defaults",
+    ): "as reflect: whether a deferral is still holding a node back is the "
+    "nominator's question, asked against the same settings",
+    (
         "graph_stats",
         "default_backup_threshold",
     ): "as default_reflect_threshold, for the other counter",
@@ -317,6 +337,16 @@ def test_every_classification_states_a_reason():
     blank = [pair for pair, reason in NOT_AGENT_SETTABLE.items() if not reason.strip()]
     assert blank == []
     assert all(reason.strip() for reason in NO_IMPLEMENTATION.values())
+
+
+def test_deferred_reaches_the_agent():
+    """The third answer to a never-retrieved nominee, held to the rule `retained`
+    was: an argument the implementation reads and the boundary does not forward is
+    a feature no agent can use."""
+    assert "deferred" in inspect.signature(server.memory_apply_reflection).parameters
+    assert "deferred" in (server.memory_apply_reflection.__doc__ or "")
+    assert "archival_candidates" in (server.memory_reflect.__doc__ or "")
+    assert "clear" in inspect.signature(server.memory_configure_deferral).parameters
 
 
 def test_retained_reaches_the_agent():

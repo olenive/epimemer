@@ -1161,3 +1161,72 @@ class TestTheVersionReadOnAFreshDatabase:
 
         assert await _stored_schema_version(served) == 0
         assert await _stored_schema_version(embedded) == 0
+
+
+class TestACompletionThatLosesAWriteConflictIsRetried:
+    """Two completions writing the reflect record at once conflict on SurrealDB
+    rather than one waiting, and the loser is retried. Pinned here: the phrase
+    the retry matches is the one the engine actually sends, the bound is five
+    attempts, and anything else is raised at once."""
+
+    async def test_the_engine_says_what_the_retry_matches(self, store):
+        """A reworded message would turn every conflict into a failed reflect,
+        so the real one is provoked rather than assumed."""
+        await store.bump_reflect_counter()
+
+        results = await asyncio.gather(
+            store._query(surrealdb_adapter._ROUND_COMPLETE),
+            store._query(surrealdb_adapter._ROUND_COMPLETE),
+            return_exceptions=True,
+        )
+
+        failures = [r for r in results if isinstance(r, Exception)]
+        assert failures, "two completions at once no longer conflict; revisit the retry"
+        assert all(surrealdb_adapter._RETRYABLE in str(failure) for failure in failures)
+
+    def _conflicting(self, store, monkeypatch, failures: int, message: str) -> list[str]:
+        calls: list[str] = []
+        original = store._query
+
+        async def flaky(query, params=None):
+            if query == surrealdb_adapter._ROUND_COMPLETE:
+                calls.append(query)
+                if len(calls) <= failures:
+                    raise RuntimeError(message)
+            return await original(query, params)
+
+        monkeypatch.setattr(store, "_query", flaky)
+        return calls
+
+    async def test_a_conflict_on_every_attempt_but_the_last_is_survived(self, store, monkeypatch):
+        await store.bump_reflect_counter()
+        calls = self._conflicting(
+            store, monkeypatch, failures=4, message="Failed. This transaction can be retried"
+        )
+
+        completion = await store.complete_reflect_round()
+
+        assert len(calls) == surrealdb_adapter._ROUND_ATTEMPTS == 5
+        assert (completion.stores_cleared, completion.reflect_round) == (1, 1)
+
+    async def test_it_gives_up_after_five_attempts(self, store, monkeypatch):
+        await store.bump_reflect_counter()
+        calls = self._conflicting(
+            store, monkeypatch, failures=5, message="Failed. This transaction can be retried"
+        )
+
+        with pytest.raises(RuntimeError, match="can be retried"):
+            await store.complete_reflect_round()
+
+        assert len(calls) == 5
+        monkeypatch.undo()
+        assert await store.get_reflect_counter() == 1
+        assert await store.get_reflect_round() == 0
+
+    async def test_any_other_error_is_raised_at_once(self, store, monkeypatch):
+        calls = self._conflicting(store, monkeypatch, failures=1, message="the disk is full")
+
+        with pytest.raises(RuntimeError, match="the disk is full"):
+            await store.complete_reflect_round()
+
+        assert len(calls) == 1

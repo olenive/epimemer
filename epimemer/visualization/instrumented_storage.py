@@ -40,8 +40,10 @@ from epimemer.core.types import (
 )
 from epimemer.storage.active_graph import GraphGuard
 from epimemer.storage.protocol import (
+    DeferralOverrides,
     EdgeDirection,
     MergeOverrides,
+    ReflectCompletion,
     WarningOverrides,
     resolve_reflect_threshold,
 )
@@ -888,11 +890,6 @@ class InstrumentedStorage:
         await self._publish_reflect_state(count)
         return count
 
-    async def reset_reflect_counter(self) -> int:
-        previous = await self._inner.reset_reflect_counter()
-        await self._publish_reflect_state(0)
-        return previous
-
     async def set_reflect_counter(self, count: int) -> None:
         await self._inner.set_reflect_counter(count)
         await self._publish_reflect_state(count)
@@ -903,6 +900,20 @@ class InstrumentedStorage:
     async def set_reflect_threshold_override(self, threshold: int | None) -> None:
         await self._inner.set_reflect_threshold_override(threshold)
         await self._publish_reflect_state(await self._inner.get_reflect_counter())
+
+    async def get_reflect_round(self) -> int:
+        return await self._inner.get_reflect_round()
+
+    async def set_reflect_round(self, round: int) -> None:
+        # No event: the strip shows reflection pressure, which the round does
+        # not move, and nothing renders the round itself.
+        await self._inner.set_reflect_round(round)
+
+    async def complete_reflect_round(self) -> ReflectCompletion:
+        # The counter goes to zero here, so the strip hears it as it does a reset.
+        completion = await self._inner.complete_reflect_round()
+        await self._publish_reflect_state(0)
+        return completion
 
     # --- Backup bookkeeping (delegate) ---
     #
@@ -935,6 +946,13 @@ class InstrumentedStorage:
         # No event: nothing in the strip shows the merge settings, and a badge
         # that never renders is not worth an event type nobody consumes.
         await self._inner.set_merge_overrides(overrides)
+
+    async def get_deferral_overrides(self) -> DeferralOverrides:
+        return await self._inner.get_deferral_overrides()
+
+    async def set_deferral_overrides(self, overrides: DeferralOverrides) -> None:
+        # No event, for the merge settings' reason.
+        await self._inner.set_deferral_overrides(overrides)
 
     async def get_warning_overrides(self) -> WarningOverrides:
         return await self._inner.get_warning_overrides()

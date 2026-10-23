@@ -85,12 +85,12 @@ non-default `EPIMEMER_CLIENT_STATE_DIR`, give the hook the same directory with
 
 ### Verify Connection
 
-In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 57 tools.
+In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 58 tools.
 
 ## Available Tools
 
 Claude Code prefixes each tool as `mcp__epimemer__<name>`. This table is
-the canonical list of the 57 tools; other docs link here rather than
+the canonical list of the 58 tools; other docs link here rather than
 restate the count.
 
 ### Core Memory Operations
@@ -138,8 +138,9 @@ restate the count.
 |------|---------|
 | `reflect` | Analyse the graph for consolidation and cleanup candidates, including open disputes about the order of timepoints. Changes nothing in the graph; it resets the count of stores since the last reflect |
 | `configure_reflection` | Set or clear this graph's store threshold for suggesting a reflect |
-| `apply_reflection` | Apply your decisions from a reflection, including user-approved archivals, which export the nodes and retire them as `archived` |
-| `reopen` | Put a question a verdict suppressed back on the worklist: two node ids for a pair judged `distinct`, two relation label names for a label pair, one node id for a node a `retained` verdict kept. Asserts nothing about the answer, and a `reason` is required |
+| `apply_reflection` | Apply your decisions from a reflection, including user-approved archivals, which export the nodes and retire them as `archived`, and `deferred`, which puts a never-retrieved nominee off for a number of reflect rounds that doubles each time |
+| `configure_deferral` | Read or set how many reflect rounds a deferred archival nominee waits: `first_wait` after the first deferral, doubling up to `cap`. `clear` returns a named setting to the default |
+| `reopen` | Put a question a verdict suppressed back on the worklist: two node ids for a pair judged `distinct`, two relation label names for a label pair, one node id for a node a `retained` verdict kept or a `deferred` verdict is holding back. Asserts nothing about the answer, and a `reason` is required |
 
 ### Review
 

@@ -533,8 +533,10 @@ if useful.
   where every other list grows with the node count. Each is capped to its
   highest-scoring `max_nominations` (200 by default), and any that was cut
   is named in `truncated`. An empty `truncated` means no pair list was cut;
-  `archival_candidates` is a worklist with its own bound, never named there,
-  that refills on the next reflect.
+  `archival_candidates` is a worklist with its own bound of 20, never named
+  there, that refills on the next reflect. A deferred node whose wait is over
+  is placed first among the never_retrieved nominees, so other
+  never_retrieved nominees cannot push it past the bound.
   **When a list is named there, act on what came back and reflect again**
   rather than raising the number: what was dropped is the weakest end of the
   ranking, and a graph dense enough to hit the cap wants repeated passes,
@@ -686,8 +688,8 @@ by the same loop: nomination proposes, you judge, the **user approves**.
 - `reflect` returns `archival_candidates`, each with a `reason`: `retired`
   (long superseded or merged and unimportant), `evidence_stale` (an inference
   whose basis changed), `never_retrieved` (an active node, other than an
-  inference, that no search has ever returned, nothing depends on, and no
-  judgment has raised), and
+  inference, that no search has ever returned, nothing depends on, no
+  judgment has raised, and no deferral is still holding back), and
   `stale_judgment` (a node held above the importance ceiling by an upward
   judgment nobody has revisited in months).
 - **`stale_judgment` is not an archival proposal.** It asks you to re-confirm
@@ -717,10 +719,32 @@ by the same loop: nomination proposes, you judge, the **user approves**.
   it for a `never_retrieved` nominee, which names no reason. A reason a
   standing keep already covers is neither listed nor accepted again, and a
   premise that changes later is a new reason the old keep does not cover.
-- **A keep that turns out to be wrong is withdrawn with
-  `reopen(node_ids=[node_id], reason=...)`.** The node goes back on the
-  archival worklist with the reason attached. It archives nothing and decides
-  nothing: the user still approves anything that is then archived.
+- **`retained` on a `never_retrieved` nominee is permanent.** The nomination
+  names no reason, so nothing that happens later can be a reason the keep
+  failed to cover, and the node is not offered again until `reopen`
+  withdraws the keep. Use it only where you mean *keep this for good*.
+- **Where you mean *not now*, defer it**:
+  `apply_reflection(deferred=[{node_id, because}])`, for a `never_retrieved`
+  nominee only. The node is left out of `archival_candidates` for 2 reflect
+  rounds, then 4 after a second deferral, doubling up to 32. A round is a
+  reflect that completes with at least one store since the previous reflect,
+  so reflecting twice in a row does not shorten the wait. When it comes back
+  it carries `deferred`: how many times it was put off, `rounds_waited`, the
+  `because` you gave, who gave it, and `next_wait`, the wait another deferral
+  would set.
+  Read that before answering again: if what you said last time still holds,
+  deferring again is a sound answer, and the wait grows each time up to the
+  cap. Archive or keep it once something has changed that settles the
+  question. `because` is required, and `deferrals_recorded` says how many
+  rounds each node waits. A node also named in `archivals` is archived and its
+  deferral skipped; one named in both `retained` and `deferred` is refused in
+  both, with the reason in each list's `_skipped`. `configure_deferral`
+  changes the two numbers for one graph; ask the user before changing them.
+- **A keep, or a deferral still waiting, that turns out to be wrong is
+  withdrawn with `reopen(node_ids=[node_id], reason=...)`.** The node goes
+  back on the archival worklist with the reason attached. It archives nothing
+  and decides nothing: the user still approves anything that is then
+  archived.
 - `evidence_merged` in `pending_review` asks for a re-read, not a
   re-derivation: the premise absorbed another claim, so check the inference
   still says what the survivor's wording supports, then record the re-read

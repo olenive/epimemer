@@ -29,7 +29,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version-file: epimemer/visualization/frontend/.nvmrc
           cache: npm
           cache-dependency-path: epimemer/visualization/frontend/package-lock.json
       - name: Build the visualization bundle

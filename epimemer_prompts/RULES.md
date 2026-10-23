@@ -26,11 +26,13 @@ hold on every call:
   document is two calls.
 - Omit `confidence` and `claim_kind` rather than guess; give a one-line
   `confidence_basis` with any confidence you do supply.
-- Record a verdict on every pair reflect nominates (`similarities`,
-  `relation_verdicts`, `retained`, `boundaries_declined`); a verdict stops the
-  pair being offered again, and an unjudged pair comes back on every reflect,
-  for ever. `reopen` is how a verdict you think was wrong is put back in front
-  of a judge.
+- Record a verdict on every pair or node reflect puts to you for judgment
+  (`similarities`, `relation_verdicts`, `retained`, `deferred`,
+  `boundaries_declined`); a verdict stops the question being offered again,
+  and an unjudged one comes back on every reflect, for ever. `deferred` is
+  the one verdict that lapses: it puts a never-retrieved node off for a number
+  of reflect rounds, doubling each time. `reopen` is how a verdict you think
+  was wrong is put back in front of a judge.
 - Read `warnings` before deciding what to write, not after; `notify_user: true`
   means raise it with the user.
 - One word per concept: **metacontext** (the world a claim is made in),

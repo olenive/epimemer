@@ -6,6 +6,40 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+- A never-retrieved archival nominee has a third answer beside `archivals` and
+  `retained`: `apply_reflection(deferred=[{node_id, because}])`, *not now, ask
+  again later*. The node is left out of `archival_candidates` for 2 reflect
+  rounds after its first deferral, doubling with each one after it up to 32,
+  and then comes back first in its class carrying `deferred`, with what was
+  said last time and the wait another deferral would set. A round is a reflect
+  that completes with at least one store since the previous reflect, so a
+  graph nobody stores into does not age a deferral. Each deferral is a
+  `deferral` journal row stamped with the round as `at_round`, accepted only
+  for a node the nominator's test counts as a never_retrieved nominee; anything
+  else comes back in `deferred_skipped` with the reason, and
+  `deferrals_recorded` says how many rounds each node waits. A node named in
+  `archivals` is archived and its deferral skipped, and one named in both
+  `retained` and `deferred` is refused in both.
+  `reopen(node_ids=[id])` withdraws a deferral that is still waiting, as it
+  withdraws a keep. The round and a graph's deferral settings travel in a
+  bundle, and the round moves with the reflect counter in one atomic step on
+  every backend, `complete_reflect_round`.
+- `configure_deferral` reads and sets one graph's `first_wait` and `cap`, and
+  `clear=["first_wait"]` returns a named one to the process default, which
+  `EPIMEMER_DEFERRAL_FIRST_WAIT` and `EPIMEMER_DEFERRAL_CAP` set. A change is
+  refused when a value named is below 1 or above 1024 rounds, or when `cap` is
+  below the `first_wait` it would resolve against, so a deferral cannot be
+  made to mean never; a read is never refused. The ceiling is enforced on
+  write, by the tool and at config load, and applied on read: a stored or
+  imported value above it is read as stored, behaves as 1024, and is reported
+  under `clamped`.
+- The guide and the tool descriptions now say plainly that `retained` on a
+  never-retrieved nominee is permanent: its nomination names no reason, so the
+  keep stands until `reopen` withdraws it. The `apply_reflection` description
+  no longer says a keep writes one edge per covered id: the anchors live on
+  the keep's journal row, where SurrealDB schema version 3 moved them. The
+  `reflect` description lists `archival_candidates`, which it did not mention
+  before.
 - The design notes are shorter and fewer. They state decisions and the reasons
   for them, and leave how the code does it to the code. SQLite and Postgres
   share `dev-docs/STORAGE_BACKENDS.md`; the warnings panel is part of
@@ -40,6 +74,18 @@ All notable changes to this project are recorded here. The format follows
   timeline and 3D views as camera presets of it, was written here and moved
   to that repository's `DESIGN.md` the same day. The contract it builds on
   stays here, in `dev-docs/VIZ_CONTRACT.md`.
+- `certifi` is a named dependency with a floor of 2026.10.19, the release that
+  dropped the emSign root whose intermediate keys were disclosed on
+  20 October 2026. It arrived through `httpx` and `requests` before; naming it
+  keeps the floor when those two move, and reaches `botocore`, which uses its
+  own bundle only when certifi is absent.
+- The Docker image upgrades the operating system's CA bundle explicitly and
+  pins uv to 0.13.5, so a cached layer cannot keep a bundle that trusts the
+  compromised intermediates.
+- The frontend builds on Node 24.22.1, read from
+  `epimemer/visualization/frontend/.nvmrc`. The October 2026 Node releases
+  fixed a Brotli decoder write reachable through `fetch()` and two hostname
+  checks, and carry the same trust-store change.
 
 ## [0.3.1] — 2026-10-17
 

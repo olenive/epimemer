@@ -355,6 +355,20 @@ class TestOneInstanceUnderConcurrentCalls:
             fact.id for fact in others
         }
 
+    async def test_two_instances_completing_together_add_one_round(self, store, another):
+        """Two server processes closing a reflect on one graph at once: the
+        counter's row lock lets one clear the stores and the other find none."""
+        other = await another()
+        for _ in range(3):
+            await store.bump_reflect_counter()
+
+        first, second = await asyncio.gather(
+            store.complete_reflect_round(), other.complete_reflect_round()
+        )
+
+        assert sorted([first.stores_cleared, second.stores_cleared]) == [0, 3]
+        assert await store.get_reflect_round() == 1
+
     async def test_batches_and_bumps_together_all_land(self, store):
         facts = [Fact(id=f"f{i}", content=f"fact {i}", source_id="s1") for i in range(10)]
         edges = [
@@ -690,6 +704,26 @@ class TestAFailedTransactionLeavesNothing:
         assert (await store.get_node("f1")).status is NodeStatus.MERGED
         assert await store.get_node("m1") == survivor
         assert {e.id for e in await store.query_edges()} == {"e1", "e2"}
+
+    async def test_a_failure_advancing_the_round_keeps_the_counter(self, store, monkeypatch):
+        adapter = _adapter()
+        await store.bump_reflect_counter()
+        await store.bump_reflect_counter()
+        original = adapter._bump
+
+        async def failing(connection, g, key):
+            if key == adapter._REFLECT_ROUND:
+                raise RuntimeError("the round could not be written")
+            return await original(connection, g, key)
+
+        monkeypatch.setattr(adapter, "_bump", failing)
+        with pytest.raises(RuntimeError):
+            await store.complete_reflect_round()
+        monkeypatch.setattr(adapter, "_bump", original)
+
+        assert await store.get_reflect_counter() == 2
+        assert await store.get_reflect_round() == 0
+        assert (await store.complete_reflect_round()).reflect_round == 1
 
     async def test_the_connection_is_usable_and_committed_after_a_rollback(self, store, another):
         reader = await another()

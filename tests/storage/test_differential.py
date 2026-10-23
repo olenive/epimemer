@@ -79,7 +79,7 @@ from epimemer.core.types import (
 )
 from epimemer.pipelines.transfer import MANIFEST_FILENAME, bundle_bytes, export_graph
 from epimemer.storage.memory import InMemoryStorage
-from epimemer.storage.protocol import MergeOverrides, WarningOverrides
+from epimemer.storage.protocol import DeferralOverrides, MergeOverrides, WarningOverrides
 from epimemer.storage.sqlite_adapter import SQLiteStorage
 from epimemer.storage.surrealdb_adapter import SurrealDBStorage
 from tests.postgres_store import clean_postgres_store
@@ -825,6 +825,7 @@ async def record_decision(step: Step) -> tuple[str, Script]:
             reviews=_pick(rng, decisions) if rng.random() < 0.3 else None,
             supersedes=_pick(rng, decisions) if rng.random() < 0.1 else None,
             metacontext=_pick(rng, list(step.oracle.metacontexts)) if rng.random() < 0.3 else None,
+            at_round=None if rng.random() < 0.6 else rng.randrange(40),
         ),
     )
 
@@ -927,12 +928,13 @@ async def counters(step: Step) -> tuple[str, Script]:
         (
             "bump_reflect_counter",
             "bump_reflect_counter",
-            "reset_reflect_counter",
             "bump_backup_counter",
             "bump_backup_counter",
             "reset_backup_counter",
             "set_reflect_counter",
             "set_backup_counter",
+            "set_reflect_round",
+            "complete_reflect_round",
         )
     )
     if name.startswith("set_"):
@@ -954,6 +956,10 @@ async def settings(step: Step) -> tuple[str, Script]:
             MergeOverrides(
                 undo_depth=maybe(rng.randint(1, 9)), cycle_limit=maybe(rng.randint(1, 4))
             ),
+        ),
+        (
+            "set_deferral_overrides",
+            DeferralOverrides(first_wait=maybe(rng.randint(1, 6)), cap=maybe(rng.randint(6, 64))),
         ),
         (
             "set_warning_overrides",
@@ -1206,6 +1212,8 @@ async def _reads(
         reads[f"relation_verdicts_for #{k}"] = [v.id for v in verdicts]
 
     reads["get_reflect_counter"] = await store.get_reflect_counter()
+    reads["get_reflect_round"] = await store.get_reflect_round()
+    reads["get_deferral_overrides"] = _comparable(await store.get_deferral_overrides())
     reads["get_backup_counter"] = await store.get_backup_counter()
     reads["get_reflect_threshold_override"] = await store.get_reflect_threshold_override()
     reads["get_backup_threshold_override"] = await store.get_backup_threshold_override()

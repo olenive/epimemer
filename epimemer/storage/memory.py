@@ -48,9 +48,11 @@ from epimemer.core.types import (
 from epimemer.storage.active_graph import GraphGuard, make_graph_guard
 from epimemer.storage.bm25 import bm25_scores, containment_first
 from epimemer.storage.protocol import (
+    DeferralOverrides,
     EdgeDirection,
     MergeOverrides,
     PassagesCited,
+    ReflectCompletion,
     WarningOverrides,
     next_timeline_version,
     normalize_for_storage,
@@ -166,7 +168,11 @@ class _GraphStore:
     # are zeroed by different acts — reflecting clears one, a backup the other.
     stores_since_backup: int = 0
     backup_threshold_override: int | None = None
+    # Reflects that completed with at least one store since the previous
+    # reflect: the clock a deferral is measured on.
+    reflect_round: int = 0
     merge_overrides: MergeOverrides = field(default_factory=MergeOverrides)
+    deferral_overrides: DeferralOverrides = field(default_factory=DeferralOverrides)
     warning_overrides: WarningOverrides = field(default_factory=WarningOverrides)
 
 
@@ -1252,11 +1258,6 @@ class InMemoryStorage:
         self._g.stores_since_reflect += 1
         return self._g.stores_since_reflect
 
-    async def reset_reflect_counter(self) -> int:
-        previous = self._g.stores_since_reflect
-        self._g.stores_since_reflect = 0
-        return previous
-
     async def set_reflect_counter(self, count: int) -> None:
         self._g.stores_since_reflect = count
 
@@ -1265,6 +1266,23 @@ class InMemoryStorage:
 
     async def set_reflect_threshold_override(self, threshold: int | None) -> None:
         self._g.reflect_threshold_override = threshold
+
+    async def get_reflect_round(self) -> int:
+        return self._g.reflect_round
+
+    async def set_reflect_round(self, round: int) -> None:
+        self._g.reflect_round = round
+
+    async def complete_reflect_round(self) -> ReflectCompletion:
+        # No await between the read and the writes, so nothing else on the
+        # event loop can land between them: the in-memory store's lock is the
+        # loop itself.
+        g = self._g
+        cleared = g.stores_since_reflect
+        g.stores_since_reflect = 0
+        if cleared > 0:
+            g.reflect_round += 1
+        return ReflectCompletion(stores_cleared=cleared, reflect_round=g.reflect_round)
 
     # --- Backup bookkeeping ---
 
@@ -1294,6 +1312,12 @@ class InMemoryStorage:
 
     async def set_merge_overrides(self, overrides: MergeOverrides) -> None:
         self._g.merge_overrides = overrides.model_copy()
+
+    async def get_deferral_overrides(self) -> DeferralOverrides:
+        return self._g.deferral_overrides.model_copy()
+
+    async def set_deferral_overrides(self, overrides: DeferralOverrides) -> None:
+        self._g.deferral_overrides = overrides.model_copy()
 
     async def get_warning_overrides(self) -> WarningOverrides:
         return self._g.warning_overrides.model_copy(deep=True)

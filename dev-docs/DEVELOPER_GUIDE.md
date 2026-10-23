@@ -216,12 +216,19 @@ ship without noticing:
   `assessed` edge is the fix for fact pairs, `RelationVerdict` for label
   pairs, the `retention` journal row for single nodes, and the
   `boundary_declined` journal row for boundary proposals: a suppression
-  index the sweep reads, separate from the journal that audits it.
+  index the sweep reads, separate from the journal that audits it. The
+  `deferral` journal row is the one suppression that lapses by itself: it
+  holds a `never_retrieved` node back for a number of reflect rounds that
+  doubles with each deferral, measured from the `at_round` on the row
+  (`deferral.py`). The nominator and the tool that accepts a deferral ask
+  one predicate, `never_retrieved_exclusion`, so the tool accepts a deferral
+  only for a node the nominator's test counts as a never_retrieved nominee.
 - **And its dual: a suppression with no way back makes every wrong decline
   permanent by construction.** `reopen` is the way back for each of
   these indexes: it retires the `assessed` edge the way a moved `TIMELINK` is
   retired, so the pair is nominated again and nothing is asserted about the
-  answer (`reopening.py`). A new nominator needs its own way back, or it
+  answer (`reopening.py`). A one-node reopen clears a keep and a deferral
+  still waiting alike. A new nominator needs its own way back, or it
   inherits the permanence knowingly. The `one_claim` retraction stays
   one-way, because a false unification manufactures agreement while a
   withdrawal only under-counts.

@@ -89,7 +89,7 @@ class TestReflectCounterInStats:
     async def test_suggestion_clears_after_a_reset(self, storage):
         await storage.bump_reflect_counter()
         await storage.bump_reflect_counter()
-        await storage.reset_reflect_counter()
+        await storage.complete_reflect_round()
 
         result, _ = await graph_stats(
             storage, default_reflect_threshold=2, default_backup_threshold=50

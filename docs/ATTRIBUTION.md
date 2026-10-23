@@ -283,7 +283,7 @@ thing the decision landed on:
 | `add_recurrence`, `end_recurrence`, `record_recurrence_exception` | the rule, the appended bound change, and the exception, each as `judged_by` on the record it wrote |
 | `apply_reflection`'s enrichments | its own journal row, and the replaced wording's `description_history` entry; the node's `judged_by` names whoever wrote its **name** and stays |
 | `rename_topic` | its own `topic_rename` journal row, and the replaced name's `previous_names` entry; the node's `judged_by` stays |
-| `reopen` | the withdrawn `assessed` edge, as `retired_by`, for a pair of nodes; the `reopened` verdict row, as `judged_by`, for a pair of relation labels; the journal alone for a retention or a declined boundary |
+| `reopen` | the withdrawn `assessed` edge, as `retired_by`, for a pair of nodes; the `reopened` verdict row, as `judged_by`, for a pair of relation labels; the journal alone for a retention, a deferral or a declined boundary |
 
 Three things follow that are easy to get wrong:
 

@@ -68,7 +68,12 @@ from epimemer.mcp import tools
 from epimemer.pipelines.segmentation.record import cut_record, recut_record
 from epimemer.pipelines.timeline.functions import add_timepoint
 from epimemer.storage.memory import InMemoryStorage
-from epimemer.storage.protocol import PassagesCited, TimelineConflict
+from epimemer.storage.protocol import (
+    DeferralOverrides,
+    MergeOverrides,
+    PassagesCited,
+    TimelineConflict,
+)
 from epimemer.storage.sqlite_adapter import SQLiteStorage
 from epimemer.storage.surrealdb_adapter import SurrealDBStorage
 from tests.postgres_store import DSN_VARIABLE, clean_postgres_store
@@ -1692,15 +1697,15 @@ class TestReflectCounter:
         assert await store.bump_reflect_counter() == 2
         assert await store.get_reflect_counter() == 2
 
-    async def test_reset_returns_the_previous_count(self, store):
+    async def test_completing_a_reflect_reports_the_previous_count(self, store):
         await store.bump_reflect_counter()
         await store.bump_reflect_counter()
 
-        assert await store.reset_reflect_counter() == 2
+        assert (await store.complete_reflect_round()).stores_cleared == 2
         assert await store.get_reflect_counter() == 0
 
-    async def test_reset_on_an_untouched_graph_is_zero(self, store):
-        assert await store.reset_reflect_counter() == 0
+    async def test_completing_on_an_untouched_graph_clears_nothing(self, store):
+        assert (await store.complete_reflect_round()).stores_cleared == 0
         assert await store.get_reflect_counter() == 0
 
     async def test_counters_are_per_graph(self, store):
@@ -3220,6 +3225,176 @@ class TestTheReflectCounterCanBeSetOutright:
     async def test_a_bump_carries_on_from_where_it_was_set(self, store):
         await store.set_reflect_counter(4)
         assert await store.bump_reflect_counter() == 5
+
+
+class TestTheReflectRound:
+    """The clock deferrals are measured on. Graph state like the reflect counter,
+    and on SurrealDB a field on the same record, so it must never share a value
+    with the counter or the threshold beside it."""
+
+    async def test_an_unused_graph_reads_zero(self, store):
+        assert await store.get_reflect_round() == 0
+
+    async def test_it_lands_on_the_number_given(self, store):
+        await store.set_reflect_round(12)
+        assert await store.get_reflect_round() == 12
+
+        await store.set_reflect_round(0)
+        assert await store.get_reflect_round() == 0
+
+    async def test_the_counter_beside_it_moves_alone(self, store):
+        await store.bump_reflect_counter()
+        await store.set_reflect_threshold_override(4)
+        await store.set_reflect_round(3)
+
+        await store.set_reflect_counter(0)
+        assert await store.get_reflect_round() == 3
+        assert await store.get_reflect_threshold_override() == 4
+
+    async def test_each_graph_keeps_its_own(self, store):
+        original = store.current_database
+        await store.set_reflect_round(5)
+
+        await store.switch_database("other_graph")
+        assert await store.get_reflect_round() == 0
+        await store.set_reflect_round(1)
+
+        await store.switch_database(original)
+        assert await store.get_reflect_round() == 5
+
+
+class TestCompletingAReflect:
+    """The counter and the round move together, in one step, on every backend:
+    zeroed, and one round added only when the counter was above zero."""
+
+    async def test_an_untouched_graph_clears_nothing_and_adds_no_round(self, store):
+        completion = await store.complete_reflect_round()
+
+        assert (completion.stores_cleared, completion.reflect_round) == (0, 0)
+        assert await store.get_reflect_round() == 0
+
+    async def test_stores_since_the_last_reflect_make_a_round(self, store):
+        await store.bump_reflect_counter()
+        await store.bump_reflect_counter()
+
+        completion = await store.complete_reflect_round()
+
+        assert (completion.stores_cleared, completion.reflect_round) == (2, 1)
+        assert await store.get_reflect_counter() == 0
+        assert await store.get_reflect_round() == 1
+
+    async def test_a_second_completion_with_nothing_stored_adds_none(self, store):
+        await store.bump_reflect_counter()
+        await store.complete_reflect_round()
+
+        completion = await store.complete_reflect_round()
+
+        assert (completion.stores_cleared, completion.reflect_round) == (0, 1)
+
+    async def test_it_carries_on_from_a_restored_round(self, store):
+        await store.set_reflect_round(7)
+        await store.bump_reflect_counter()
+
+        completion = await store.complete_reflect_round()
+
+        assert completion.reflect_round == 8
+        assert await store.get_reflect_round() == 8
+
+    async def test_the_settings_beside_them_are_untouched(self, store):
+        await store.set_reflect_threshold_override(4)
+        await store.bump_backup_counter()
+        await store.bump_reflect_counter()
+
+        await store.complete_reflect_round()
+
+        assert await store.get_reflect_threshold_override() == 4
+        assert await store.get_backup_counter() == 1
+
+    async def test_two_completions_at_once_add_one_round(self, store):
+        """Two reflects closing together on one connection: one clears the
+        stores and makes the round, the other finds nothing to clear."""
+        import asyncio
+
+        for _ in range(3):
+            await store.bump_reflect_counter()
+
+        first, second = await asyncio.gather(
+            store.complete_reflect_round(), store.complete_reflect_round()
+        )
+
+        assert sorted([first.stores_cleared, second.stores_cleared]) == [0, 3]
+        assert (first.reflect_round, second.reflect_round) == (1, 1)
+        assert await store.get_reflect_round() == 1
+
+    async def test_each_graph_completes_its_own(self, store):
+        original = store.current_database
+        await store.bump_reflect_counter()
+
+        await store.switch_database("other_graph")
+        completion = await store.complete_reflect_round()
+        assert (completion.stores_cleared, completion.reflect_round) == (0, 0)
+
+        await store.switch_database(original)
+        assert (await store.complete_reflect_round()).reflect_round == 1
+
+
+class TestDeferralOverrides:
+    """A graph's own deferral settings, stored whole on every backend."""
+
+    async def test_a_graph_never_configured_overrides_nothing(self, store):
+        assert await store.get_deferral_overrides() == DeferralOverrides()
+
+    async def test_set_then_read_back(self, store):
+        await store.set_deferral_overrides(DeferralOverrides(first_wait=3, cap=12))
+        assert await store.get_deferral_overrides() == DeferralOverrides(first_wait=3, cap=12)
+
+    async def test_a_none_field_clears_that_override_alone(self, store):
+        await store.set_deferral_overrides(DeferralOverrides(first_wait=3, cap=12))
+        await store.set_deferral_overrides(DeferralOverrides(cap=12))
+
+        assert await store.get_deferral_overrides() == DeferralOverrides(cap=12)
+
+    async def test_the_merge_overrides_beside_them_are_untouched(self, store):
+        await store.set_merge_overrides(MergeOverrides(undo_depth=4))
+        await store.set_deferral_overrides(DeferralOverrides(first_wait=5))
+        await store.set_deferral_overrides(DeferralOverrides())
+
+        assert await store.get_merge_overrides() == MergeOverrides(undo_depth=4)
+        assert await store.get_deferral_overrides() == DeferralOverrides()
+
+    async def test_each_graph_keeps_its_own(self, store):
+        original = store.current_database
+        await store.set_deferral_overrides(DeferralOverrides(first_wait=6))
+
+        await store.switch_database("other_graph")
+        assert await store.get_deferral_overrides() == DeferralOverrides()
+
+        await store.switch_database(original)
+        assert await store.get_deferral_overrides() == DeferralOverrides(first_wait=6)
+
+
+class TestADeferralRowKeepsItsRound:
+    """`at_round` is part of a deferral verdict, and every backend stores the
+    whole row, so it comes back from both reads with no migration."""
+
+    async def test_the_round_survives_both_reads(self, store):
+        row = DecisionRecord(
+            kind=DecisionKind.DEFERRAL,
+            subject_ids=["fact-1"],
+            certainty_basis="Not yet.",
+            at_round=7,
+        )
+        await store.record_decision(row)
+
+        assert (await store.get_decision(row.id)).at_round == 7
+        found = await store.query_decisions(kinds=[DecisionKind.DEFERRAL], subject_ids=["fact-1"])
+        assert [(d.id, d.at_round) for d in found] == [(row.id, 7)]
+
+    async def test_a_row_written_without_one_reads_back_without_one(self, store):
+        row = DecisionRecord(kind=DecisionKind.RETENTION, subject_ids=["fact-1"])
+        await store.record_decision(row)
+
+        assert (await store.get_decision(row.id)).at_round is None
 
 
 class TestVerbatimWrites:

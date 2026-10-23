@@ -2601,6 +2601,14 @@ class DecisionKind(str, Enum):
     # because a judgment moves `importance` — which is how *do not nominate
     # this* got written into a field meaning *how consequential this is*.
     RETENTION = "retention"
+    # The third answer to a `never_retrieved` nominee: not now, ask again
+    # later. Its own kind rather than a `RETENTION` with a flag, because the
+    # two suppress differently: a keep covers the node until something reopens
+    # it, and a deferral lapses on its own once enough reflect rounds have
+    # passed (`deferral.py`). A reviewer asking what was kept must not get the
+    # nodes that were only put off. The row carries the reflect round it was
+    # written in as `at_round`, which is what the wait is measured from.
+    DEFERRAL = "deferral"
     # A topic's description read against material that moved under it, and kept.
     # The verdict opposite to `ENRICHMENT`, and it stands beside it the way
     # `RETENTION` stands beside `ARCHIVAL`: somebody looked and chose not to
@@ -2746,7 +2754,8 @@ class DecisionKind(str, Enum):
     # layers, because a reviewer asking *what has been put back in front of
     # somebody* wants the fact pairs, the label pairs, the kept nodes and the
     # declined boundaries together; the subjects say which layer it was, and a
-    # boundary's row also carries the question in `covers`.
+    # boundary's row also carries the question in `covers`. A one-subject row
+    # withdraws a deferral as well as a keep, since both hold one node back.
     #
     # Not `RETRACTION`, whose subjects are a pair whose `one_claim` was
     # **withdrawn**: that changes what corroboration counts, and a reviewer
@@ -2842,6 +2851,13 @@ class DecisionRecord(BaseModel):
     # did this agent file into the real world* is one query here rather than a
     # walk from ingest rows out to the edges of the nodes they name.
     metacontext: str | None = None
+    # The reflect round this decision was made in, where the decision is
+    # measured in rounds. `DEFERRAL` is the one writer: a deferred node is
+    # offered again once enough rounds have passed since this one, so the
+    # round is part of the verdict rather than something derived from
+    # `decided_at`. A round is a reflect that completes with at least one store
+    # since the previous reflect, which a clock cannot say.
+    at_round: int | None = None
 
 
 SUPERSESSION_KINDS: dict[NodeStatus, DecisionKind] = {

@@ -7,11 +7,17 @@ Factory functions create storage and embedding providers based on the config.
 import os
 from typing import Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from epimemer.core.advisories import WarningPolicy
 from epimemer.embeddings.protocol import EmbeddingProvider
-from epimemer.storage.protocol import StorageBackend
+from epimemer.storage.protocol import (
+    DEFAULT_DEFERRAL_CAP,
+    DEFAULT_DEFERRAL_FIRST_WAIT,
+    MAX_DEFERRAL_CAP,
+    DeferralSettings,
+    StorageBackend,
+)
 
 # Recording retrieval is on by default. Defined here rather than inline on the
 # field so `tools.search` can share the constant instead of keeping a second
@@ -64,6 +70,14 @@ class ServerConfig(BaseModel):
     segmentation_strategy: Literal["paragraph", "semantic"] = "paragraph"
 
     reflect_threshold: int = 10
+
+    # How many reflect rounds a `never_retrieved` nominee deferred for the first
+    # time waits before it is offered again, and the longest any later wait
+    # grows to: each deferral doubles the wait, up to the cap. Process defaults
+    # on the reflect threshold's pattern, which a graph overrides with
+    # `configure_deferral`.
+    deferral_first_wait: int = DEFAULT_DEFERRAL_FIRST_WAIT
+    deferral_cap: int = DEFAULT_DEFERRAL_CAP
 
     # Stores into a graph before the response suggests backing it up, on the
     # reflect threshold's pattern: process default here, per-graph override on
@@ -180,6 +194,39 @@ class ServerConfig(BaseModel):
             )
         return value
 
+    @model_validator(mode="after")
+    def _deferral_waits_make_sense(self):
+        """A first wait of zero is no wait, a cap below it caps nothing, and a
+        cap past `MAX_DEFERRAL_CAP` amounts to never reviewing the node again.
+
+        Refused at load, on `backup_keep`'s terms: the user meant something the
+        doubling rule cannot do, and clamping it would hide that.
+        """
+        if self.deferral_first_wait < 1:
+            raise ValueError(
+                f"EPIMEMER_DEFERRAL_FIRST_WAIT must be at least 1 reflect round, "
+                f"got {self.deferral_first_wait}."
+            )
+        if self.deferral_cap < self.deferral_first_wait:
+            raise ValueError(
+                f"EPIMEMER_DEFERRAL_CAP ({self.deferral_cap}) must be at least "
+                f"EPIMEMER_DEFERRAL_FIRST_WAIT ({self.deferral_first_wait}): the cap "
+                f"is the longest a wait may grow to, so it cannot be shorter than "
+                f"the first one."
+            )
+        if self.deferral_cap > MAX_DEFERRAL_CAP:
+            raise ValueError(
+                f"EPIMEMER_DEFERRAL_CAP must be at most {MAX_DEFERRAL_CAP} reflect "
+                f"rounds, got {self.deferral_cap}: a deferral promises the node is "
+                f"reviewed again, and a longer cap amounts to never."
+            )
+        return self
+
+
+def deferral_defaults(config: ServerConfig) -> DeferralSettings:
+    """The process defaults a graph's deferral overrides fall back to."""
+    return DeferralSettings(first_wait=config.deferral_first_wait, cap=config.deferral_cap)
+
 
 def load_config() -> ServerConfig:
     """Load server config from EPIMEMER_ environment variables."""
@@ -198,6 +245,8 @@ def load_config() -> ServerConfig:
         "embedding_dimension": "EPIMEMER_EMBEDDING_DIMENSION",
         "segmentation_strategy": "EPIMEMER_SEGMENTATION_STRATEGY",
         "reflect_threshold": "EPIMEMER_REFLECT_THRESHOLD",
+        "deferral_first_wait": "EPIMEMER_DEFERRAL_FIRST_WAIT",
+        "deferral_cap": "EPIMEMER_DEFERRAL_CAP",
         "backup_threshold": "EPIMEMER_BACKUP_THRESHOLD",
         "backup_destination": "EPIMEMER_BACKUP_DESTINATION",
         "backup_keep": "EPIMEMER_BACKUP_KEEP",

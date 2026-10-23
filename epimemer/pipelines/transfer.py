@@ -63,6 +63,7 @@ from epimemer.core.types import (
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.pipelines.embedding_text import embedding_text
 from epimemer.storage.protocol import (
+    DeferralOverrides,
     MergeOverrides,
     StorageBackend,
     WarningOverrides,
@@ -107,8 +108,13 @@ class GraphSettings(BaseModel):
     reflect_threshold_override: int | None = None
     backup_threshold_override: int | None = None
     stores_since_reflect: int = 0
+    # The clock deferrals are measured on. Carried so a restored graph keeps its
+    # clock: restarted at zero, it would fall behind every deferral row and
+    # release them all at once.
+    reflect_round: int = 0
     stores_since_backup: int = 0
     merge_overrides: MergeOverrides = Field(default_factory=MergeOverrides)
+    deferral_overrides: DeferralOverrides = Field(default_factory=DeferralOverrides)
     warning_overrides: WarningOverrides = Field(default_factory=WarningOverrides)
 
 
@@ -360,8 +366,10 @@ async def export_graph(
             reflect_threshold_override=await storage.get_reflect_threshold_override(),
             backup_threshold_override=await storage.get_backup_threshold_override(),
             stores_since_reflect=await storage.get_reflect_counter(),
+            reflect_round=await storage.get_reflect_round(),
             stores_since_backup=await storage.get_backup_counter(),
             merge_overrides=await storage.get_merge_overrides(),
+            deferral_overrides=await storage.get_deferral_overrides(),
             warning_overrides=await storage.get_warning_overrides(),
         ),
     )
@@ -749,9 +757,11 @@ async def _restore_settings(storage: StorageBackend, bundle: Bundle) -> None:
     await storage.set_reflect_threshold_override(settings.reflect_threshold_override)
     await storage.set_backup_threshold_override(settings.backup_threshold_override)
     await storage.set_merge_overrides(settings.merge_overrides)
+    await storage.set_deferral_overrides(settings.deferral_overrides)
     await storage.set_warning_overrides(settings.warning_overrides)
     await storage.set_approved_agent_ids(list(bundle.approved_agents))
     await storage.set_reflect_counter(settings.stores_since_reflect)
+    await storage.set_reflect_round(settings.reflect_round)
     await storage.set_backup_counter(settings.stores_since_backup)
 
 

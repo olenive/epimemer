@@ -19,7 +19,15 @@ from epimemer.core.types import (
     Inference,
     NodeStatus,
 )
-from epimemer.storage.protocol import StorageBackend
+from epimemer.pipelines.reflection.deferral import (
+    DeferralState,
+    deferral_due,
+    deferral_settings_for,
+    deferral_wait,
+    deferrals_for,
+    rounds_waited,
+)
+from epimemer.storage.protocol import DeferralSettings, StorageBackend
 
 
 async def find_archival_candidates(
@@ -129,11 +137,32 @@ _REASON_ORDER: tuple[ArchivalReason, ...] = (
 
 DEFAULT_NOMINATION_LIMIT = 20
 
+# The importance at or below which a node is not protected from nomination.
+# Named once because the tool that accepts a deferral asks the nominator's own
+# question, and a second literal is how the two would come to disagree.
+DEFAULT_IMPORTANCE_CEILING = 0.5
+
 # How long an upward judgment protects a node before it is worth re-confirming.
 # Longer than the 90-day retirement window on purpose: re-reviewing every judged
 # node quarterly is noise, and the point is to catch assessments that have
 # quietly expired, not to re-litigate recent ones.
 DEFAULT_JUDGMENT_MAX_AGE_DAYS = 180
+
+
+class DeferredNote(BaseModel):
+    """That this nominee was put off before, and what was said about it.
+
+    The judge's prose and the numbers together: `count` deferrals so far,
+    `last_round` the reflect round of the latest, `rounds_waited` since then,
+    and `next_wait` the rounds another deferral now would hold it back for.
+    """
+
+    count: int
+    last_round: int
+    rounds_waited: int
+    because: str
+    judged_by: str | None = None
+    next_wait: int
 
 
 class ArchivalCandidate(BaseModel):
@@ -142,6 +171,11 @@ class ArchivalCandidate(BaseModel):
     Carries `reason` and `importance` rather than only an id: the agent judges
     these with graph context, and a bare id would make it re-derive why the
     node was proposed at all.
+
+    `deferred` is set only on a node somebody deferred before, and
+    `candidate_payload` leaves the key out otherwise, on the `reopened`
+    precedent: *never deferred* and *deferred, reason unrecorded* stay
+    distinguishable.
     """
 
     node_id: str
@@ -149,6 +183,15 @@ class ArchivalCandidate(BaseModel):
     preview: str
     reason: ArchivalReason
     importance: float
+    deferred: DeferredNote | None = None
+
+
+def candidate_payload(candidate: ArchivalCandidate) -> dict:
+    """One nominee as the response carries it, with `deferred` absent where unset."""
+    payload = candidate.model_dump(mode="json")
+    if candidate.deferred is None:
+        payload.pop("deferred")
+    return payload
 
 
 def _preview(content: str, limit: int = 120) -> str:
@@ -193,6 +236,54 @@ def never_retrieved(node: EpistemicNode) -> bool:
     untouched.
     """
     return node.value.retrieved_at is None
+
+
+def never_retrieved_exclusion(
+    node: EpistemicNode,
+    *,
+    in_degree: int,
+    retained: dict[str, set[str]],
+    deferral: DeferralState | None,
+    current_round: int,
+    settings: DeferralSettings,
+    importance_ceiling: float = DEFAULT_IMPORTANCE_CEILING,
+) -> str | None:
+    """Why this node is not a `never_retrieved` nominee right now, or None if it is.
+
+    **The one statement of the class**, read by the nominator and by the
+    `apply_reflection` step that accepts a deferral. A deferral is only an
+    answer to this nomination, so the tool has to ask exactly the question the
+    nominator asked; two copies of the test is how a node would come to be
+    deferred that reflect never offered, or offered one the tool then refused.
+
+    Takes what it needs already read (`in_degree`, the standing retentions, the
+    node's deferral state) so the nominator keeps its batched reads. The
+    reasons are phrased for an agent told why its deferral was refused.
+    """
+    from epimemer.pipelines.reflection.retention import retention_covers
+
+    if node.status is not NodeStatus.ACTIVE:
+        return "not active, so not nominated"
+    if isinstance(node, Inference):
+        return (
+            "an inference, which is nominated as evidence_stale rather than "
+            "never_retrieved and is answered with `retained`"
+        )
+    if node.value.importance > importance_ceiling:
+        return f"judged above the importance ceiling ({importance_ceiling}), so not nominated"
+    if not never_retrieved(node):
+        return "a search has returned it, so it is no longer a never_retrieved nominee"
+    if in_degree > 0:
+        return "something links to it, so it is no longer a never_retrieved nominee"
+    if retention_covers(node.id, (), retained):
+        return "a standing `retained` verdict keeps it; `reopen` withdraws that first"
+    if deferral is not None and not deferral_due(deferral, current_round, settings):
+        remaining = deferral_wait(deferral.count, settings) - (current_round - deferral.last_round)
+        return (
+            f"already deferred, and not offered again for {remaining} more "
+            f"reflect round(s); `reopen` asks for it now"
+        )
+    return None
 
 
 async def knowledge_in_degree_for(
@@ -276,9 +367,10 @@ async def nominate_archival_candidates(
     storage: StorageBackend,
     *,
     max_age_days: int = 90,
-    importance_ceiling: float = 0.5,
+    importance_ceiling: float = DEFAULT_IMPORTANCE_CEILING,
     judgment_max_age_days: int = DEFAULT_JUDGMENT_MAX_AGE_DAYS,
     limit: int = DEFAULT_NOMINATION_LIMIT,
+    deferral_defaults: DeferralSettings | None = None,
 ) -> list[ArchivalCandidate]:
     """Propose nodes worth archiving, worst first.
 
@@ -297,7 +389,11 @@ async def nominate_archival_candidates(
        as a keep anchored to the absorbed ids; `archival_reasons` is the
        narrower set this class reads.
     3. **never_retrieved** — active facts and topics never returned by a
-       search, not judged important, and with nothing depending on them.
+       search, not judged important, and with nothing depending on them, less
+       any a standing deferral is still holding back
+       (`never_retrieved_exclusion`). A deferred node whose wait is over comes
+       back first within the class, carrying `deferred`, so the limit cannot
+       keep pushing it out behind nodes nobody has looked at yet.
     4. **stale_judgment** — active nodes held above the ceiling by an upward
        judgment older than `judgment_max_age_days` that nobody has revisited.
        Not an archival claim: importance protects a node from every class above,
@@ -349,6 +445,12 @@ async def nominate_archival_candidates(
     retained = await confirmed_reasons_for(
         [node.id for node in inferences] + [node.id for node in unretrieved], storage
     )
+    deferred = await deferrals_for([node.id for node in unretrieved], storage)
+    current_round = await storage.get_reflect_round()
+    settings = await deferral_settings_for(storage, deferral_defaults)
+
+    # Deferred nodes whose wait is over, kept apart so they lead their class.
+    due_again: list[ArchivalCandidate] = []
 
     for node in active:
         if isinstance(node, Inference):
@@ -362,8 +464,32 @@ async def nominate_archival_candidates(
             continue
         if not never_retrieved(node):
             continue
-        if in_degree[node.id] == 0 and not retention_covers(node.id, (), retained):
-            candidates["never_retrieved"].append(_candidate(node, "never_retrieved"))
+        state = deferred.get(node.id)
+        excluded = never_retrieved_exclusion(
+            node,
+            in_degree=in_degree[node.id],
+            retained=retained,
+            deferral=state,
+            current_round=current_round,
+            settings=settings,
+            importance_ceiling=importance_ceiling,
+        )
+        if excluded is not None:
+            continue
+        candidate = _candidate(node, "never_retrieved")
+        if state is None:
+            candidates["never_retrieved"].append(candidate)
+            continue
+        candidate.deferred = DeferredNote(
+            count=state.count,
+            last_round=state.last_round,
+            rounds_waited=rounds_waited(state, current_round),
+            because=state.because,
+            judged_by=state.judged_by,
+            next_wait=deferral_wait(state.count + 1, settings),
+        )
+        due_again.append(candidate)
+    candidates["never_retrieved"] = due_again + candidates["never_retrieved"]
 
     ordered = [c for reason in _REASON_ORDER for c in candidates[reason]]
     return ordered[:limit]

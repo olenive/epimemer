@@ -400,8 +400,8 @@ would fail the tool call after the graph write succeeded, and the retry is
 worse than the missing row every time (a retried `merge_facts` refuses
 because its sources are retired, a retried `store_decomposition` ingests the
 document twice). The failure is logged for the operator. The exceptions are
-the `retention`, `boundary_declined` and `reopened` rows, where the row *is*
-the act rather than a note about one.
+the `retention`, `deferral`, `boundary_declined` and `reopened` rows, where the
+row *is* the act rather than a note about one.
 
 **Timestamps are padded on write**, because `decided_at` is the one timestamp
 whose index a range query actually uses, and wrapping the field in a

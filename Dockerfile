@@ -1,6 +1,13 @@
 FROM python:3.14-slim
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# The base tag floats, so the trust store is upgraded explicitly: a cached
+# layer must not keep a bundle that trusts the emSign root whose intermediate
+# keys were disclosed in October 2026.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends --only-upgrade ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /usr/local/bin/uv
 
 WORKDIR /app
 

@@ -97,9 +97,11 @@ from epimemer.storage.active_graph import GraphGuard, make_graph_guard
 from epimemer.storage.bm25 import bm25_scores, containment_first
 from epimemer.storage.protocol import (
     GRAPH_NAME_PATTERN,
+    DeferralOverrides,
     EdgeDirection,
     MergeOverrides,
     PassagesCited,
+    ReflectCompletion,
     SchemaTooNew,
     TimelineConflict,
     WarningOverrides,
@@ -285,7 +287,9 @@ _REFLECT_COUNTER = "reflect_counter"
 _BACKUP_COUNTER = "backup_counter"
 _REFLECT_THRESHOLD = "reflect_threshold_override"
 _BACKUP_THRESHOLD = "backup_threshold_override"
+_REFLECT_ROUND = "reflect_round"
 _MERGE_OVERRIDES = "merge_overrides"
+_DEFERRAL_OVERRIDES = "deferral_overrides"
 _WARNING_OVERRIDES = "warning_overrides"
 _APPROVED_AGENT_IDS = "approved_agent_ids"
 _JUDGE_CONFIRMATIONS = "judge_confirmations"
@@ -813,6 +817,23 @@ async def _reset(connection: Connection, g: sql.Identifier, key: str) -> int:
         return 0
     await _set_state(connection, g, key, 0)
     return int(row[0] or 0)
+
+
+async def _complete_round(connection: Connection, g: sql.Identifier) -> ReflectCompletion:
+    """Zero the reflect counter and advance the round if it was above zero.
+
+    Run inside one transaction. `_reset` locks the counter's row as it reads
+    it, so a second completion waits and then reads the zero this one wrote,
+    and a store landing meanwhile is counted either here or in the next round.
+    The round moves by `_bump`'s single upsert, and an error anywhere rolls
+    the reset back with it.
+    """
+    cleared = await _reset(connection, g, _REFLECT_COUNTER)
+    if cleared > 0:
+        reflect_round = await _bump(connection, g, _REFLECT_ROUND)
+    else:
+        reflect_round = int(await _state(connection, g, _REFLECT_ROUND) or 0)
+    return ReflectCompletion(stores_cleared=cleared, reflect_round=reflect_round)
 
 
 # --- Opening a graph ---
@@ -2196,9 +2217,6 @@ class PostgresStorage:
     async def bump_reflect_counter(self) -> int:
         return await self._run(lambda c, g: _bump(c, g, _REFLECT_COUNTER))
 
-    async def reset_reflect_counter(self) -> int:
-        return await self._reset(_REFLECT_COUNTER)
-
     async def set_reflect_counter(self, count: int) -> None:
         await self._put_state(_REFLECT_COUNTER, int(count))
 
@@ -2207,6 +2225,15 @@ class PostgresStorage:
 
     async def set_reflect_threshold_override(self, threshold: int | None) -> None:
         await self._put_state(_REFLECT_THRESHOLD, threshold)
+
+    async def get_reflect_round(self) -> int:
+        return int(await self._get_state(_REFLECT_ROUND) or 0)
+
+    async def set_reflect_round(self, round: int) -> None:
+        await self._put_state(_REFLECT_ROUND, int(round))
+
+    async def complete_reflect_round(self) -> ReflectCompletion:
+        return await self._atomic(_complete_round)
 
     async def _reset(self, key: str) -> int:
         return await self._atomic(lambda c, g: _reset(c, g, key))
@@ -2237,6 +2264,13 @@ class PostgresStorage:
 
     async def set_merge_overrides(self, overrides: MergeOverrides) -> None:
         await self._put_state(_MERGE_OVERRIDES, overrides.model_dump(mode="json"))
+
+    async def get_deferral_overrides(self) -> DeferralOverrides:
+        stored = await self._get_state(_DEFERRAL_OVERRIDES)
+        return DeferralOverrides() if stored is None else DeferralOverrides.model_validate(stored)
+
+    async def set_deferral_overrides(self, overrides: DeferralOverrides) -> None:
+        await self._put_state(_DEFERRAL_OVERRIDES, overrides.model_dump(mode="json"))
 
     async def get_warning_overrides(self) -> WarningOverrides:
         stored = await self._get_state(_WARNING_OVERRIDES)

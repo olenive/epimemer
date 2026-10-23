@@ -341,6 +341,7 @@ def _args(tool: str, seeded: dict) -> dict:
         # withdraw. A refusal naming both ids is still a response carrying them.
         "reopen": {"node_ids": [facts[0], inferences[0]], "reason": "worth another look"},
         "configure_merge": {},
+        "configure_deferral": {},
         "configure_warnings": {},
         "configure_reflection": {"threshold": 7},
         "configure_backup": {"threshold": 7},
@@ -383,6 +384,7 @@ ALL_TOOLS = [
     "merge_inferences",
     "reverse_merge",
     "configure_merge",
+    "configure_deferral",
     "configure_warnings",
     "reflect",
     "apply_reflection",

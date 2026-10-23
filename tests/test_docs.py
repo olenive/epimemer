@@ -263,5 +263,3 @@ async def test_the_canonical_tool_table_lists_exactly_the_registered_tools():
     assert not documented - registered, (
         f"listed in INTEGRATION.md but not registered: {sorted(documented - registered)}"
     )
-
-

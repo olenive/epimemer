@@ -831,3 +831,41 @@ class TestAGraphANewerEpimemerWrote:
         await store.store_node(_Graph.topic)
         assert await store.get_node("t1") == _Graph.topic
         assert _stored_version(directory / "newer.sqlite") == [(99,)]
+
+
+class TestCompletingAReflectIsOneTransaction:
+    """The counter's reset and the round's advance commit together or not at all."""
+
+    async def test_a_failure_writing_the_round_keeps_the_counter(self, store, monkeypatch):
+        from epimemer.storage import sqlite_adapter
+
+        await store.bump_reflect_counter()
+        await store.bump_reflect_counter()
+        original = sqlite_adapter._set_state
+
+        def failing(connection, key, value):
+            if key == sqlite_adapter._REFLECT_ROUND:
+                raise sqlite3.OperationalError("disk I/O error")
+            original(connection, key, value)
+
+        monkeypatch.setattr(sqlite_adapter, "_set_state", failing)
+        with pytest.raises(sqlite3.OperationalError):
+            await store.complete_reflect_round()
+        monkeypatch.setattr(sqlite_adapter, "_set_state", original)
+
+        assert await store.get_reflect_counter() == 2
+        assert await store.get_reflect_round() == 0
+        assert (await store.complete_reflect_round()).reflect_round == 1
+
+    async def test_a_second_connection_finds_nothing_left_to_clear(self, store, directory):
+        other = await _opened(directory)
+        try:
+            await store.bump_reflect_counter()
+
+            first = await store.complete_reflect_round()
+            second = await other.complete_reflect_round()
+        finally:
+            await other.close()
+
+        assert (first.stores_cleared, second.stores_cleared) == (1, 0)
+        assert second.reflect_round == 1

@@ -152,3 +152,120 @@ async def test_counter_follows_a_graph_switch(config):
         await server.call_tool("use_graph", {"name": "default", "confirm": True})
         back_home = await _ingest(server, "Foxes are mammals.")
         assert back_home["stores_since_reflect"] == 3
+
+
+# --- The reflect round: the clock a deferral is measured on -----------------
+#
+# A round is a reflect that completes with at least one store since the
+# reflect before it. These run in a graph of their own rather than the default.
+
+ROUNDS_GRAPH = "rounds-scratch"
+
+
+async def _reflect(server: FastMCP, graph: str = ROUNDS_GRAPH) -> str:
+    return (await server.call_tool("reflect", {"expected_graph": graph})).content[0].text
+
+
+async def test_a_reflect_after_a_store_advances_the_round(config):
+    storage = InMemoryStorage(database=ROUNDS_GRAPH)
+
+    async with _session(storage, config) as server:
+        await _ingest(server, "Cats are mammals.", graph=ROUNDS_GRAPH)
+        await _reflect(server)
+        assert await storage.get_reflect_round() == 1
+
+        await _ingest(server, "Dogs are mammals.", graph=ROUNDS_GRAPH)
+        await _ingest(server, "Foxes are mammals.", graph=ROUNDS_GRAPH)
+        await _reflect(server)
+        assert await storage.get_reflect_round() == 2
+
+
+async def test_a_reflect_with_nothing_stored_since_leaves_the_round(config):
+    """Reflecting twice in a row must not age a deferral by two."""
+    storage = InMemoryStorage(database=ROUNDS_GRAPH)
+
+    async with _session(storage, config) as server:
+        await _reflect(server)
+        assert await storage.get_reflect_round() == 0
+
+        await _ingest(server, "Cats are mammals.", graph=ROUNDS_GRAPH)
+        await _reflect(server)
+        await _reflect(server)
+        assert await storage.get_reflect_round() == 1
+
+
+async def test_a_failed_reflect_moves_neither_number(config, monkeypatch):
+    from epimemer.mcp import tools
+
+    storage = InMemoryStorage(database=ROUNDS_GRAPH)
+
+    async def _broken(**_kwargs):
+        raise RuntimeError("the embedder is unreachable")
+
+    async with _session(storage, config) as server:
+        await _ingest(server, "Cats are mammals.", graph=ROUNDS_GRAPH)
+        monkeypatch.setattr(tools, "reflect", _broken)
+
+        text = await _reflect(server)
+
+    assert "unreachable" in text
+    assert await storage.get_reflect_round() == 0
+    assert await storage.get_reflect_counter() == 1
+
+
+async def test_a_timed_out_reflect_moves_neither_number(config, monkeypatch):
+    import asyncio
+
+    from epimemer.mcp import tools
+
+    storage = InMemoryStorage(database=ROUNDS_GRAPH)
+    config = config.model_copy(update={"tool_timeout_seconds": 0.05})
+
+    async def _slow(**_kwargs):
+        await asyncio.sleep(5)
+
+    async with _session(storage, config) as server:
+        await _ingest(server, "Cats are mammals.", graph=ROUNDS_GRAPH)
+        monkeypatch.setattr(tools, "reflect", _slow)
+
+        text = await _reflect(server)
+
+    assert "timed out" in text
+    assert await storage.get_reflect_round() == 0
+    assert await storage.get_reflect_counter() == 1
+
+
+async def test_a_failed_completion_moves_neither_number(config, monkeypatch):
+    """The completion is one atomic step, so an error inside it leaves the
+    counter that would justify the round still standing for the next reflect."""
+    storage = InMemoryStorage(database=ROUNDS_GRAPH)
+
+    async def _refuse():
+        raise RuntimeError("the graph state could not be written")
+
+    async with _session(storage, config) as server:
+        await _ingest(server, "Cats are mammals.", graph=ROUNDS_GRAPH)
+        monkeypatch.setattr(storage, "complete_reflect_round", _refuse)
+        text = await _reflect(server)
+        monkeypatch.undo()
+
+        assert "could not be written" in text
+        assert await storage.get_reflect_counter() == 1
+        assert await storage.get_reflect_round() == 0
+
+        await _reflect(server)
+        assert await storage.get_reflect_round() == 1
+
+
+async def test_the_round_follows_a_graph_switch(config):
+    storage = InMemoryStorage(database=ROUNDS_GRAPH)
+
+    async with _session(storage, config) as server:
+        await _ingest(server, "Cats are mammals.", graph=ROUNDS_GRAPH)
+        await _reflect(server)
+
+        await server.call_tool("use_graph", {"name": "rounds-other", "confirm": True})
+        assert await storage.get_reflect_round() == 0
+
+        await server.call_tool("use_graph", {"name": ROUNDS_GRAPH, "confirm": True})
+        assert await storage.get_reflect_round() == 1

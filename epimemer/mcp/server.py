@@ -28,6 +28,7 @@ from epimemer.mcp import guidance, tools
 from epimemer.mcp.config import (
     create_embedding_provider,
     create_storage,
+    deferral_defaults,
     load_config,
 )
 from epimemer.mcp.retrieval_records import (
@@ -1889,6 +1890,56 @@ async def memory_configure_merge(
     )
 
 
+@mcp.tool(name="configure_deferral")
+async def memory_configure_deferral(
+    ctx: Context,
+    first_wait: int | None = None,
+    cap: int | None = None,
+    clear: list[str] | None = None,
+    expected_graph: str | None = None,
+) -> str:
+    """Read or change how long a deferred archival nominee waits on this graph.
+
+    `apply_reflection(deferred=[...])` puts a `never_retrieved` nominee off:
+    it is left out of `archival_candidates` for a number of reflect rounds, and
+    each further deferral of the same node doubles the wait. A round is a
+    reflect that completes with at least one store since the previous reflect.
+    Called with no arguments it reports what is in force and the graph's
+    current round. Ask the user before changing either: both are policy about
+    how long the graph keeps a question from its reviewers, which is not the
+    agent's call to make alone.
+
+    Args:
+        first_wait: Reflect rounds a node waits after its first deferral
+            (default 2). At least 1.
+        cap: The longest any wait may grow to, in reflect rounds (default 32).
+            At least `first_wait`, and at most 1024: a deferral promises the
+            node is reviewed again, so the cap cannot be set to amount to never.
+        clear: Settings to return to the process default, e.g. ["first_wait"]
+            or ["first_wait", "cap"]. A setting you leave out keeps whatever it
+            was set to.
+        expected_graph: The graph you believe you are working in. The active graph
+            is process state and does not survive a client reconnect, so a session
+            that switched earlier can come back somewhere else, so naming it turns
+            a wrong-graph call from silent into refused.
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.configure_deferral",
+        lambda: tools.configure_deferral(
+            storage=deps["storage"],
+            first_wait=first_wait,
+            cap=cap,
+            clear=clear,
+            deferral_defaults=deferral_defaults(deps["config"]),
+        ),
+        ctx,
+        f"first_wait={first_wait} cap={cap} clear={clear}",
+        lambda r, m: f"first_wait={r['deferral_first_wait']} cap={r['deferral_cap']}",
+        expected_graph=expected_graph,
+    )
+
+
 @mcp.tool(name="configure_warnings")
 async def memory_configure_warnings(
     ctx: Context,
@@ -2003,6 +2054,18 @@ async def memory_reflect(
       they draw the same conclusion, "distinct" where they only look alike.
       Between inferences a `similarity` edge is listed by corroboration as
       agreement and not counted. Unjudged, the pair comes back on every reflect
+    - archival_candidates: nodes worth setting aside, each with a `reason`:
+      `retired`, `evidence_stale`, `never_retrieved` or `stale_judgment`, at
+      most 20 a pass. Ask the user before archiving any with
+      apply_reflection archivals. A `never_retrieved` nominee (a node nothing
+      links to and no search has returned) has three answers: `archivals`,
+      `retained`, which keeps it for good, and `deferred`, which puts it off
+      for a number of reflect rounds that doubles each time. A deferred node
+      whose wait is over comes back first in its class carrying `deferred`:
+      how many times it was put off, the round of the last time, how many
+      rounds it has waited, why, by whom, and `next_wait`, the rounds another
+      deferral would hold it back for. `stale_judgment` asks for a judgment,
+      not an archival. Unanswered, a nominee comes back on every reflect
     - pending_review: active nodes already flagged for resolution
       (superseded_candidate / evidence_stale / evidence_merged / contested),
       with the related ids to act on via apply_reflection supersessions /
@@ -2044,8 +2107,9 @@ async def memory_reflect(
             wrong-graph call from silent into refused.
     """
     deps = ctx.lifespan_context
-    # Read for the log line only; the authoritative value is what the reset
-    # below clears, which also counts anything stored while reflect ran.
+    # Read for the log line only; the authoritative value is what the
+    # completion below clears, which also counts anything stored while reflect
+    # ran.
     stores_before = await deps["storage"].get_reflect_counter()
 
     async def _do() -> tuple[dict, ResponseMeta]:
@@ -2057,8 +2121,15 @@ async def memory_reflect(
             max_nominations=max_nominations,
             warning_policy=deps["config"].warning_policy,
             event_bus=deps.get("event_bus"),
+            deferral_defaults=deferral_defaults(deps["config"]),
         )
-        result["stores_since_last_reflect"] = await deps["storage"].reset_reflect_counter()
+        # One atomic step zeroes the counter and, if it was above zero, adds a
+        # round: a round is a reflect that completes with at least one store
+        # since the previous reflect, so reflecting twice in a row does not age
+        # a deferral by two. Here, at the end of a reflect that completed, so
+        # one that failed or timed out moves neither number.
+        completion = await deps["storage"].complete_reflect_round()
+        result["stores_since_last_reflect"] = completion.stores_cleared
         return result, meta
 
     return await _run_with_timeout(
@@ -2089,6 +2160,7 @@ async def memory_apply_reflection(
     supersessions: list[dict] | None = None,
     archivals: list[str] | None = None,
     retained: list[dict] | None = None,
+    deferred: list[dict] | None = None,
     judgments: list[dict] | None = None,
     relation_verdicts: list[dict] | None = None,
     boundaries: list[dict] | None = None,
@@ -2202,13 +2274,36 @@ async def memory_apply_reflection(
             **Omit `covers` where the nomination names no reason**, a node
             nothing links to and nothing has retrieved. The node is then kept
             for its own sake, and passing any id for such a node is refused.
+            **That keep is permanent**: with no reason to cover, nothing that
+            happens later can be a reason it failed to cover, so the node is
+            not offered again unless `reopen` withdraws the keep. Where you
+            mean *not now* rather than *keep it*, use `deferred`.
             **Not `judgments`.** Use that where the importance was wrong; use
             this where the importance is right and the node has simply been
             re-read. Raising importance to stop a nomination is how one field
             comes to mean both *how consequential this is* and *do not nominate
             this*. Nothing here refuses the batch: every entry not recorded
             comes back in `retained_skipped` with the reason, including a node
-            named in both `archivals` and `retained`, where archival wins.
+            named in both `archivals` and `retained`, where archival wins, and
+            one named in both `retained` and `deferred`, which is refused in
+            both.
+        deferred: *Not now, ask again later*, the third answer to a
+            `never_retrieved` nominee from reflect's archival_candidates. Each:
+            {node_id: str, because: str}. `because` is required. The node is
+            left out of archival_candidates for a number of reflect rounds: 2
+            after the first deferral, doubling each time after it, up to 32
+            (`configure_deferral` changes both). A round is a reflect that
+            completes with at least one store since the previous reflect.
+            When the wait is over it comes back first among the
+            never_retrieved nominees carrying `deferred`, with what you said.
+            Accepted only for a node the nominator's test counts as a
+            `never_retrieved` nominee right now, which a node past the 20-item
+            limit still is. Everything else comes back in `deferred_skipped`
+            with the
+            reason, including a node also named in `archivals` (archival wins)
+            or in `retained` (refused in both). `deferrals_recorded` lists each
+            one written as {node_id, count, due_after_rounds}.
+            `reopen(node_ids=[node_id])` withdraws a deferral still waiting.
         judgments: Re-judge importance, typically for `stale_judgment` nominees
             from reflect's archival_candidates. Each: {node_id: str, direction:
             "up"|"down", reason: str, related_id: str | None}. Unlike archivals
@@ -2302,12 +2397,14 @@ async def memory_apply_reflection(
             supersessions=supersessions,
             archivals=archivals,
             retained=retained,
+            deferred=deferred,
             judgments=judgments,
             relation_verdicts=relation_verdicts,
             boundaries=boundaries,
             boundaries_declined=boundaries_declined,
             similarities=similarities,
             judge=judge,
+            deferral_defaults=deferral_defaults(deps["config"]),
         )
         # Reported, not moved. Applying a reflection is the moment an agent is
         # already thinking about the state of the graph, which makes it the
@@ -2326,6 +2423,7 @@ async def memory_apply_reflection(
         f"splits_declined={len(splits_declined or [])} merges={len(merges or [])} "
         f"supersessions={len(supersessions or [])} archivals={len(archivals or [])} "
         f"retained={len(retained or [])} "
+        f"deferred={len(deferred or [])} "
         f"judgments={len(judgments or [])} "
         f"relation_verdicts={len(relation_verdicts or [])} "
         f"boundaries={len(boundaries or [])} "
@@ -2346,6 +2444,7 @@ async def memory_apply_reflection(
                 else ""
             )
             + (f" parents_refused={len(r['parents_refused'])}" if r["parents_refused"] else "")
+            + (f" deferred_skipped={len(r['deferred_skipped'])}" if r["deferred_skipped"] else "")
             + (
                 f" topic_merges_refused={len(r['topic_merges_refused'])}"
                 if r["topic_merges_refused"]
@@ -2390,7 +2489,11 @@ async def epimemer_reopen(
     - `relation_labels` with **two** label names: a pair judged through
       `apply_reflection(relation_verdicts=[...])`.
     - `node_ids` with **one** id: a node kept through
-      `apply_reflection(retained=[...])`.
+      `apply_reflection(retained=[...])`, or one put off through
+      `apply_reflection(deferred=[...])` and still waiting. Either is
+      withdrawn, and the node is offered on the next reflect if it still
+      qualifies. A deferral whose wait is over holds nothing back, so it is
+      refused like a node nothing suppresses.
     - `boundary`: a boundary proposal declined through
       `apply_reflection(boundaries_declined=[...])`.
 
@@ -2404,8 +2507,8 @@ async def epimemer_reopen(
     Args:
         reason: Why the earlier answer is worth revisiting. Required, and
             recorded on the journal row and on the next nomination.
-        node_ids: One node to withdraw a keep, or two to withdraw a pair's
-            assessment.
+        node_ids: One node to withdraw a keep or a deferral, or two to withdraw
+            a pair's assessment.
         relation_labels: The two relation label names whose verdict to withdraw.
         boundary: The declined boundary proposal to offer again: {node_id,
             source_id, endpoint, at, timeline_id: str | None}, as the decline
@@ -2433,6 +2536,7 @@ async def epimemer_reopen(
             boundary=boundary,
             reason=reason,
             judge=judge,
+            deferral_defaults=deferral_defaults(deps["config"]),
         ),
         ctx,
         f"{node_ids or relation_labels or boundary}",

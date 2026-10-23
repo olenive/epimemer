@@ -86,7 +86,15 @@ backend's own row rendering. The second is required: on SurrealDB and SQLite
 makes a later range query correct, and on Postgres it is a `timestamptz`.
 
 `set_reflect_counter` and `set_backup_counter` exist for the same reason and
-have the same single caller.
+have the same single caller. `set_reflect_round` restores the round deferrals
+are measured on, and is import's alone too: a completed reflect moves the round
+through `complete_reflect_round`, which zeroes the counter and advances the
+round in one atomic step. A round is a reflect that completes with at least one
+store since the previous reflect.
+
+A deferral cap above the 1024-round ceiling is imported as it is stored. The
+ceiling is enforced where a value is written and applied where one is
+resolved, so such a bundle restores, and the value behaves as the ceiling.
 
 **Do not reach for `write_verbatim_tx` to skip a writer's reasoning.** Every
 other path stamps for a reason. Import is the caller; a second one needs an

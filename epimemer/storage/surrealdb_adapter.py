@@ -55,9 +55,11 @@ from epimemer.core.types import (
 from epimemer.storage.active_graph import GraphGuard, make_graph_guard
 from epimemer.storage.bm25 import containment_first
 from epimemer.storage.protocol import (
+    DeferralOverrides,
     EdgeDirection,
     MergeOverrides,
     PassagesCited,
+    ReflectCompletion,
     SchemaTooNew,
     StorageBackend,
     TimelineConflict,
@@ -879,8 +881,8 @@ async def _migrate_schema(
 # One fixed record per graph holds the "stores since the last reflect" count, so
 # the read-modify-write is a single atomic statement on the server rather than a
 # racy round trip. `?? 0` covers the create path, where the field does not exist
-# yet. Both mutations return the row so the caller needs no follow-up read:
-# BUMP returns the incremented value, RESET the value it cleared.
+# yet. BUMP returns the row, so the caller needs no follow-up read for the
+# incremented value; a completed reflect zeroes the count in `_ROUND_COMPLETE`.
 
 _REFLECT_RECORD = "graph_state:reflect"
 _REFLECT_FIELD = "stores_since_reflect"
@@ -889,7 +891,6 @@ _REFLECT_GET = f"SELECT {_REFLECT_FIELD} FROM {_REFLECT_RECORD};"
 _REFLECT_BUMP = (
     f"UPSERT {_REFLECT_RECORD} SET {_REFLECT_FIELD} = ({_REFLECT_FIELD} ?? 0) + 1 RETURN AFTER;"
 )
-_REFLECT_RESET = f"UPSERT {_REFLECT_RECORD} SET {_REFLECT_FIELD} = 0 RETURN BEFORE;"
 _REFLECT_SET = f"UPSERT {_REFLECT_RECORD} SET {_REFLECT_FIELD} = $count RETURN AFTER;"
 
 # The per-graph threshold override shares the record with the counter — same
@@ -924,6 +925,41 @@ def _threshold_override(rows) -> int | None:
         return None
     value = rows[0].get(_THRESHOLD_FIELD)
     return None if value is None else int(value)
+
+
+# The reflect round shares the record with the counter, never the same field.
+# Import writes it outright; a completed reflect moves it with the counter in
+# `_ROUND_COMPLETE` below.
+_ROUND_FIELD = "reflect_round"
+
+_ROUND_GET = f"SELECT {_ROUND_FIELD} FROM {_REFLECT_RECORD};"
+_ROUND_SET = f"UPSERT {_REFLECT_RECORD} SET {_ROUND_FIELD} = $round RETURN AFTER;"
+
+
+# Closing a reflect, in one statement so the two fields cannot be seen apart:
+# the round reads the counter before the same statement zeroes it, since SET
+# applies its assignments in order. `$before` and `$after` hand back what was
+# cleared and the round left, and on the create path `$before` is NONE.
+_ROUND_COMPLETE = (
+    f"UPSERT {_REFLECT_RECORD} SET "
+    f"{_ROUND_FIELD} = ({_ROUND_FIELD} ?? 0) "
+    f"+ (IF ({_REFLECT_FIELD} ?? 0) > 0 THEN 1 ELSE 0 END), "
+    f"{_REFLECT_FIELD} = 0 "
+    f"RETURN $before.{_REFLECT_FIELD} AS cleared, $after.{_ROUND_FIELD} AS reflect_round;"
+)
+
+
+# How often a completion that lost a write conflict is tried again, and the
+# phrase the engine uses to say a failed transaction may be.
+_ROUND_ATTEMPTS = 5
+_RETRYABLE = "can be retried"
+
+
+def _reflect_round(rows) -> int:
+    """`_reflect_count` for the round's field: no row or no field reads as 0."""
+    if not rows or rows[0] is None:
+        return 0
+    return int(rows[0].get(_ROUND_FIELD) or 0)
 
 
 # The backup counter and its threshold override, on the reflect pair's terms:
@@ -984,6 +1020,22 @@ def _merge_overrides(rows) -> MergeOverrides:
         return MergeOverrides()
     stored = rows[0].get(_MERGE_FIELD)
     return MergeOverrides() if not stored else MergeOverrides.model_validate(stored)
+
+
+# The deferral overrides, on the merge overrides' terms: the reflect record,
+# their own field, written whole, and a `None` field removes its key.
+_DEFERRAL_FIELD = "deferral_overrides"
+
+_DEFERRAL_GET = f"SELECT {_DEFERRAL_FIELD} FROM {_REFLECT_RECORD};"
+_DEFERRAL_SET = f"UPSERT {_REFLECT_RECORD} SET {_DEFERRAL_FIELD} = $overrides RETURN AFTER;"
+
+
+def _deferral_overrides(rows) -> DeferralOverrides:
+    """`_merge_overrides` for the deferral field."""
+    if not rows or rows[0] is None:
+        return DeferralOverrides()
+    stored = rows[0].get(_DEFERRAL_FIELD)
+    return DeferralOverrides() if not stored else DeferralOverrides.model_validate(stored)
 
 
 _WARNING_FIELD = "warning_overrides"
@@ -3179,10 +3231,6 @@ class SurrealDBStorage:
         rows = await self._query(_REFLECT_BUMP)
         return _reflect_count(rows)
 
-    async def reset_reflect_counter(self) -> int:
-        rows = await self._query(_REFLECT_RESET)
-        return _reflect_count(rows)
-
     async def set_reflect_counter(self, count: int) -> None:
         await self._query(_REFLECT_SET, {"count": count})
 
@@ -3192,6 +3240,33 @@ class SurrealDBStorage:
 
     async def set_reflect_threshold_override(self, threshold: int | None) -> None:
         await self._query(_THRESHOLD_SET, {"threshold": threshold})
+
+    async def get_reflect_round(self) -> int:
+        rows = await self._query(_ROUND_GET)
+        return _reflect_round(rows)
+
+    async def set_reflect_round(self, round: int) -> None:
+        await self._query(_ROUND_SET, {"round": int(round)})
+
+    async def complete_reflect_round(self) -> ReflectCompletion:
+        # Two completions writing the record at once conflict here rather than
+        # one waiting for the other, and the engine says the loser can be
+        # retried. Retrying is sound because the statement reads what it
+        # changes: the second attempt finds the counter at zero and adds no
+        # round, which is what waiting would have produced.
+        for attempt in range(_ROUND_ATTEMPTS):
+            try:
+                rows = await self._query(_ROUND_COMPLETE)
+                break
+            except Exception as failed:
+                if _RETRYABLE not in str(failed) or attempt == _ROUND_ATTEMPTS - 1:
+                    raise
+                await asyncio.sleep(0)
+        row = rows[0] if rows and rows[0] is not None else {}
+        return ReflectCompletion(
+            stores_cleared=int(row.get("cleared") or 0),
+            reflect_round=int(row.get("reflect_round") or 0),
+        )
 
     # --- Backup bookkeeping ---
 
@@ -3224,6 +3299,16 @@ class SurrealDBStorage:
     async def set_merge_overrides(self, overrides: MergeOverrides) -> None:
         await self._query(
             _MERGE_SET,
+            {"overrides": drop_none_values(overrides.model_dump())},
+        )
+
+    async def get_deferral_overrides(self) -> DeferralOverrides:
+        rows = await self._query(_DEFERRAL_GET)
+        return _deferral_overrides(rows)
+
+    async def set_deferral_overrides(self, overrides: DeferralOverrides) -> None:
+        await self._query(
+            _DEFERRAL_SET,
             {"overrides": drop_none_values(overrides.model_dump())},
         )
 

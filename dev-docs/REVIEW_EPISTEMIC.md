@@ -132,6 +132,23 @@ nomination writes *do not nominate this* into a field meaning *how
 consequential this is*; use `judgments` where the importance was wrong and
 `retained` where the importance is right and the node has been re-read.
 
+**A keep on a `never_retrieved` node is permanent, and `deferred` is the
+answer for *not now*.** The empty `covers` that makes the keep sound also
+means no later reason can outrank it, so it stands until `reopen` withdraws
+it. A `deferral` journal row instead holds the node back for a number of
+reflect rounds, two after the first deferral and doubling to a cap of 32,
+measured from the `at_round` stamped on the row. A round is a reflect that
+completes with at least one store since the previous reflect: a second look
+is worth something only once something has been stored, and a clock would age
+a deferral on a graph nobody touched. When the wait is over the node comes back
+first among the `never_retrieved` nominees, carrying what was said last time.
+A later keep, or a one-node `reopen` while the node is still waiting, clears
+the deferral, and the tool accepts a deferral only for a node the nominator's
+test counts as a never_retrieved nominee. The cap is at most 1024 rounds,
+because eventual review is what a deferral promises; the ceiling is enforced on
+write and a stored value above it is clamped on read, so a graph holding one
+keeps working.
+
 ### 4.3 Metacontext model
 
 - **Every ingested node names its metacontext.** `metacontext_id` is required on
@@ -309,7 +326,8 @@ approval. Cost stays proportional to the junk, not the graph.
   Importance is judged at reflect time, not ingest time, because triviality
   is only visible once the neighbourhood exists ("error message X" matters
   until the bug is fixed, then does not). The agent may judge a nominee up,
-  or keep it with `retained` (§4.2), instead of letting it go.
+  keep it with `retained`, or put a `never_retrieved` one off with
+  `deferred` (§4.2), instead of letting it go.
 - **Approve (human, in conversation).** Archive, never delete: export, then a
   status flip, and `restore` reverses.
 

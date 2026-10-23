@@ -50,13 +50,13 @@ class TestEmission:
 
         assert [e.suggested for e in received] == [False, True]
 
-    async def test_reset_emits_a_zeroed_count(self, bus):
+    async def test_completing_a_reflect_emits_a_zeroed_count(self, bus):
         storage = instrument_storage(InMemoryStorage(), bus, default_threshold=2)
         await storage.bump_reflect_counter()
         await storage.bump_reflect_counter()
 
         received = _recorder(bus)
-        await storage.reset_reflect_counter()
+        await storage.complete_reflect_round()
 
         assert len(received) == 1
         assert received[0].count == 0
@@ -114,7 +114,8 @@ class TestPassThrough:
 
         assert await storage.bump_reflect_counter() == 1
         assert await storage.bump_reflect_counter() == 2
-        assert await storage.reset_reflect_counter() == 2
+        completion = await storage.complete_reflect_round()
+        assert (completion.stores_cleared, completion.reflect_round) == (2, 1)
         assert await storage.get_reflect_counter() == 0
 
     async def test_reads_emit_nothing(self, bus):

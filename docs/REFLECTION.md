@@ -130,7 +130,7 @@ Each key is a worklist, not a verdict:
 | `similar_inferences` | similar active inferences resting on no common premise, each side with its premises | `similarities`: `one_claim` where they draw the same conclusion, `distinct` where they do not |
 | `boundary_proposals` | where a succession lets a period close or open, leaving out any somebody declined | `boundaries` or `boundaries_declined` |
 | `pending_review` | active nodes already carrying review state | `supersessions`, `record_variant`, `retained` |
-| `archival_candidates` | nodes worth setting aside | `archivals`, `judgments`, `retained` |
+| `archival_candidates` | nodes worth setting aside, less any a deferral is still holding back | `archivals`, `judgments`, `retained`, `deferred` |
 | `similar_relations` | likely-synonymous user relationship labels, at or above `relation_similarity_threshold` (0.9 by default) | `relation_verdicts` |
 
 `temporal_contradictions` is answered by `resolve_temporal_contradiction`
@@ -194,6 +194,11 @@ reflect, and nothing triggers one. The suggestion is information for the
 agent, and running it stays a deliberate act: an automatic reflect on a timer
 would be a consolidation nobody asked for over a graph nobody was looking at.
 
+A completed reflect also advances the graph's **reflect round** by one when
+there was at least one store since the previous reflect, in the same atomic
+step that zeroes the counter. The round is the clock a deferred nominee waits
+on, and it travels in a bundle with the rest of the graph's settings.
+
 ### Backing up runs the same way
 
 Backups are prompted rather than scheduled, on exactly this pattern and for
@@ -245,10 +250,12 @@ four classes:
 |---|---|
 | `retired` | corrected or merged nodes retired more than `max_age_days` ago (90 by default), not judged important |
 | `evidence_stale` | active inferences whose basis changed, or whose whole evidence set has been archived |
-| `never_retrieved` | active facts and topics never returned by a search, not judged important, with nothing depending on them |
+| `never_retrieved` | active facts and topics never returned by a search, not judged important, with nothing depending on them, and not deferred within their wait |
 | `stale_judgment` | nodes held above the importance ceiling by an upward judgment more than 180 days old that nobody has revisited |
 
-The list holds at most twenty nominees a pass.
+The list holds at most twenty nominees a pass. A deferred node whose wait is
+over is placed first within `never_retrieved`, so the limit cannot keep pushing
+it behind nodes nobody has looked at yet.
 
 **`historical` nodes are never nominated.** They were retired because the
 world changed, not because they were wrong, so they remain true of their
@@ -288,6 +295,7 @@ Every kind of decision is optional and they are applied in one call:
 | `merges` | fuse near-duplicate topics into one |
 | `supersessions` | resolve a flagged node against an existing one |
 | `retained` | record that you re-read a nominated node and it stands |
+| `deferred` | put a `never_retrieved` nominee off for a number of reflect rounds that doubles each time |
 | `archivals` | export and retire approved nominees |
 | `judgments` | re-judge importance, in either direction, with a reason |
 | `relation_verdicts` | record what you decided about a nominated label pair |
@@ -476,11 +484,62 @@ to is dropped from the worklist, and naming it again is refused as already
 covered. Omit `covers` where the nomination names no reason, such as
 `never_retrieved`; the node is then kept for its own sake.
 
+**A keep on a `never_retrieved` nominee is permanent.** Its nomination names no
+reason, so nothing that happens later can be a reason the keep failed to cover.
+The keep stands until `reopen` withdraws it, so the node is not offered as
+`never_retrieved` again before then. Where you mean *not now* rather than
+*keep it*, use `deferred`.
+
 Use `judgments` where the importance was wrong; use `retained` where the
 importance is right and the node has been re-read. Raising importance to stop
 a nomination would make one field mean both *how consequential this is* and
 *do not nominate this*. Entries not recorded come back in `retained_skipped`
 with the reason; a node named in both `archivals` and `retained` is archived.
+
+### `deferred`: not now, ask again later
+
+`deferred` is the third answer to a `never_retrieved` nominee, for a node that
+is not worth the user's attention today and may be once the graph has grown
+around it. Each entry is `{node_id, because}`, and `because` is required.
+
+The node is left out of `archival_candidates` for a number of **reflect
+rounds**: 2 after its first deferral, doubling with each one after it, up to
+32. A round is a reflect that completes with at least one store since the
+previous reflect, so a graph nobody stores into does not age a deferral, and
+reflecting twice in a row does not count twice. A reflect that fails or times
+out counts for nothing. When the wait is over the node comes back first among
+the `never_retrieved` nominees, carrying `deferred`: `count`, `last_round`,
+`rounds_waited`, the `because` given, `judged_by`, and `next_wait`, the wait
+another deferral would set.
+
+A deferral is accepted only for a node the nominator's test counts as a
+`never_retrieved` nominee at the moment of the call, so it cannot be used to
+hide a node reflect would not have offered. Anything else comes back in
+`deferred_skipped` with the reason. A node named in `archivals` as well is
+archived and its deferral skipped; a node named in both `retained` and
+`deferred` is refused in both, since the two answers contradict each other.
+`deferrals_recorded` lists each one written, with its `count` and
+`due_after_rounds`.
+
+Each deferral is a `deferral` journal row carrying the round it was written in
+as `at_round`, credited to the judge that wrote it. A later `retained` verdict
+for the node clears its deferral state, and so does `reopen` while the node is
+still waiting; a deferral whose wait is over holds nothing back, so `reopen`
+refuses it as it refuses a node nothing suppresses. A deferral after a clear
+starts counting from one again.
+
+`configure_deferral` reads and sets the two numbers for one graph,
+`first_wait` and `cap`, and `clear=["first_wait"]` returns a named one to the
+process default. A change is refused when a value named is below 1 or above
+1024 rounds, or when `cap` is below the `first_wait` it would resolve against:
+a deferral promises the node is reviewed again, so neither can be set to amount
+to never. A read is never refused. The ceiling is enforced where a value is
+written, by this tool and when the server loads its configuration, and applied
+where one is read: a value above it, stored before it existed or carried in by
+a bundle, is read and exported as stored, behaves as 1024, and is reported
+under `clamped`. Any change the tool writes stores it at the ceiling.
+`EPIMEMER_DEFERRAL_FIRST_WAIT` and `EPIMEMER_DEFERRAL_CAP` set the process
+defaults.
 
 ### `reopen`: taking a suppression back
 
@@ -493,7 +552,7 @@ says which layer:
 |---|---|---|
 | `reopen(node_ids=[a, b], reason=...)` | the pair's `assessed` edge | the pair is nominated again |
 | `reopen(relation_labels=[a, b], reason=...)` | the pair's standing verdict | the label pair is nominated again |
-| `reopen(node_ids=[node_id], reason=...)` | the node's standing keep | the node returns to the archival worklist |
+| `reopen(node_ids=[node_id], reason=...)` | the node's standing keep, or a deferral still waiting | the node returns to the archival worklist |
 | `reopen(boundary={node_id, source_id, endpoint, at, timeline_id}, reason=...)` | the standing decline of that boundary proposal | the proposal is offered again |
 
 **It asserts nothing.** It does not record the opposite of the earlier verdict

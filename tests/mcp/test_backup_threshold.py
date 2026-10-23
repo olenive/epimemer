@@ -74,7 +74,7 @@ class TestTheCounter:
         await storage.bump_backup_counter()
         await storage.bump_backup_counter()
 
-        await storage.reset_reflect_counter()
+        await storage.complete_reflect_round()
 
         assert await storage.get_reflect_counter() == 0
         assert await storage.get_backup_counter() == 2

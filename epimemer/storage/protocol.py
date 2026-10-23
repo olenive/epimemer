@@ -141,6 +141,100 @@ def resolve_merge_settings(overrides: MergeOverrides | None) -> MergeSettings:
     )
 
 
+# How many reflect rounds a `never_retrieved` nominee waits after its first
+# deferral, and the longest any later wait may grow to. Each further deferral
+# doubles the wait up to the cap: with these, the first deferral waits 2
+# rounds, the second 4, and the fifth and every one after it 32.
+DEFAULT_DEFERRAL_FIRST_WAIT = 2
+DEFAULT_DEFERRAL_CAP = 32
+
+
+# The longest a cap may be set to, in reflect rounds. Eventual review is what a
+# deferral promises, so the cap must not be settable to a value that amounts to
+# never, and an agent must not be able to hide its own nominees indefinitely by
+# raising it. 1024 rounds is already far longer than any graph is likely to
+# run between looks; the bound only stops the number meaning *for ever*.
+#
+# Enforced where a value is written (`configure_deferral`, config load) and
+# applied where one is read (`resolve_deferral_settings` clamps to it), never
+# as a bound on the models: a model bound fires on every read, so a value
+# stored before the ceiling existed would fail every reflect, export and
+# import of its graph, and could not even be read to be cleared.
+MAX_DEFERRAL_CAP = 1024
+
+
+class ReflectCompletion(BaseModel):
+    """What closing a reflect did: the stores it cleared and the round it left."""
+
+    stores_cleared: int
+    reflect_round: int
+
+
+class DeferralOverrides(BaseModel):
+    """A graph's own answers about deferral, where it has any.
+
+    `None` on a field means *follow the process default*, deliberately not the
+    default's current value, so changing a default later still reaches a graph
+    that was once overridden and then cleared. Same rule as `MergeOverrides`.
+    """
+
+    first_wait: int | None = Field(default=None, ge=1)
+    cap: int | None = Field(default=None, ge=1)
+
+
+class DeferralSettings(BaseModel):
+    """The deferral numbers in force on this graph, in reflect rounds.
+
+    No rule tying `cap` to `first_wait` here, on purpose: the two can come from
+    different places (an override and a later process default), and a reflect
+    that refused to run because they disagreed would be worse than the wait
+    rule's own answer, which caps at `cap` either way. `configure_deferral`
+    refuses the disagreement where an agent can be told about it.
+    """
+
+    first_wait: int = Field(default=DEFAULT_DEFERRAL_FIRST_WAIT, ge=1)
+    cap: int = Field(default=DEFAULT_DEFERRAL_CAP, ge=1)
+
+
+def resolve_deferral_settings(
+    overrides: DeferralOverrides | None, defaults: DeferralSettings
+) -> DeferralSettings:
+    """The deferral numbers in force: the graph's overrides, else the process
+    defaults, each clamped to `MAX_DEFERRAL_CAP`.
+
+    Pure and shared for the reason `resolve_merge_settings` is: the nominator,
+    `apply_reflection` and `configure_deferral` all resolve them, and a second
+    copy is how a reported wait drifts from the one the nominator applies.
+
+    The clamp is how the ceiling reaches a value written before it existed, or
+    carried in by a bundle: such a value is read as it is stored and behaves as
+    the ceiling, so the graph keeps working and the promise of eventual review
+    still holds.
+    """
+    first_wait = defaults.first_wait
+    cap = defaults.cap
+    if overrides is not None:
+        first_wait = first_wait if overrides.first_wait is None else overrides.first_wait
+        cap = cap if overrides.cap is None else overrides.cap
+    return DeferralSettings(
+        first_wait=min(first_wait, MAX_DEFERRAL_CAP), cap=min(cap, MAX_DEFERRAL_CAP)
+    )
+
+
+def clamped_deferral_overrides(overrides: DeferralOverrides) -> dict[str, int]:
+    """The stored overrides above `MAX_DEFERRAL_CAP`, by name, as stored.
+
+    Empty for any value `configure_deferral` could have written; a value here
+    came from before the ceiling existed or from a bundle, and resolves to the
+    ceiling.
+    """
+    return {
+        name: value
+        for name, value in overrides.model_dump().items()
+        if value is not None and value > MAX_DEFERRAL_CAP
+    }
+
+
 class WarningOverrides(BaseModel):
     """A graph's own answers about advisories, where it has any.
 
@@ -1385,16 +1479,13 @@ class StorageBackend(Protocol):
         """Record one store against the active graph. Returns the new count."""
         ...
 
-    async def reset_reflect_counter(self) -> int:
-        """Zero the active graph's counter. Returns the count before the reset."""
-        ...
-
     async def set_reflect_counter(self, count: int) -> None:
         """Put the active graph's counter at exactly `count`.
 
         **Import's method, and it has no other caller.** Everything else moves
-        the counter by one or back to zero, because the count means *stores
-        since the last reflect* and no ordinary act knows a number to assert.
+        the counter by one, or back to zero through `complete_reflect_round`,
+        because the count means *stores since the last reflect* and no ordinary
+        act knows a number to assert.
         A restored graph does: it carries the count its bundle recorded, and
         bumping in a loop to reach it would be the same write said N times.
         """
@@ -1414,6 +1505,38 @@ class StorageBackend(Protocol):
 
     async def set_reflect_threshold_override(self, threshold: int | None) -> None:
         """Set the active graph's threshold override, or clear it with None."""
+        ...
+
+    async def get_reflect_round(self) -> int:
+        """How many reflects on the active graph have counted as rounds.
+
+        The clock a deferral is measured on. A round is a reflect that completes
+        with at least one store since the previous reflect, so an agent
+        reflecting twice in a row does not age a deferral by two. Stored beside
+        the reflect counter and scoped the same way; absent state reads as 0.
+        """
+        ...
+
+    async def set_reflect_round(self, round: int) -> None:
+        """Put the active graph's reflect round at exactly `round`.
+
+        **Import's method**, on `set_reflect_counter`'s terms: a restored graph
+        carries the round its bundle recorded. A completed reflect moves the
+        round through `complete_reflect_round` instead, never through this.
+        """
+        ...
+
+    async def complete_reflect_round(self) -> ReflectCompletion:
+        """Close a completed reflect on the active graph, as one atomic step.
+
+        Reads the reflect counter, zeroes it, and adds one to the round when the
+        counter was above zero; returns what it cleared and the round it left.
+        Atomic on every backend, because the two numbers have to move together:
+        as a read and a write after the reset, two reflects interleaving on one
+        connection could both read the same round and lose one, and an error
+        between the reset and the write would lose the round for good, since
+        the counter that justified it was already zero.
+        """
         ...
 
     # --- Backup bookkeeping ---
@@ -1484,6 +1607,23 @@ class StorageBackend(Protocol):
         Whole-record rather than per-field, so "clear this one" and "leave this
         one alone" cannot be confused: the caller reads, edits and writes back.
         A `None` field clears that override.
+        """
+        ...
+
+    async def get_deferral_overrides(self) -> DeferralOverrides:
+        """The active graph's own deferral settings, where it has set any.
+
+        Stored beside the reflect counter and scoped the same way. A graph that
+        has never been configured returns an all-`None` record rather than
+        raising: every field independently answers *follow the process default*.
+        """
+        ...
+
+    async def set_deferral_overrides(self, overrides: DeferralOverrides) -> None:
+        """Replace the active graph's deferral overrides.
+
+        Whole-record for `set_merge_overrides`' reason: the caller reads, edits
+        and writes back. A `None` field clears that override.
         """
         ...
 

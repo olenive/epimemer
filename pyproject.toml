@@ -40,6 +40,11 @@ dependencies = [
     # that copy would make calendar rules work on a developer's machine and
     # fail on a plain `pip install epimemer`. Pure Python, one requirement.
     "python-dateutil>=2.9.0",
+    # Named here although it arrives through httpx and requests, so that the
+    # floor holds: the release that dropped the emSign root whose intermediate
+    # keys were disclosed in October 2026. botocore falls back to its own
+    # bundle only when certifi is absent, so the floor reaches the s3 extra.
+    "certifi>=2026.10.19",
 ]
 
 [project.optional-dependencies]

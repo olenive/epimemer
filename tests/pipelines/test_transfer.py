@@ -75,7 +75,7 @@ from epimemer.pipelines.transfer import (
     write_bundle,
 )
 from epimemer.storage.memory import InMemoryStorage
-from epimemer.storage.protocol import MergeOverrides, WarningOverrides
+from epimemer.storage.protocol import DeferralOverrides, MergeOverrides, WarningOverrides
 from epimemer.storage.surrealdb_adapter import SurrealDBStorage
 
 AT = datetime(2026, 3, 4, 5, 6, 7, 890123, tzinfo=UTC)
@@ -510,6 +510,17 @@ async def build_rich_graph(store) -> dict:
             subject_ids=[archived.id],
             decided_at=ON_THE_SECOND,
         ),
+        # The round a deferral waits from is part of the verdict, so it has to
+        # come back exactly as written.
+        DecisionRecord(
+            id="decision-5",
+            kind=DecisionKind.DEFERRAL,
+            subject_ids=[fact.id],
+            judged_by=JUDGE,
+            decided_at=ON_THE_SECOND + timedelta(hours=2),
+            certainty_basis="Not yet; the release notes may cite it.",
+            at_round=4,
+        ),
     ):
         await store.record_decision(record)
 
@@ -566,7 +577,9 @@ async def build_rich_graph(store) -> dict:
     await store.set_require_judge(True)
     await store.set_reflect_threshold_override(42)
     await store.set_reflect_counter(7)
+    await store.set_reflect_round(6)
     await store.set_merge_overrides(MergeOverrides(undo_depth=3, cycle_limit=5))
+    await store.set_deferral_overrides(DeferralOverrides(first_wait=3))
     await store.set_warning_overrides(
         WarningOverrides(
             surface=False,
@@ -689,7 +702,9 @@ async def _protocol_reads(storage) -> dict:
         "require_judge": await storage.get_require_judge(),
         "reflect_threshold_override": await storage.get_reflect_threshold_override(),
         "reflect_counter": await storage.get_reflect_counter(),
+        "reflect_round": await storage.get_reflect_round(),
         "merge_overrides": (await storage.get_merge_overrides()).model_dump(mode="json"),
+        "deferral_overrides": (await storage.get_deferral_overrides()).model_dump(mode="json"),
         "warning_overrides": (await storage.get_warning_overrides()).model_dump(mode="json"),
         "nodes_by_type": {
             status.value: {
