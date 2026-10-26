@@ -173,9 +173,8 @@ them, so search results always carry their metacontext labels.
 
 A `Metacontext` is a node in the graph, like a high-level Topic but for
 disambiguation rather than categorisation: "Real historical events", a
-fictional universe, a party line, "Reporting by the BBC". Because metacontexts
-are nodes, they can relate to each other via ordinary edges, such as
-`based_on`.
+fictional universe, a party line, "Reporting by the BBC". A metacontext can
+build on one other (`based_on`, with where they diverge); no claims flow.
 
 - Nodes link to their metacontexts via `HAS_METACONTEXT` edges, and a node can
   stand in several: "propaganda" and "true as far as we know" are different

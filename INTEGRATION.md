@@ -86,12 +86,12 @@ non-default `EPIMEMER_CLIENT_STATE_DIR`, give the hook the same directory with
 
 ### Verify Connection
 
-In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 58 tools.
+In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 59 tools.
 
 ## Available Tools
 
 Claude Code prefixes each tool as `mcp__epimemer__<name>`. This table is
-the canonical list of the 58 tools; other docs link here rather than
+the canonical list of the 59 tools; other docs link here rather than
 restate the count.
 
 ### Core Memory Operations
@@ -114,7 +114,7 @@ restate the count.
 |------|---------|
 | `query_graph` | Traverse the graph from a starting node. `metacontexts` scopes the neighbours, as on `search`; the starting node comes back either way |
 | `topic_tree` | Walk a topic hierarchy: ancestors and subtopics, previews only. `metacontexts` scopes the tree |
-| `find_nodes` | Return the nodes linked to a source document or a topic node, by following edges rather than by similarity. `metacontexts` scopes the listing |
+| `find_nodes` | Return the nodes linked to a source document or a topic node, by following edges rather than by similarity. `metacontexts` scopes the listing. `variants_in` lists where a metacontext departs from its base: its facts with a `variant_of` edge to a fact in the base, each carrying `varies_from` |
 | `list_sources` | List the distinct source nodes, with reference counts |
 | `list_relations` | List the distinct user-defined relationship labels, with usage counts and descriptions |
 | `describe_relation` | Say what one of this graph's relationship labels means here: guidance the next agent reads before coining a label |
@@ -191,8 +191,9 @@ and when. See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
 
 | Tool | Purpose |
 |------|---------|
-| `create_metacontext` | Create a metacontext (for example "Real world" or "Fiction") |
-| `get_metacontexts` | Get the metacontexts a node is in |
+| `create_metacontext` | Create a metacontext (for example "Real world" or "Fiction"). `based_on` names the metacontext it builds on and `diverges` where the two part |
+| `set_metacontext_base` | Set, replace or withdraw the metacontext an existing one builds on, with where they diverge. One base per metacontext; nothing flows along it |
+| `get_metacontexts` | Get the metacontexts a node is in, each with the base it builds on |
 
 ### Graph Management (knowledge graphs)
 

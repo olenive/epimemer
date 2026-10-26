@@ -765,6 +765,12 @@ the graph learned it.
   it. *"Milan is in Lombardy"* belongs in the real-world metacontext; *"Milanese
   merchants believed the pass was closed"* belongs in the perspective metacontext,
   and a reader who wants both names both.
+- **A metacontext can build on one other.** Record it with `based_on` on
+  `create_metacontext`, or `set_metacontext_base`, and `diverges` as a date or
+  a named moment. Scoped reads carry it in `metacontext_bases`,
+  `get_metacontexts` shows it, and `find_nodes(variants_in=...)` lists where the
+  two differ. No claims flow: name both metacontexts for the shared history,
+  and trust the base's claims only up to the divergence.
 - **An `apply_reflection` that would invent a metacontext refuses instead.**
   Splits inherit what their parent states and a synthesised parent inherits
   the set its children share; a `parents` or topic `merges` group standing in

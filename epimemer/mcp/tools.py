@@ -2271,7 +2271,9 @@ async def search(
     labels and computed review labels (superseded_candidate / evidence_stale / evidence_merged /
     contested) are always included on returned nodes. Returned Topics that sit in a split
     hierarchy also carry `parents` / `subtopics` as id + preview, so the caller can drill via
-    `topic_tree` instead of being handed the whole subtree.
+    `topic_tree` instead of being handed the whole subtree. A scoped search carries
+    `metacontext_bases` for each named metacontext that builds on another: the base, and where
+    the two diverge. Nothing from the base is returned unless the caller names it too.
 
     **A scoped search scopes the whole response**, because a topic node created
     from a tag stands in every metacontext it is used from and is shared by
@@ -2442,7 +2444,7 @@ async def search(
         # Passages the keyword arm matched, in their own right. A segment is not
         # a graph node and must not be pretended into one.
         "segments": [hit.model_dump(mode="json") for hit in segments],
-    }
+    } | await _metacontext_bases_field(metacontexts, storage)
     if valid_as_of is not None:
         # T3's groups, built from the per-node labels above rather than computed
         # a second time: two places deriving one rule is how they come to
@@ -2669,6 +2671,7 @@ async def find_nodes(
     *,
     sourced_from: str | None = None,
     tagged_with_topic: str | None = None,
+    variants_in: str | None = None,
     node_types: list[str] | None = None,
     status: str = "active",
     metacontexts: list[str] | None = None,
@@ -2679,7 +2682,12 @@ async def find_nodes(
     `sourced_from` (a document/entity id or name) returns the nodes with a
     `sourced_from` edge to it: "which nodes came from X". `tagged_with_topic` (a
     Topic id or name) returns the nodes tagged with that concept. A native graph
-    query, replacing the old string-filter listing.
+    query, replacing the old string-filter listing. `variants_in` (a metacontext
+    id) returns where that metacontext departs from its base (`_variants_in`).
+    Exactly one of the three is given.
+
+    A scoped listing carries `metacontext_bases` for each named metacontext
+    that builds on another, as `search` does.
 
     `metacontexts` scopes the answer to nodes standing in **any** of the
     metacontexts listed, with the same meaning it has on `search`: a union the
@@ -2700,14 +2708,20 @@ async def find_nodes(
     """
     await require_metacontexts(metacontexts, storage)
 
-    if tagged_with_topic is not None:
-        reference_id = await _resolve_node_reference(tagged_with_topic, storage)
-        edge_type = EdgeType.TAGGED_WITH_TOPIC
-    elif sourced_from is not None:
-        reference_id = await _resolve_node_reference(sourced_from, storage)
-        edge_type = EdgeType.SOURCED_FROM
-    else:
-        raise ValueError("find_nodes requires sourced_from or tagged_with_topic")
+    given = [
+        name
+        for name, value in (
+            ("sourced_from", sourced_from),
+            ("tagged_with_topic", tagged_with_topic),
+            ("variants_in", variants_in),
+        )
+        if value is not None
+    ]
+    if len(given) != 1:
+        raise ValueError(
+            "find_nodes takes exactly one of sourced_from, tagged_with_topic or "
+            f"variants_in, and was given {', '.join(given) if given else 'none'}."
+        )
 
     st = NodeStatus(status)
     allowed = set(node_types) if node_types else None
@@ -2717,6 +2731,24 @@ async def find_nodes(
         if not metacontexts:
             return candidates
         return await _in_metacontext_nodes(candidates, metacontexts, storage)
+
+    if variants_in is not None:
+        return await _variants_in(
+            variants_in,
+            storage,
+            status=st,
+            allowed=allowed,
+            in_scope=in_scope,
+            metacontexts=metacontexts,
+            limit=limit,
+        )
+
+    if tagged_with_topic is not None:
+        reference_id = await _resolve_node_reference(tagged_with_topic, storage)
+        edge_type = EdgeType.TAGGED_WITH_TOPIC
+    else:
+        reference_id = await _resolve_node_reference(sourced_from, storage)
+        edge_type = EdgeType.SOURCED_FROM
 
     nodes: list[EpistemicNode] = []
     seen: set[str] = set()
@@ -2744,24 +2776,125 @@ async def find_nodes(
                 break
     if batch and len(nodes) < limit:
         nodes.extend(await in_scope(batch))
-    nodes = nodes[:limit]
+    return await _found_nodes(nodes[:limit], storage, metacontexts)
 
+
+async def _variants_in(
+    metacontext_id: str,
+    storage: StorageBackend,
+    *,
+    status: NodeStatus,
+    allowed: set[str] | None,
+    in_scope: Callable[[list[EpistemicNode]], Awaitable[list[EpistemicNode]]],
+    metacontexts: Sequence[str] | None,
+    limit: int,
+) -> tuple[dict, ResponseMeta]:
+    """Where a metacontext departs from its base, as `find_nodes` lists it.
+
+    The facts standing in `metacontext_id` that have a live `variant_of` edge,
+    in either direction, to a fact standing in its base. One entry per pair,
+    carrying the base fact as `varies_from`, so a fact that varies from two
+    base facts comes back twice. Only facts carry `variant_of`, so a
+    `node_types` without `fact` lists nothing. Refused when the metacontext has
+    no base, because there is nothing for its facts to vary from.
+    """
+    from epimemer.pipelines.metacontext_bases import metacontext_bases
+    from epimemer.pipelines.reflection.review import metacontexts_for
+
+    await require_metacontext(metacontext_id, storage)
+    base = (await metacontext_bases(storage, [metacontext_id])).get(metacontext_id)
+    if base is None:
+        raise ValueError(
+            f"'{metacontext_id}' has no base, so its facts have nothing to vary "
+            f"from. Record the metacontext it builds on with set_metacontext_base, "
+            f"or with based_on on create_metacontext."
+        )
+
+    standing = await storage.get_edges_to(metacontext_id, edge_type=EdgeType.HAS_METACONTEXT)
+    found = await storage.get_nodes(sorted({edge.src_id for edge in standing}))
+    facts = [
+        node
+        for node in found.values()
+        if isinstance(node, Fact) and node.status == status and (not allowed or "fact" in allowed)
+    ]
+    facts = sorted(await in_scope(facts), key=lambda node: (node.created_at, node.id))
+
+    fact_ids = [fact.id for fact in facts]
+    outgoing = await storage.get_edges_for(
+        fact_ids, direction="from", edge_type=EdgeType.VARIANT_OF
+    )
+    incoming = await storage.get_edges_for(fact_ids, direction="to", edge_type=EdgeType.VARIANT_OF)
+    partners_of = {
+        fact_id: sorted(
+            {edge.dst_id for edge in outgoing[fact_id] if edge_is_live(edge)}
+            | {edge.src_id for edge in incoming[fact_id] if edge_is_live(edge)}
+        )
+        for fact_id in fact_ids
+    }
+    every_partner = sorted({partner for ids in partners_of.values() for partner in ids})
+    standing_in = await metacontexts_for(every_partner, storage)
+    in_base = await storage.get_nodes(
+        [partner for partner in every_partner if base.metacontext_id in standing_in[partner]]
+    )
+
+    pairs = [
+        (fact, in_base[partner])
+        for fact in facts
+        for partner in partners_of[fact.id]
+        if partner != fact.id and isinstance(in_base.get(partner), Fact)
+    ][:limit]
+    return await _found_nodes(
+        [fact for fact, _ in pairs],
+        storage,
+        metacontexts,
+        varies_from=[partner for _, partner in pairs],
+    )
+
+
+async def _found_nodes(
+    nodes: Sequence[EpistemicNode],
+    storage: StorageBackend,
+    metacontexts: Sequence[str] | None,
+    *,
+    varies_from: Sequence[EpistemicNode] | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """`find_nodes`' response over what it found.
+
+    `varies_from`, where given, runs beside `nodes`: the base fact each entry
+    varies from, named with the same `metacontexts` label the entry carries.
+    """
+    bases = list(varies_from or [])
     source_types: dict[str, int] = {}
     for node in nodes:
         key = _node_type_key(node)
         source_types[key] = source_types.get(key, 0) + 1
-    labels_by_node = await _metacontext_labels_for([n.id for n in nodes], storage)
+    labels_by_node = await _metacontext_labels_for([n.id for n in [*nodes, *bases]], storage)
+
+    def entry(position: int, node: EpistemicNode) -> dict:
+        found = _node_to_dict(node) | (
+            {"metacontexts": labels_by_node[node.id]} if labels_by_node[node.id] else {}
+        )
+        if bases:
+            base = bases[position]
+            found["varies_from"] = {
+                "id": base.id,
+                "content": base.content,
+                "metacontexts": labels_by_node[base.id],
+            }
+        return found
+
     result = {
-        "nodes": [
-            _node_to_dict(n)
-            | ({"metacontexts": labels_by_node[n.id]} if labels_by_node[n.id] else {})
-            for n in nodes
-        ]
-    }
+        "nodes": [entry(position, node) for position, node in enumerate(nodes)]
+    } | await _metacontext_bases_field(metacontexts, storage)
+    named = [
+        node_id
+        for position, node in enumerate(nodes)
+        for node_id in (node.id, *([bases[position].id] if bases else []))
+    ]
     meta = ResponseMeta(
         nodes_returned=len(nodes),
         source_types=source_types,
-        retrieved=_declare(n.id for n in nodes),
+        retrieved=_declare(named),
     )
     return result, meta
 
@@ -8823,6 +8956,8 @@ async def create_metacontext(
     *,
     description: str = "",
     metacontext_id: str | None = None,
+    based_on: str | None = None,
+    diverges: dict | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Create a new metacontext, optionally under an id you choose.
 
@@ -8834,22 +8969,86 @@ async def create_metacontext(
 
     Re-creating an id that exists overwrites its prose. That is the same
     behaviour `store_metacontext` has always had, and it is why a graph's metacontexts
-    are worth naming deliberately rather than typing twice.
+    are worth naming deliberately rather than typing twice. Its base is kept
+    unless `based_on` is passed, which replaces it.
+
+    `based_on` names the metacontext this one builds on and `diverges` where
+    the two part (`metacontext_bases.py`). Both are checked before anything is
+    written, so a refused base leaves no metacontext behind.
     """
+    from epimemer.pipelines.metacontext_bases import check_base, metacontext_bases, write_base
+
     mc = Metacontext(content=content, description=description)
     if metacontext_id:
         mc = mc.model_copy(update={"id": metacontext_id})
+    divergence = await check_base(
+        storage, metacontext_id=mc.id, base_id=based_on, diverges=diverges
+    )
     await storage.store_metacontext(mc)
-    result = {"metacontext_id": mc.id, "content": mc.content}
+    if based_on is not None:
+        await write_base(storage, metacontext_id=mc.id, base_id=based_on, divergence=divergence)
+    base = (await metacontext_bases(storage, [mc.id])).get(mc.id)
+    result = {
+        "metacontext_id": mc.id,
+        "content": mc.content,
+        "based_on": base.model_dump(mode="json") if base is not None else None,
+    }
     meta = ResponseMeta(nodes_returned=1)
     return result, meta
+
+
+async def set_metacontext_base(
+    metacontext_id: str,
+    storage: StorageBackend,
+    *,
+    base_id: str | None = None,
+    diverges: dict | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Set, replace or withdraw the metacontext an existing one builds on.
+
+    Omitting `base_id` withdraws the base. One base per metacontext, so setting
+    one replaces the last, and `replaced` names it. No judge and no journal
+    row: like creating the metacontext, this is structure rather than a claim.
+    """
+    from epimemer.pipelines.metacontext_bases import set_metacontext_base as set_base
+
+    outcome = await set_base(
+        storage, metacontext_id=metacontext_id, base_id=base_id, diverges=diverges
+    )
+    result = outcome.model_dump(mode="json")
+    # Metacontext ids only: the response names no node.
+    return result, ResponseMeta(nodes_returned=1, retrieved=_declare([]))
+
+
+async def _metacontext_bases_field(
+    metacontexts: Sequence[str] | None, storage: StorageBackend
+) -> dict:
+    """`metacontext_bases` for a scoped read, or nothing.
+
+    Keyed by each named metacontext that has a base. Absent when none has one,
+    so a read on a graph that records no bases answers exactly as before.
+    """
+    from epimemer.pipelines.metacontext_bases import metacontext_bases
+
+    if not metacontexts:
+        return {}
+    bases = await metacontext_bases(storage, metacontexts)
+    if not bases:
+        return {}
+    return {
+        "metacontext_bases": {
+            metacontext_id: base.model_dump(mode="json") for metacontext_id, base in bases.items()
+        }
+    }
 
 
 async def get_metacontexts_for_node(
     node_id: str,
     storage: StorageBackend,
 ) -> tuple[dict, ResponseMeta]:
-    """Get all metacontexts associated with a node."""
+    """Get all metacontexts associated with a node, each with the base it builds on."""
+    from epimemer.pipelines.metacontext_bases import metacontext_bases
+
     node = await storage.get_node(node_id)
     if node is None:
         raise ValueError(f"Node '{node_id}' not found")
@@ -8857,11 +9056,17 @@ async def get_metacontexts_for_node(
     edges = await storage.get_edges_from(node_id)
     mc_edges = [e for e in edges if e.type == EdgeType.HAS_METACONTEXT]
 
-    metacontexts = []
+    found = []
     for edge in mc_edges:
         mc = await storage.get_metacontext(edge.dst_id)
         if mc:
-            metacontexts.append(mc.model_dump(mode="json"))
+            found.append(mc)
+    bases = await metacontext_bases(storage, [mc.id for mc in found])
+    metacontexts = [
+        mc.model_dump(mode="json")
+        | {"based_on": bases[mc.id].model_dump(mode="json") if mc.id in bases else None}
+        for mc in found
+    ]
 
     result = {"node_id": node_id, "metacontexts": metacontexts}
     meta = ResponseMeta(nodes_returned=len(metacontexts), retrieved=_declare([node_id]))

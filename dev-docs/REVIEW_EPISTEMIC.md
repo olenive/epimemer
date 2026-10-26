@@ -103,9 +103,9 @@ on read, because a deferral promises eventual review.
   is how a person states which metacontext those nodes were in.
 - **Contradiction is metacontext-relative**: within one metacontext it is
   genuine; across disjoint metacontexts both claims coexist.
-- **Association, not inheritance.** Metacontexts are linked by `based_on`
-  edges and facts never flow between them, which keeps the diamond problem out
-  of the knowledge layer.
+- **Association, not inheritance.** At most one `based_on` base per
+  metacontext, which may say where they diverge. No fact flows along it,
+  so there is no diamond problem.
 - **Search takes an optional list of metacontexts**, because *every
   metacontext* is a coherent question at search, while ingest without one
   would be an unstated assumption.
@@ -152,9 +152,9 @@ agent applies it is guidance in `epimemer_prompts/DEFAULT.md`.
 
 *"Napoleon lost at Waterloo"* in `the-real` and *"Napoleon won at Waterloo"* in
 a novel's metacontext do not contradict, and both are kept. An optional
-`variant_of` edge records *same proposition, diverges here*, so *where does the
-novel depart from reality?* is a traversal. `novel --based_on--> the-real`
-records the relationship between the metacontexts without inheriting facts.
+`variant_of` edge records *same proposition, diverges here*.
+`novel --based_on--> the-real`, diverging in 1815, inherits no facts, and
+`find_nodes(variants_in=novel)` lists where the novel departs from reality.
 
 ---
 

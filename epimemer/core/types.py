@@ -1275,6 +1275,7 @@ class NodeEdge(BaseModel):
 # — and `metadata` already holds `merged_from` beside it.
 MERGE_UNDO_KEY = "merge_undo"
 
+
 def completed_merge_cycles(node: EpistemicNode) -> int:
     """How many times this node has been merged and then brought back.
 

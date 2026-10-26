@@ -283,6 +283,18 @@ an unscoped search; `epimemer metacontexts declare` assigns such nodes a
 metacontext. Scoped retrieval **over-fetches**, so an in-metacontext node
 ranked below the raw vector top-k is still found.
 
+A world that shares another's history up to a point records it as a
+**base**, with `based_on` on `create_metacontext` or with
+`set_metacontext_base`, and `diverges` saying where the two part, as a date or
+a named moment. An alternate history whose lighthouse never fell is based on
+`the-real` and diverges at
+`{"instant_kind": "named", "label": "the 1962 storm"}`. A metacontext has one
+base. A search or `find_nodes` scoped to it carries the base in
+`metacontext_bases`, `get_metacontexts` shows it, and
+`find_nodes(variants_in=...)` lists its facts with a `variant_of` edge to a
+fact in the base. No claims flow along it: name both metacontexts to search
+the shared history, and trust the base's claims only up to the divergence.
+
 #### A scoped search scopes the whole response
 
 A topic node created from a tag stands in every metacontext it is used from,

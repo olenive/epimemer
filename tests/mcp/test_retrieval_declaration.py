@@ -388,6 +388,7 @@ def _args(tool: str, seeded: dict) -> dict:
             "timepoint_id": seeded["timepoint_id"],
         },
         "create_metacontext": {"content": "Another metacontext"},
+        "set_metacontext_base": {"metacontext_id": seeded["metacontext_id"], "base_id": "the-real"},
         "get_metacontexts": {"node_id": facts[0]},
         "graph_stats": {},
         "review": {},
@@ -513,6 +514,7 @@ ALL_TOOLS = [
     "query_timeline",
     "create_timelink",
     "create_metacontext",
+    "set_metacontext_base",
     "get_metacontexts",
     "graph_stats",
     "configure_reflection",
@@ -695,3 +697,43 @@ class TestStoreDecompositionDeclaresWhatItNames:
         )
 
         assert meta.retrieved == []
+
+
+async def test_find_nodes_declares_the_base_fact_a_variant_names(server, captured):
+    """`variants_in` hangs the base fact on each result as `varies_from`, and
+    the agent reads that id as surely as the one it hangs on."""
+    seeded = await _seed(server)
+    derived = seeded["metacontext_id"]
+    await _call(server, "set_metacontext_base", {"metacontext_id": derived, "base_id": "the-real"})
+    await _call(
+        server,
+        "store_decomposition",
+        {
+            "metacontext_id": derived,
+            "document_id": seeded["document_id"],
+            "segments": [
+                {
+                    "segment_id": seeded["segment_ids"][0],
+                    "facts": ["The deployment rollback succeeded on Tuesday"],
+                }
+            ],
+        },
+    )
+    listed = _parse(
+        await _call(
+            server,
+            "find_nodes",
+            {"sourced_from": seeded["document_id"], "metacontexts": [derived]},
+        )
+    )["result"]
+    (variant,) = [node["id"] for node in listed["nodes"] if node["node_type"] == "fact"]
+    base_fact = seeded["by_type"]["fact"][0]
+    await _call(server, "record_variant", {"a_id": variant, "b_id": base_fact})
+    captured.clear()
+
+    result = _parse(await _call(server, "find_nodes", {"variants_in": derived}))["result"]
+
+    (found,) = result["nodes"]
+    assert (found["id"], found["varies_from"]["id"]) == (variant, base_fact)
+    _, meta = captured[-1]
+    assert {variant, base_fact} <= {node.node_id for node in meta.retrieved}

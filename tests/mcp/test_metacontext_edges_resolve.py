@@ -151,6 +151,19 @@ class TestEveryPathThatNamesAMetacontextChecksIt:
 
         assert await _metacontexts_of(storage, legacy.id) == set()
 
+    async def test_a_base_that_resolves_nowhere_is_refused_on_both_writers(self, storage):
+        """`based_on` joins two metacontexts, so its far end is checked as
+        every other metacontext a caller names is."""
+        with pytest.raises(ValueError, match="does not exist in graph"):
+            await tools.create_metacontext("The novel", storage, based_on="nowhere")
+        novel, _ = await tools.create_metacontext("The novel", storage)
+        with pytest.raises(ValueError, match="does not exist in graph"):
+            await tools.set_metacontext_base(novel["metacontext_id"], storage, base_id="nowhere")
+
+        assert [
+            edge for edge in await storage.query_edges() if edge.type == EdgeType.BASED_ON
+        ] == []
+
 
 class TestTheDerivedPathsCannotIntroduceOne:
     """Splits, synthesis and merge do not take a metacontext from the caller — they

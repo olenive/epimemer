@@ -1075,7 +1075,9 @@ async def memory_search(
             `segments` keeps only passages with something extracted from them
             standing in a metacontext you named. So a scoped search drops a
             passage nothing was extracted from, where an unscoped one returns
-            every passage that matched.
+            every passage that matched. A named metacontext that builds on
+            another appears in `metacontext_bases`, with the base and where the
+            two diverge; name the base too when you want the history they share.
         terms: Exact strings that matter — identifiers, names, phrases. Matched
             whole and ORed; each matches only documents containing all of its
             words. Omit and the keyword arm falls back to the query's own words,
@@ -3172,6 +3174,7 @@ async def memory_find_nodes(
     ctx: Context,
     sourced_from: str | None = None,
     tagged_with_topic: str | None = None,
+    variants_in: str | None = None,
     node_types: list[str] | None = None,
     status: str = "active",
     metacontexts: list[str] | None = None,
@@ -3183,13 +3186,19 @@ async def memory_find_nodes(
     Unlike search (vector similarity), this returns exactly the nodes linked to
     that node: find_nodes(sourced_from="ISSUES.md") returns everything that came
     from that document; find_nodes(tagged_with_topic="billing") returns nodes
-    about billing. Every returned node carries its `metacontexts` label.
+    about billing. Every returned node carries its `metacontexts` label. Give
+    exactly one of `sourced_from`, `tagged_with_topic` and `variants_in`.
 
     Args:
         sourced_from: A document id or its `source` name: return the nodes
             extracted from it. A publisher is linked to documents, not to nodes,
             so it is not a target here.
         tagged_with_topic: A Topic id or name — return nodes tagged with that concept.
+        variants_in: A metacontext id: return where it departs from the
+            metacontext it is based on. Each result is a fact standing in it
+            with a `variant_of` edge to a fact standing in the base, and carries
+            that base fact as `varies_from`. Refused when the metacontext has no
+            base.
         node_types: Filter to "topic"/"fact"/"inference".
         status: Node status to list (default "active").
         metacontexts: Optional — the metacontexts to list from, as a list.
@@ -3201,7 +3210,8 @@ async def memory_find_nodes(
             node created from a tag stands in every metacontext it is used from
             and gathers everything tagged with it, so an unscoped listing mixes
             a novel's claims with real ones. The filter runs before `limit`, so a full
-            page is a full page of what you asked for.
+            page is a full page of what you asked for. A named metacontext that
+            builds on another appears in `metacontext_bases`.
         limit: Maximum nodes to return.
         expected_graph: The graph you believe you are working in. The active graph
             is process state and does not survive a client reconnect, so a session
@@ -3215,13 +3225,17 @@ async def memory_find_nodes(
             storage=deps["storage"],
             sourced_from=sourced_from,
             tagged_with_topic=tagged_with_topic,
+            variants_in=variants_in,
             node_types=node_types,
             status=status,
             metacontexts=metacontexts,
             limit=limit,
         ),
         ctx,
-        f"sourced_from={sourced_from} tagged_with_topic={tagged_with_topic}",
+        (
+            f"sourced_from={sourced_from} tagged_with_topic={tagged_with_topic} "
+            f"variants_in={variants_in}"
+        ),
         lambda r, m: f"nodes={m.nodes_returned}",
         expected_graph=expected_graph,
     )
@@ -4223,6 +4237,8 @@ async def memory_create_metacontext(
     ctx: Context,
     description: str = "",
     metacontext_id: str | None = None,
+    based_on: str | None = None,
+    diverges: dict | None = None,
     expected_graph: str | None = None,
 ) -> str:
     """Create a new metacontext for epistemic framing.
@@ -4240,7 +4256,18 @@ async def memory_create_metacontext(
             do not end up with the same metacontext under two strings. It is an
             ordinary metacontext in every other respect, and a graph has to create it
             once before anything can be ingested into it. Re-creating an
-            existing id replaces its prose.
+            existing id replaces its prose and keeps its base unless `based_on`
+            is passed.
+        based_on: The id of a metacontext this one builds on: an alternate
+            history based on `the-real`, a sequel's world based on the
+            original's. One base per metacontext. Nothing flows along it: a
+            search scoped to this metacontext returns only what stands in it,
+            and reports the base so you can name both when you want the shared
+            history.
+        diverges: Where this metacontext parts from its base, as a date
+            (`{"instant_kind": "precise", "at": "1990-01-01"}`) or a named
+            moment (`{"instant_kind": "named", "label": "the late 1980s"}`).
+            The base's claims hold here only up to it. Needs `based_on`.
         expected_graph: The graph you believe you are working in. The active graph
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
@@ -4254,10 +4281,63 @@ async def memory_create_metacontext(
             storage=deps["storage"],
             description=description,
             metacontext_id=metacontext_id,
+            based_on=based_on,
+            diverges=diverges,
         ),
         ctx,
-        f"content={content[:50]}",
+        f"content={content[:50]} based_on={based_on}",
         lambda r, m: f"id={r['metacontext_id']}",
+        expected_graph=expected_graph,
+    )
+
+
+@mcp.tool(name="set_metacontext_base")
+async def memory_set_metacontext_base(
+    metacontext_id: str,
+    ctx: Context,
+    base_id: str | None = None,
+    diverges: dict | None = None,
+    expected_graph: str | None = None,
+) -> str:
+    """Set, replace or withdraw the metacontext an existing one builds on.
+
+    A metacontext can share its history with another up to a point: a fictional
+    world that follows real history until it diverges. One base per
+    metacontext, so setting one replaces the last. Nothing flows along it, and
+    no judge is needed: like creating the metacontext, this is structure rather
+    than a claim. The response's `replaced` names the base this replaced.
+
+    Args:
+        metacontext_id: The metacontext whose base you are setting.
+        base_id: The metacontext it builds on. Leave it out to withdraw the
+            base. A metacontext cannot build on itself, and a base that already
+            builds on this metacontext, directly or through others, is refused
+            as a cycle.
+        diverges: Where the two part, as a date
+            (`{"instant_kind": "precise", "at": "1990-01-01"}`) or a named
+            moment (`{"instant_kind": "named", "label": "the late 1980s"}`).
+            The base's claims hold here only up to it. Needs `base_id`.
+        expected_graph: The graph you believe you are working in. The active graph
+            is process state and does not survive a client reconnect, so a session
+            that switched earlier can come back somewhere else — naming it turns a
+            wrong-graph call from silent into refused.
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.set_metacontext_base",
+        lambda: tools.set_metacontext_base(
+            metacontext_id=metacontext_id,
+            storage=deps["storage"],
+            base_id=base_id,
+            diverges=diverges,
+        ),
+        ctx,
+        f"metacontext_id={metacontext_id} base_id={base_id}",
+        lambda r, m: (
+            f"metacontext={r['metacontext_id']} "
+            f"based_on={r['based_on']['metacontext_id'] if r['based_on'] else None} "
+            f"replaced={r['replaced']}"
+        ),
         expected_graph=expected_graph,
     )
 
@@ -4269,6 +4349,9 @@ async def memory_get_metacontexts(
     expected_graph: str | None = None,
 ) -> str:
     """Get all metacontexts associated with a node.
+
+    Each carries `based_on`: the metacontext it builds on and where the two
+    diverge, or null.
 
     Args:
         node_id: The node to get metacontexts for.

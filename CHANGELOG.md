@@ -4,6 +4,30 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- A metacontext can record the one metacontext it builds on, and where the two
+  diverge. `create_metacontext` takes `based_on` and `diverges`, a date or a
+  named moment, and the new `set_metacontext_base` sets, replaces or withdraws
+  the base later; a base that does not exist, a metacontext based on itself
+  and a cycle are refused. The base is association only: no claims flow along
+  it, and a scoped search returns nothing from the base unless it is named.
+- `create_metacontext` and `get_metacontexts` give each metacontext's
+  `based_on`, null where it has none. `search` and `find_nodes` scoped to a
+  metacontext with a base carry `metacontext_bases`, and leave the key out
+  otherwise.
+- `find_nodes(variants_in=...)` lists where a metacontext departs from its
+  base: its facts with a `variant_of` edge to a fact in the base, each carrying
+  that fact as `varies_from`.
+
+### Changed
+
+- `find_nodes` refuses a call naming more than one of `sourced_from`,
+  `tagged_with_topic` and `variants_in`. A call naming the first two used the
+  topic and ignored the document.
+
 ## [0.4.0] — 2026-10-23
 
 - A new dated point no longer clears every held temporal contradiction on its
