@@ -1155,7 +1155,8 @@ async def memory_link(
     topic under another. **Any other pairing is refused**, and the refusal names
     the pairs that type does join plus any type that does join the two nodes you
     named. Where the relationship is one the engine does not define, `relation`
-    is what to reach for.
+    is what to reach for. `based_on` joins two metacontexts and is written by
+    `set_metacontext_base` or `create_metacontext`, so `link` refuses it.
 
     Args:
         src_id: Source node ID.

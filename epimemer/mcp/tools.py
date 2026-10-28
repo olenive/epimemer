@@ -3143,7 +3143,8 @@ async def link(
     another — so the wrong kinds are not a debatable judgment but a claim the
     type cannot carry, and every reader that trusts the shape would inherit it.
     A relationship the engine does not define is what `relation` is for: coin
-    the word and the edge says what you meant.
+    the word and the edge says what you meant. `based_on` joins metacontexts,
+    which are not nodes, and is refused here with the name of its own writer.
     """
     description = ""
     if relation is not None:
@@ -3175,6 +3176,15 @@ async def link(
         except ValueError:
             valid = [e.value for e in EdgeType]
             raise ValueError(f"Invalid edge_type '{edge_type}'. Valid types: {valid}") from None
+        if et is EdgeType.BASED_ON:
+            # Metacontexts are not nodes, so the lookup below would report the
+            # source as missing and say nothing about the writer that does
+            # this job, which also keeps the base single and acyclic.
+            raise ValueError(
+                "based_on joins two metacontexts and is written by "
+                "set_metacontext_base, or by based_on on create_metacontext, "
+                "not by link."
+            )
         resolved_kind = "relationship"
         label = None
     else:

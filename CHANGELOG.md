@@ -4,6 +4,14 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- `link` refuses `edge_type="based_on"` with a message naming
+  `set_metacontext_base` and `based_on` on `create_metacontext`. Before, the
+  call failed at the node lookup and reported the metacontext as not found.
+
 ## [0.4.1] — 2026-10-26
 
 ### Added

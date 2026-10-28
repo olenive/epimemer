@@ -24,6 +24,7 @@ import inspect
 import pytest
 
 from epimemer.core.types import (
+    BASE_METACONTEXT_ID,
     EDGE_SHAPES,
     EdgeType,
     EndpointKind,
@@ -153,6 +154,23 @@ class TestLinkRefusesAMisshapenEdge:
 
         with pytest.raises(ValueError, match="relation"):
             await link(topic.id, fact.id, storage, edge_type="supports")
+
+
+class TestLinkPointsBasedOnAtItsOwnWriter:
+    """`based_on` is in the enum but joins metacontexts, which are not nodes.
+    Left to the node lookup, the refusal would call the metacontext missing
+    and name no alternative."""
+
+    async def test_the_refusal_names_set_metacontext_base(self, storage):
+        await tools.create_metacontext("Night City", storage, metacontext_id="night-city")
+
+        with pytest.raises(ValueError) as refused:
+            await link("night-city", BASE_METACONTEXT_ID, storage, edge_type="based_on")
+
+        assert "set_metacontext_base" in str(refused.value)
+        assert "create_metacontext" in str(refused.value)
+        assert "not found" not in str(refused.value)
+        assert await storage.get_edges_from("night-city", edge_type=EdgeType.BASED_ON) == []
 
 
 class TestLinkStillWritesAWellShapedEdge:
