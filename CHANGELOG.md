@@ -4,6 +4,14 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- The compose file, the README's `docker run` line and the local start script
+  bind SurrealDB's port to 127.0.0.1, so the database answers only to the
+  machine that runs it.
+
 ## [0.4.2] — 2026-11-02
 
 ### Changed

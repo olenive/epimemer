@@ -97,7 +97,7 @@ with no error and no warning. Every command here passes an explicit
 ```bash
 # Docker: on disk, in a named volume that outlives the container.
 # -u 0:0 because the image's non-root user cannot write the volume mount.
-docker run -d --name surrealdb -p 8000:8000 \
+docker run -d --name surrealdb -p 127.0.0.1:8000:8000 \
   --restart unless-stopped -u 0:0 \
   -v surreal-data:/data \
   surrealdb/surrealdb:latest \

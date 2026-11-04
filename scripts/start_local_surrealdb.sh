@@ -54,7 +54,7 @@ else
         --name "$CONTAINER_NAME" \
         --restart unless-stopped \
         -u 0:0 \
-        -p "${SURREAL_PORT}:8000" \
+        -p "127.0.0.1:${SURREAL_PORT}:8000" \
         -v "${SURREAL_VOLUME}:/data" \
         "$SURREAL_IMAGE" \
         start --user root --pass root "$SURREAL_STORE"
