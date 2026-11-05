@@ -1,6 +1,6 @@
 [project]
 name = "epimemer"
-version = "0.4.2"
+version = "0.4.3"
 description = "Epistemic memory for AI agents over MCP: a typed graph of claims with provenance, metacontexts, validity in time, and a review loop"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -20,7 +20,7 @@ dependencies = [
     "petritype>=0.3.1",
     "numpy>=2.0",
     "pydantic>=2.12.5",
-    "surrealdb>=1.0.8",
+    "surrealdb>=2.0.0,<3",
     # Floor is the release that fixed the OAuth-proxy and OpenAPI-provider
     # advisories, not the version we test against, which the lock file pins.
     "fastmcp>=3.2.0",

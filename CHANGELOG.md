@@ -4,7 +4,15 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.4.3] — 2026-11-05
+
+### Fixed
+
+- The `surrealdb` dependency is capped below 3.0. A fresh install of 0.4.2
+  picked up SDK 3.0.0, whose `query()` returns one result per statement
+  instead of the first statement's result, and `epimemer serve` failed on
+  the schema version check as soon as it connected. The 2.x line still
+  works unchanged, and support for the 3.x SDK follows in a later release.
 
 ### Changed
 
