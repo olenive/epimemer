@@ -4,6 +4,39 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.4] — 2026-11-05
+
+### Added
+
+- An `embedded` extra, `epimemer[embedded]`, which brings SurrealDB's
+  in-process engine for `mem://`, `file://` and `surrealkv://` URLs. The 2.x
+  SDK bundled it; the 3.x SDK ships it separately. An embedded URL without it
+  is refused at startup with the extra named.
+
+### Changed
+
+- The 3.x `surrealdb` SDK is supported, and it is what a fresh install now
+  resolves to. The 2.x line keeps working and is supported through the 0.4
+  releases.
+- Under the 3.x SDK the embedded engine is SurrealDB 4.0, which cannot open
+  `file://` or `surrealkv://` data written under the 2.x SDK. To keep such a
+  store, export it with a 3.x `surreal` binary and import it into a new one.
+  `mem://` and served databases are unaffected.
+- Lexical search on SurrealDB 4.0, the embedded engine under the 3.x SDK,
+  gives a term in half the corpus or more no weight, as the 3.0.5 server
+  does. SurrealDB 4.0 itself scores every term above zero.
+
+### Fixed
+
+- After a lost SurrealDB connection, a call made while the server is still
+  down no longer breaks every later call: that call fails, and the next one
+  connects again once the server is back. Before, the half-opened connection
+  was kept, signed in as nobody, until Epimemer was restarted.
+- `resegment` on a served SurrealDB reports how many passages it replaced.
+  It reported none, having read the result of the statement before the delete.
+- A SurrealDB graph nobody has written reads as empty in the visualization
+  hub. A served SurrealDB refused the read, because the graph had no tables.
+
 ## [0.4.3] — 2026-11-05
 
 ### Fixed

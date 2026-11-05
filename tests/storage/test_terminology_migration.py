@@ -33,7 +33,7 @@ UNTOUCHED_ROW = "dec-retention"
 
 async def _old_decision(store: SurrealDBStorage, uid: str, row: dict) -> None:
     """One journal row in the shape a 0.1.x graph holds."""
-    await store.db.query(
+    await store._query(
         "CREATE decision CONTENT $data",
         {
             "data": {
@@ -73,7 +73,7 @@ async def _seed_frame_spelled_graph(store: SurrealDBStorage) -> str:
         )
     )
 
-    await store.db.query(
+    await store._query(
         "UPSERT graph_state:reflect SET warning_overrides = $overrides",
         {
             "overrides": {
@@ -85,7 +85,7 @@ async def _seed_frame_spelled_graph(store: SurrealDBStorage) -> str:
 
     moved = Fact(content="the pass was closed", source_id="seg-1")
     await store.store_node(moved)
-    await store.db.query(
+    await store._query(
         "UPDATE fact SET metadata.reframings = $trail WHERE uid = $uid",
         {
             "trail": [{"because": "it is fiction", "withdrew": "the-real", "assigned": "novel"}],
@@ -95,23 +95,23 @@ async def _seed_frame_spelled_graph(store: SurrealDBStorage) -> str:
 
     # The marker `_setup_schema` has just stamped, removed: this graph is
     # standing in for one written before the version existed.
-    await store.db.query("DELETE schema_version:current")
+    await store._query("DELETE schema_version:current")
     return moved.id
 
 
 async def _schema_version(store: SurrealDBStorage) -> int | None:
-    stored = await store.db.query("SELECT VALUE version FROM schema_version:current")
+    stored = await store._query("SELECT VALUE version FROM schema_version:current")
     return int(stored[0]) if stored else None
 
 
 async def _row(store: SurrealDBStorage, uid: str) -> dict:
-    rows = await store.db.query("SELECT * FROM decision WHERE uid = $uid", {"uid": uid})
+    rows = await store._query("SELECT * FROM decision WHERE uid = $uid", {"uid": uid})
     assert rows, uid
     return rows[0]
 
 
 async def _trail(store: SurrealDBStorage, node_id: str) -> dict:
-    rows = await store.db.query("SELECT metadata FROM fact WHERE uid = $uid", {"uid": node_id})
+    rows = await store._query("SELECT metadata FROM fact WHERE uid = $uid", {"uid": node_id})
     return rows[0]["metadata"]
 
 
@@ -211,7 +211,7 @@ async def test_a_graph_already_at_version_3_still_gets_this_step(embedded_url):
     store = SurrealDBStorage(url=embedded_url)
     await store.connect()
     node_id = await _seed_frame_spelled_graph(store)
-    await store.db.query("UPSERT schema_version:current SET version = 3")
+    await store._query("UPSERT schema_version:current SET version = 3")
     await store.close()
 
     reopened = SurrealDBStorage(url=embedded_url)

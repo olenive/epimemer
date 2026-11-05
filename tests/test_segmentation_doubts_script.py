@@ -91,7 +91,7 @@ def recording(store: SurrealDBStorage, statements: list[str]):
 
     async def sql(statement: str):
         statements.append(statement)
-        return await store.db.query(statement)
+        return await store._query(statement)
 
     return sql
 

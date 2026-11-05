@@ -4489,10 +4489,11 @@ class TestLexicalSearch:
 
         A ticket list is the corpus where BM25 has least to say: `jira` is in
         every document, so the common half of the identifier is at or below the
-        IDF floor, and what the two engines do there differs — one clamps to
-        zero, the other returns the negative value and drags the whole term
-        below the truncation with it. The declared term then finds nothing on
-        one engine and the right fact on the other, from the same graph.
+        IDF floor, and what the engines do there differs: the server clamps to
+        zero, the 2.x SDK's embedded engine returns the negative value and drags
+        the whole term below the truncation with it. The declared term then
+        finds nothing on one engine and the right fact on the other, from the
+        same graph.
 
         Containment does not care. The document holds the literal string the
         caller declared; that is the evidence, and the score is not consulted.

@@ -59,6 +59,7 @@ from epimemer.core.types import (
     NodeStatus,
     NodeType,
     RawDocument,
+    Segment,
     Timeline,
     Topic,
 )
@@ -615,10 +616,10 @@ async def test_validity_intervals_round_trip_over_a_real_connection(surreal):
 async def test_fts_index_is_defined_for_every_searchable_table(surreal):
     """Schema guard, and the one that says which SurrealDB we are talking to.
 
-    The standalone server and the engine embedded in the Python SDK are
-    different cores that reject each other's `DEFINE INDEX` syntax outright
-    (`FULLTEXT` vs `SEARCH`), so `_setup_schema` negotiates. The unit suite only
-    ever exercises the embedded half; without this, shipping the wrong dialect
+    The standalone server and the engine the 2.x SDK embeds are different
+    cores that reject each other's `DEFINE INDEX` syntax outright (`FULLTEXT`
+    vs `SEARCH`), so `_setup_schema` negotiates. The unit suite only ever
+    exercises an embedded engine; without this, shipping the wrong dialect
     would leave every lexical search on a real deployment returning nothing,
     silently, while the whole suite stayed green.
     """
@@ -741,6 +742,65 @@ async def test_containment_keeps_the_index_over_a_real_connection(surreal):
     )
 
     assert [node_id for node_id, _ in hits] == [facts[0].id, facts[1].id]
+
+
+async def test_a_term_in_half_the_table_contributes_nothing_over_a_real_connection(surreal):
+    """R1 on the engine whose IDF clamp it was written against.
+
+    A served SurrealDB that scored a common term above zero would let it into
+    fusion; the embedded engines cannot show which kind of server this is.
+    """
+    store = await surreal()
+    for text in (
+        "orbit correction burn scheduled",
+        "orbit decay measured again",
+        "orbit insertion completed",
+        "unrelated ground station note",
+    ):
+        await store.store_node(Fact(content=text, source_id="s1"))
+
+    assert await store.text_search(["orbit"], corpus="nodes", node_type=NodeType.FACT) == []
+    assert await store.text_search(["decay"], corpus="nodes", node_type=NodeType.FACT)
+
+
+# --- Transactions and reads that depend on the server's answer shape ---
+
+
+async def test_resegment_reports_the_passages_it_replaced_over_a_real_connection(surreal):
+    """A served SurrealDB reports BEGIN and COMMIT as statements of their own.
+
+    `resegment_tx` reads the delete's result by its place in the batch, so
+    counting those two in would read the statement before it, and every re-cut
+    would report that it replaced nothing.
+    """
+    store = await surreal()
+    content = "First passage about the harbour. Second passage about the toll."
+    doc = RawDocument(content=content)
+    await store.store_document(doc)
+    await store.store_segment(
+        Segment(source_id=doc.id, text=content, span_start=0, span_end=len(content))
+    )
+    split = content.index("Second")
+    halves = [
+        Segment(source_id=doc.id, text=content[: split - 1], span_start=0, span_end=split - 1),
+        Segment(source_id=doc.id, text=content[split:], span_start=split, span_end=len(content)),
+    ]
+
+    replaced = await store.resegment_tx(doc.id, halves, segmentation={"method": "manual"})
+
+    assert replaced == 1
+    assert len(await store.get_segments_for_document(doc.id)) == 2
+
+
+async def test_a_graph_nobody_wrote_reads_as_empty_over_a_real_connection(surreal):
+    """A served SurrealDB refuses a read on a table that was never defined."""
+    store = await surreal()
+    unwritten = f"it_{uuid.uuid4().hex[:12]}"
+
+    assert list(await store.viz_list_nodes(unwritten)) == []
+    assert list(await store.viz_list_edges(unwritten)) == []
+    assert list(await store.viz_list_embeddings(unwritten)) == []
+    assert list(await store.viz_list_embeddings(unwritten, item_ids=["n1"])) == []
 
 
 # --- The active graph, over a real connection ---

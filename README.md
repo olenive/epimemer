@@ -59,6 +59,7 @@ uv tool install "epimemer[sentence-transformers]"
 |-------|------|------------------|
 | `sentence-transformers` | Local embeddings via [sentence-transformers](https://www.sbert.net) (pulls in PyTorch) | Always, for real use: it is the only embedding provider apart from `mock`, which exists for tests. Without it the server refuses to start and names the extra to install |
 | `postgres` | The Postgres driver, `psycopg` with its compiled libpq | With `EPIMEMER_STORAGE_BACKEND=postgres`. Without it the server refuses to start and names the extra |
+| `embedded` | SurrealDB's in-process engine, `surrealdb[embedded]` | With a `mem://`, `file://` or `surrealkv://` SurrealDB URL. Without it the server refuses to start and names the extra |
 | `gcs` | `gcsfs` | Backups to a `gs://` URL |
 | `s3` | `s3fs` | Backups to an `s3://` URL |
 
@@ -290,11 +291,12 @@ can say which sentence was the name.
 
 All of these work against a served SurrealDB, a SQLite graph or Postgres, each
 of which a second process reaches as the server does. An embedded store (the
-in-memory backend, or a `mem://`, `file://` or `surrealkv://` SurrealDB URL)
-lives inside the server process, so a CLI writing to it would write to a
-separate copy the running server never reads. For the two settings, use
-`EPIMEMER_APPROVED_AGENTS` and `EPIMEMER_REQUIRE_JUDGE` instead; the command
-refuses and names the right variable rather than appearing to succeed.
+in-memory backend, or a `mem://`, `file://` or `surrealkv://` SurrealDB URL,
+which need `epimemer[embedded]`) lives inside the server process, so a CLI
+writing to it would write to a separate copy the running server never reads.
+For the two settings, use `EPIMEMER_APPROVED_AGENTS` and
+`EPIMEMER_REQUIRE_JUDGE` instead; the command refuses and names the right
+variable rather than appearing to succeed.
 
 ### Backup and restore
 

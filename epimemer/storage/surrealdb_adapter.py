@@ -10,15 +10,18 @@ with SurrealDB's built-in 'id' field (which uses RecordID type).
 
 import asyncio
 import contextlib
+import functools
 import logging
+import math
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
+from importlib.metadata import version
 from typing import Any, Literal
 from urllib.parse import urlsplit, urlunsplit
 
 from surrealdb import AsyncSurreal
-from surrealdb.errors import NotFoundError
+from surrealdb.errors import NotFoundError, ServerError, UnsupportedEngineError
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
 from epimemer.core.seat import JudgeConfirmation
@@ -78,6 +81,12 @@ from epimemer.storage.timestamps import iso_micros
 # prevents is silent data loss.)
 _EMBEDDED_SCHEMES = ("mem://", "memory", "file://", "surrealkv://")
 
+# The installed SDK's major version, read once. Both lines are supported, and
+# they differ in two places this adapter touches: the 3.x `query()` returns a
+# builder where 2.x returned the first statement's result, and the 3.x
+# connection takes options that 2.x has no parameters for.
+SDK_MAJOR = int(version("surrealdb").split(".")[0])
+
 logger = logging.getLogger(__name__)
 
 
@@ -90,6 +99,67 @@ def is_embedded_url(url: str) -> bool:
     (`REVIEW_MODE.md` §2.3).
     """
     return url.startswith(_EMBEDDED_SCHEMES)
+
+
+def _connection_options() -> dict[str, Any]:
+    """What the 3.x connection is told so that it behaves as the 2.x one did.
+
+    The 2.x SDK takes none of these and needs none: its behaviour is the target.
+    """
+    if SDK_MAJOR < 3:
+        return {}
+    return {
+        # `_reconnect` rebuilds a lost connection itself: it signs in again,
+        # selects the graph and checks its schema. The SDK's own reconnect would
+        # replay a sign-in token that may have expired by then.
+        "reconnect": False,
+        # The 2.x SDK waits for a websocket reply for as long as it takes. The
+        # 3.x default of 30 seconds would fail a reflect or a backup over a
+        # large graph part way through.
+        "timeout": None,
+        # Every result here is read whole, and a buffered reply is the one shape
+        # every server version gives.
+        "streaming": False,
+    }
+
+
+def _new_connection(url: str) -> AsyncSurreal:
+    """An unopened SDK connection to `url`.
+
+    The 3.x SDK keeps the in-process engine in a separate package, so an
+    embedded URL without it is refused here, naming the Epimemer extra that
+    brings it rather than the SDK's own package.
+    """
+    try:
+        return AsyncSurreal(url, **_connection_options())
+    except UnsupportedEngineError as missing:
+        if not is_embedded_url(url):
+            raise
+        raise RuntimeError(
+            f"The SurrealDB URL {url!r} needs the embedded engine, which is not "
+            "installed. It is an optional extra: install 'epimemer[embedded]', or "
+            "point EPIMEMER_SURREALDB_URL at a served SurrealDB."
+        ) from missing
+
+
+async def _first_result(conn: AsyncSurreal, query: str, params: dict | None = None) -> Any:
+    """The first statement's result, which is what every caller here reads.
+
+    The 2.x `query()` returns it directly. The 3.x `query()` returns a builder
+    whose `first()` gives the same value, and which raises when any statement
+    fails, where 2.x raised only for the first.
+    """
+    if SDK_MAJOR < 3:
+        return await conn.query(query, params)
+    return await conn.query(query, params).first()
+
+
+async def _absent_as_empty(read: Awaitable[list]) -> list:
+    """`read`'s rows, or none when what it reads was never created."""
+    try:
+        return await read or []
+    except NotFoundError:
+        return []
 
 
 def _shown_url(url: str) -> str:
@@ -336,17 +406,16 @@ _ANALYZER_DDL = (
     "TOKENIZERS class FILTERS lowercase, ascii, snowball(english);"
 )
 
-# The two engines this adapter connects to are two different SurrealDBs, and
-# they do not agree on how a full-text index is declared. The standalone 3.0.5
-# server renamed the keyword and dropped the parameter list; the engine embedded
-# in the Python SDK — which is what `mem://` is, and therefore what most of the
-# test suite runs against — is an older core that only parses the 2.x form.
-# Each *rejects the other's syntax outright*, so there is no spelling that
-# satisfies both and no version to write against.
+# The engines this adapter connects to do not agree on how a full-text index
+# is declared. The standalone 3.0.5 server renamed the keyword and dropped the
+# parameter list, and the 4.0 engine the 3.x SDK embeds parses the same form;
+# the engine the 2.x SDK embeds, which is what `mem://` is under that SDK, is
+# an older core that only parses the 2.x form. Each *rejects the other's
+# syntax outright*, so there is no spelling that satisfies every engine and no
+# version to write against.
 #
-# Everything else about full-text search is identical on the two: the analyzer
-# DDL, the match operator, `search::score`, and the positive scores themselves
-# (measured to seven decimal places). Only this one statement forks.
+# The analyzer DDL and the match operator are the same everywhere. The IDF is
+# not, which `text_search` absorbs (`dev-docs/LEXICAL_SEARCH.md` §11).
 _FTS_INDEX_MODERN = (
     "DEFINE INDEX IF NOT EXISTS idx_{table}_fts ON {table} "
     "FIELDS {field} FULLTEXT ANALYZER epimemer_text BM25;"
@@ -395,6 +464,43 @@ _TEXT_SEARCH_OVERFETCH = 10
 # identifier or a name, which is the case where the candidate set is small
 # enough that the reach never binds at all.
 _CONTAINMENT_OVERFETCH = 100
+
+
+# The first SurrealDB measured to compute BM25's IDF as ln(1 + x), where x is
+# (N - n + 0.5) / (n + 0.5) for a term in n of a table's N rows. That is
+# positive for every term however common, where the 3.0.5 server clamps the
+# classic ln(x) at zero and the 2.x SDK's embedded engine leaves it negative.
+# 4.0.0 is the engine the 3.x SDK embeds; releases between 3.0.5 and 4.0.0 are
+# unmeasured and treated as 3.0.5.
+_POSITIVE_IDF_SINCE = (4, 0, 0)
+
+
+async def _scores_every_term_positive(conn: AsyncSurreal) -> bool:
+    """Whether the engine behind `conn` computes BM25's IDF as ln(1 + x).
+
+    Asked by version, since no query can tell without data to score. A server
+    whose capabilities deny the version call is taken to be one that clamps,
+    which is what every server measured before 4.0 does.
+    """
+    try:
+        reported = await conn.version()
+    except ServerError:
+        return False
+    found = re.search(r"(\d+)\.(\d+)\.(\d+)", str(reported))
+    if found is None:
+        return False
+    return tuple(int(part) for part in found.groups()) >= _POSITIVE_IDF_SINCE
+
+
+def _clamped_idf_ratio(rows: int, matched: int) -> float:
+    """The factor that turns ln(1 + x) into the classic ln(x) clamped at zero.
+
+    `x` is (N - n + 0.5) / (n + 0.5) for a term matched by `matched` of `rows`.
+    It is 1 or less exactly when the term is in half the rows or more, and
+    then the term contributes nothing, as on the server.
+    """
+    x = (rows - matched + 0.5) / (matched + 0.5)
+    return math.log(x) / math.log1p(x) if x > 1 else 0.0
 
 
 async def _define_fts_indexes(query) -> None:
@@ -746,10 +852,11 @@ async def _stored_schema_version(query: Callable[..., Awaitable[Any]]) -> int:
     """The version marker of the graph the connection is pointed at, 0 if it has none.
 
     A read and nothing else: on a database that has never been opened the
-    record and its table are both absent, and asking creates neither. The two
-    engines answer that absence differently: the embedded one returns nothing,
-    a served SurrealDB raises that the table does not exist. Both mean a graph
-    nobody has written, which is version 0.
+    record and its table are both absent, and asking creates neither. The
+    engines answer that absence differently: the 2.x SDK's embedded one returns
+    nothing, a served SurrealDB and the 4.0 engine the 3.x SDK embeds raise
+    that the table does not exist. Both mean a graph nobody has written, which
+    is version 0.
     """
     try:
         stored = await query(_SCHEMA_VERSION_GET)
@@ -1343,13 +1450,13 @@ def _episode_rows(episodes: Sequence[LifecycleEpisode]) -> list[dict]:
     """A lifecycle history as SurrealDB stores it (ISO strings, no null keys).
 
     The whole list is written each time rather than appended to in the database.
-    Both engines this backend runs against would take an `array::append`, but
-    only one of them has the object functions that closing an episode needs, and
-    a history that is assembled two different ways is a history that can differ
-    two different ways. Planning it here also matches how `merge_nodes_tx`
-    already plans its edge migration, for the same reason: the adapter is
-    single-connection and documented as unsafe for concurrent callers, so
-    nothing interleaves between the read and the write.
+    Every engine this backend runs against would take an `array::append`, but
+    the one the 2.x SDK embeds lacks the object functions that closing an
+    episode needs, and a history that is assembled two different ways is a
+    history that can differ two different ways. Planning it here also matches
+    how `merge_nodes_tx` already plans its edge migration, for the same reason:
+    the adapter is single-connection and documented as unsafe for concurrent
+    callers, so nothing interleaves between the read and the write.
     """
     return [drop_none_values(ep.model_dump(mode="json")) for ep in episodes]
 
@@ -1401,14 +1508,16 @@ class SurrealDBStorage:
         # so a socket lost during it would otherwise re-enter `_reconnect` from
         # the task already holding the lock and wait on itself for ever.
         self._reconnecting: asyncio.Task | None = None
+        # A connection known to have lost its socket, so the next call rebuilds
+        # before sending anything on it. Compared by identity with `_db`.
+        self._dropped: AsyncSurreal | None = None
+        # Read from the engine on every connect: see `_POSITIVE_IDF_SINCE`.
+        self._positive_idf = False
         self._guard = make_graph_guard()
 
     async def connect(self) -> None:
-        self._db = AsyncSurreal(self._url)
-        await self._db.connect(self._url)
-        if not is_embedded_url(self._url):
-            await self._db.signin({"username": self._user, "password": self._password})
-        await self._db.use(self._namespace, self._selected)
+        self._db = await self._open()
+        self._positive_idf = await _scores_every_term_positive(self._db)
         try:
             await self._setup_schema()
         except SchemaTooNew:
@@ -1418,14 +1527,52 @@ class SurrealDBStorage:
             await self.close()
             raise
 
+    async def _open(self) -> AsyncSurreal:
+        """A connection signed in and pointed at the selected graph.
+
+        Built aside and handed over only once it is ready. A failed attempt is
+        closed, never kept: both SDKs open a socket on the next request without
+        signing it in or selecting a database, so a half-built connection would
+        run every later call as nobody, against nothing.
+        """
+        db = _new_connection(self._url)
+        embedded = is_embedded_url(self._url)
+        try:
+            if embedded:
+                # Not given its URL again: the 3.x engine would open a second
+                # datastore on the same files, and the first one's lock refuses it.
+                await db.connect()
+            else:
+                await db.connect(self._url)
+                await db.signin({"username": self._user, "password": self._password})
+            await db.use(self._namespace, self._selected)
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await db.close()
+            raise
+        # A websocket is the one transport with a connection to lose: each HTTP
+        # request stands alone, and an embedded engine has no socket.
+        if SDK_MAJOR >= 3 and self._url.startswith(("ws://", "wss://")):
+
+            def dropped() -> None:
+                self._dropped = db
+
+            db.subscribe("disconnected", dropped)
+        return db
+
     # --- Surviving a dropped connection ---
     #
-    # The SDK does not reconnect, and worse, does not admit to being
+    # Neither SDK recovers a dropped connection in a way this adapter can use,
+    # and they fail differently. The 2.x SDK does not admit to being
     # disconnected: `AsyncWsSurrealConnection.connect()` returns early whenever
     # `self.socket` is truthy, and nothing clears `socket` when the connection
-    # drops — the receive task swallows the `ConnectionClosed` and exits. So a
-    # server restart, a network blip or a laptop sleep leaves an object that
-    # looks connected while every send raises, for the life of the process.
+    # drops, so the object looks connected while every send raises. The 3.x
+    # SDK, with its own reconnect off, reports the drop as a `disconnected`
+    # event and then opens a bare socket on the next request. Left alone, either
+    # one breaks every call for the life of the process after a server restart,
+    # a network blip or a laptop sleep. So the adapter rebuilds the connection
+    # itself: after a send that raised on 2.x, and before the next call once
+    # the connection has reported the drop on 3.x.
     #
     # Retrying the operation is safe *here*, which is a property of this schema
     # rather than a general truth: every write is an `UPSERT ... WHERE uid` or an
@@ -1433,44 +1580,56 @@ class SurrealDBStorage:
     # and multi-statement writes are transactional, so a connection lost in
     # flight aborts them server-side. A retry is a no-op or an idempotent repeat.
     #
-    # Not covered: the operation already in flight when the socket died. The SDK
-    # cancels its pending futures, so that caller sees `CancelledError`, and
-    # telling that apart from a real cancellation is not worth the ambiguity.
-    # That one call fails; the next one reconnects.
+    # Not covered: the operation already in flight when the socket died. The 2.x
+    # SDK cancels its pending futures, so that caller sees `CancelledError`,
+    # which cannot be told apart from a real cancellation. The 3.x SDK fails
+    # them with `ConnectionUnavailableError`, and the request may already have
+    # run. That one call fails; the next one reconnects.
 
     async def _reconnect(self, stale: AsyncSurreal) -> None:
         """Rebuild a connection whose socket has gone.
 
         Serialized, because everything in flight fails together and each caller
         lands here: whoever takes the lock first rebuilds, and the rest find
-        `_db` already replaced and go straight to their retry.
+        `_db` already replaced and go straight to their retry. The stale
+        connection is marked as dropped first, so a call that starts during the
+        rebuild waits for it rather than sending on a closed connection. A
+        rebuild that fails, because the server is not back yet, leaves the
+        connection marked, so the next call tries again.
         """
         async with self._reconnect_lock:
             if self._db is not stale:
                 return
-            self._db = None
+            self._dropped = stale
             with contextlib.suppress(Exception):
                 await stale.close()
             self._reconnecting = asyncio.current_task()
             try:
                 await self.connect()
+            except BaseException:
+                self._dropped = self._db
+                raise
             finally:
                 self._reconnecting = None
 
     async def _call(self, operation: Callable[[AsyncSurreal], Awaitable[Any]]) -> Any:
         conn = self.db
+        # A failure inside the rebuild is a failed connection, and the caller
+        # of `_reconnect` should hear about it rather than deadlock.
+        rebuilding = self._reconnecting is asyncio.current_task()
+        if conn is self._dropped and not rebuilding:
+            await self._reconnect(conn)
+            conn = self.db
         try:
             return await operation(conn)
         except ConnectionClosed, WebSocketException:
-            # A failure inside the rebuild is a failed connection, and the
-            # caller of `_reconnect` should hear about it rather than deadlock.
-            if is_embedded_url(self._url) or self._reconnecting is asyncio.current_task():
+            if is_embedded_url(self._url) or rebuilding:
                 raise
             await self._reconnect(conn)
             return await operation(self.db)
 
     async def _query(self, query: str, params: dict | None = None) -> Any:
-        return await self._call(lambda conn: conn.query(query, params))
+        return await self._call(lambda conn: _first_result(conn, query, params))
 
     async def _query_raw(self, query: str, params: dict | None = None) -> Any:
         return await self._call(lambda conn: conn.query_raw(query, params))
@@ -1539,6 +1698,11 @@ class SurrealDBStorage:
 
     # --- Viz reads (cross-graph, by borrowing the connection) ---
     #
+    # A graph nobody has written has no tables. The 2.x SDK's embedded engine
+    # answers a read on a missing table with no rows; a served SurrealDB and the
+    # 4.0 engine the 3.x SDK embeds raise `NotFoundError`. A viz read reports
+    # such a graph as empty either way, through `_absent_as_empty`.
+    #
     # There is no cross-database query in SurrealQL and no second connection to
     # be had (a second embedded URL is a second store), so reading another
     # graph means pointing this one at it and giving it back. That borrow is
@@ -1574,9 +1738,11 @@ class SurrealDBStorage:
         async with self._borrowed(database):
             results = []
             for table in ("topic", "fact", "inference"):
-                rows = await self._query(
-                    f"SELECT * FROM {table} WHERE status = $status",
-                    {"status": historical_status.value},
+                rows = await _absent_as_empty(
+                    self._query(
+                        f"SELECT * FROM {table} WHERE status = $status",
+                        {"status": historical_status.value},
+                    )
                 )
                 results.extend(_record_to_node(table, r) for r in rows)
             return results
@@ -1587,7 +1753,7 @@ class SurrealDBStorage:
     ) -> Sequence[NodeEdge]:
         """List all edges in a graph for visualization snapshot."""
         async with self._borrowed(database):
-            rows = await self._query("SELECT * FROM node_edge")
+            rows = await _absent_as_empty(self._query("SELECT * FROM node_edge"))
             return [NodeEdge.model_validate(_clean_record(r)) for r in rows]
 
     async def viz_list_timelines(
@@ -1600,7 +1766,7 @@ class SurrealDBStorage:
         record, not a parent with child rows.
         """
         async with self._borrowed(database):
-            rows = await self._query("SELECT * FROM timeline")
+            rows = await _absent_as_empty(self._query("SELECT * FROM timeline"))
             return [Timeline.model_validate(_clean_record(r)) for r in rows]
 
     async def viz_list_metacontexts(
@@ -1609,9 +1775,11 @@ class SurrealDBStorage:
     ) -> Sequence[Metacontext]:
         """List all active metacontexts in a graph for visualization."""
         async with self._borrowed(database):
-            rows = await self._query(
-                "SELECT * FROM metacontext WHERE status = $status",
-                {"status": NodeStatus.ACTIVE.value},
+            rows = await _absent_as_empty(
+                self._query(
+                    "SELECT * FROM metacontext WHERE status = $status",
+                    {"status": NodeStatus.ACTIVE.value},
+                )
             )
             return [Metacontext.model_validate(_clean_record(r)) for r in rows]
 
@@ -1621,7 +1789,7 @@ class SurrealDBStorage:
     ) -> Sequence[RelationLabel]:
         """List every relation label record in a graph for visualization."""
         async with self._borrowed(database):
-            rows = await self._query("SELECT * FROM relation_label")
+            rows = await _absent_as_empty(self._query("SELECT * FROM relation_label"))
             return [RelationLabel.model_validate(_clean_record(r)) for r in rows]
 
     async def viz_list_decisions(
@@ -1637,8 +1805,10 @@ class SurrealDBStorage:
         """
         where, params = _decision_clauses(kinds=kinds)
         async with self._borrowed(database):
-            rows = await self._query(
-                f"SELECT * FROM decision{where} ORDER BY decided_at DESC, uid DESC", params
+            rows = await _absent_as_empty(
+                self._query(
+                    f"SELECT * FROM decision{where} ORDER BY decided_at DESC, uid DESC", params
+                )
             )
             return [DecisionRecord.model_validate(_clean_record(r)) for r in rows]
 
@@ -1659,19 +1829,21 @@ class SurrealDBStorage:
         """
         async with self._borrowed(database):
             if item_ids is not None:
-                return await self._embeddings_of(item_ids, model_id)
+                return await _absent_as_empty(self._embeddings_of(item_ids, model_id))
             if model_id is None:
-                rows = await self._query("SELECT * FROM embedding")
+                read = self._query("SELECT * FROM embedding")
             else:
-                rows = await self._query(
+                read = self._query(
                     "SELECT * FROM embedding WHERE model_id = $model_id", {"model_id": model_id}
                 )
-            return [EmbeddingRecord.model_validate(_clean_record(r)) for r in rows or []]
+            rows = await _absent_as_empty(read)
+            return [EmbeddingRecord.model_validate(_clean_record(r)) for r in rows]
 
     async def close(self) -> None:
         if self._db is not None:
             await self._db.close()
             self._db = None
+        self._dropped = None
         # A viz read that died before its `finally` could leave the selection
         # pointed elsewhere; a later `connect()` must not inherit that.
         self._selected = self._database
@@ -1688,7 +1860,7 @@ class SurrealDBStorage:
         newer Epimemer wrote is refused with `SchemaTooNew` having had nothing
         written to it, not even a table definition.
         """
-        query = self.db.query
+        query = functools.partial(_first_result, self.db)
         _refuse_newer_schema(self._selected, await _stored_schema_version(query))
         await query("""
             DEFINE TABLE IF NOT EXISTS document SCHEMALESS;
@@ -2160,6 +2332,11 @@ class SurrealDBStorage:
         if failures:
             causes = [f for f in failures if _SKIPPED_IN_FAILED_TRANSACTION not in f]
             raise RuntimeError(f"Transaction failed: {(causes or failures)[0]}")
+        # A served SurrealDB and the 4.0 engine report BEGIN and COMMIT as
+        # statements of their own; the 2.x SDK's embedded engine reports only
+        # the statements between them.
+        if len(results) == len(statements) + 2:
+            results = results[1:-1]
         return [result.get("result") if isinstance(result, dict) else result for result in results]
 
     async def _run_timeline_transaction(
@@ -3016,17 +3193,24 @@ class SurrealDBStorage:
             # from a caller's argument and the two facts are unrelated.
             params = {"statuses": sorted(status.value for status in statuses)}
 
-        # Match references are 1-based and each term gets its own. Each score is
-        # floored at zero before the sum: the standalone engine already clamps
-        # its IDF there, but the older core embedded in the Python SDK returns
-        # the negative value instead, and an uninformative term would then drag
-        # a document's total *below* the truncation and delete a real hit. The
-        # contract says a term more common than half the corpus contributes
-        # nothing; on one of these engines that has to be made true here.
+        # Match references are 1-based and each term gets its own. The contract
+        # says a term in half the corpus or more contributes nothing, and the
+        # three engines need three treatments to make that true (§11). The
+        # 3.0.5 server clamps its IDF at zero. The 2.x SDK's embedded engine
+        # returns the negative value, so each score is floored at zero before
+        # the sum, or an uninformative term would drag a document's total
+        # *below* the truncation and delete a real hit. The 4.0 engine scores
+        # every term positive, so each score is scaled to the clamped IDF from
+        # the term's own counts, one round trip more.
         refs = range(1, len(terms) + 1)
         matches = " OR ".join(f"{field} @{ref}@ $term_{ref}" for ref in refs)
-        score = " + ".join(f"math::max([search::score({ref}), 0])" for ref in refs)
         params |= {f"term_{ref}": terms[ref - 1] for ref in refs}
+        if self._positive_idf:
+            score = " + ".join(f"search::score({ref}) * $weight_{ref}" for ref in refs)
+            weights = await self._clamped_idf_ratios(table, field, terms)
+            params |= {f"weight_{ref}": weights[ref - 1] for ref in refs}
+        else:
+            score = " + ".join(f"math::max([search::score({ref}), 0])" for ref in refs)
 
         # The zero rule is the engine's job only when nothing may rescue a
         # floored row; with containment it becomes this method's, applied after
@@ -3063,6 +3247,29 @@ class SurrealDBStorage:
         return containment_first(
             candidates, {row["uid"]: row["body"] for row in rows or []}, terms
         )[:k]
+
+    async def _clamped_idf_ratios(
+        self, table: str, field: str, terms: Sequence[str]
+    ) -> list[float]:
+        """Per term, `_clamped_idf_ratio` from the rows it matches in `table`.
+
+        The server's IDF exactly for a one-token term, which every fallback term
+        is (R3). A term of several tokens is weighted by how many rows hold all
+        of them, where the server sums a clamped IDF per token. The two agree on
+        whether it scores except where every token is common and rows holding
+        all of them are not (`dev-docs/LEXICAL_SEARCH.md` §11).
+        """
+        refs = range(1, len(terms) + 1)
+        matched = ", ".join(
+            f"((SELECT count() FROM {table} WHERE {field} @@ $term_{ref} GROUP ALL)[0].count ?? 0)"
+            for ref in refs
+        )
+        stats = await self._query(
+            f"RETURN {{ rows: ((SELECT count() FROM {table} GROUP ALL)[0].count ?? 0), "
+            f"matched: [{matched}] }};",
+            {f"term_{ref}": terms[ref - 1] for ref in refs},
+        )
+        return [_clamped_idf_ratio(stats["rows"], count) for count in stats["matched"]]
 
     async def get_nodes_by_source(
         self, source_ids: Sequence[str]

@@ -69,7 +69,8 @@ async def main():
 asyncio.run(main())
 ```
 
-For SurrealDB, use embedded mode (`mem://`); no server needed:
+For SurrealDB, use embedded mode (`mem://`); no server needed, and the `dev`
+extra brings the engine:
 
 ```python
 from epimemer.storage.surrealdb_adapter import SurrealDBStorage

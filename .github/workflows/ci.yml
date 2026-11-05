@@ -111,6 +111,26 @@ jobs:
       # suite, and the durability suite starts and restarts its own.
       - run: make test-integration
 
+  # The unit suite and the SurrealDB integration target again, on the 2.x SDK
+  # the 0.4 releases still support. The lock pins 3.x, so the job downgrades
+  # after the locked sync. The 2.x wheel bundles its own embedded engine.
+  sdk-2:
+    name: SurrealDB SDK 2.x
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          python-version: "3.14"
+      - run: uv sync --locked --extra dev
+      - run: uv pip install --python .venv/bin/python 'surrealdb==2.0.0'
+      - run: uv run --no-sync python -m pytest tests/ -q
+      # `UV_NO_SYNC` stops the Makefile's `uv run` from putting 3.x back.
+      - run: make test-integration
+        env:
+          UV_NO_SYNC: "1"
+
   postgres:
     name: Postgres backend
     runs-on: ubuntu-latest

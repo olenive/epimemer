@@ -9,7 +9,6 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-from surrealdb import AsyncSurreal
 from websockets.exceptions import ConnectionClosedError
 
 from epimemer.core.types import (
@@ -135,9 +134,9 @@ class TestNodeStorage:
         """
         topic = Topic(content="written last year", source_id="s1")
         await store.store_node(topic)
-        await store.db.query("UPDATE topic UNSET description WHERE uid = $uid", {"uid": topic.id})
+        await store._query("UPDATE topic UNSET description WHERE uid = $uid", {"uid": topic.id})
 
-        rows = await store.db.query("SELECT * FROM topic WHERE uid = $uid", {"uid": topic.id})
+        rows = await store._query("SELECT * FROM topic WHERE uid = $uid", {"uid": topic.id})
         assert "description" not in rows[0]
 
         got = await store.get_node(topic.id)
@@ -729,15 +728,26 @@ class TestVectorSearchOverFetch:
         assert [i for i, _ in results] == [topic.id]
 
 
+def _shaped(answer):
+    """`query` as the installed SDK shapes it, around a coroutine giving the first result.
+
+    The 2.x SDK's `query()` is that coroutine. The 3.x one returns a builder,
+    and the adapter reads it through `first()`.
+    """
+    if surrealdb_adapter.SDK_MAJOR < 3:
+        return answer
+    return lambda sql, params=None: SimpleNamespace(first=lambda: answer(sql, params))
+
+
 class TestReconnection:
     """A websocket that dies underneath the adapter must not wedge it forever.
 
-    The SDK does not help here: `AsyncWsSurrealConnection.connect()` returns
-    early whenever `self.socket` is truthy, and nothing clears `socket` when the
-    connection drops — `_recv_task` swallows the `ConnectionClosed`, cancels the
-    pending futures and exits. The object therefore looks connected while every
-    send raises. Its own docstring calls a connection "to be used once and
-    discarded", so rebuilding one is this adapter's job.
+    Neither SDK helps here. The 2.x `AsyncWsSurrealConnection.connect()`
+    returns early whenever `self.socket` is truthy, and nothing clears `socket`
+    when the connection drops, so the object looks connected while every send
+    raises. The 3.x connection, with its own reconnect off, reports the drop as
+    a `disconnected` event and then opens a socket nobody has signed in to on
+    the next request. Rebuilding the connection is this adapter's job.
 
     These tests drive a stand-in connection rather than a server, because the
     property under test is what happens *after* a drop, and a real drop is not
@@ -745,19 +755,33 @@ class TestReconnection:
     the same behaviour against a real server being restarted.
     """
 
-    def _factory(self, built: list):
+    def _factory(self, built: list, server: SimpleNamespace | None = None):
         """Stand in for `AsyncSurreal`, recording every connection handed out.
 
         Each fake answers the calls `connect()` makes and returns empty result
         sets. Setting `fake.fails = True` arms the drop: from then on the fake
-        raises exactly what the real SDK raises once its socket is gone.
+        raises what the 2.x SDK raises once its socket is gone. Calling the
+        fake's `disconnected` listeners is how the 3.x SDK reports the same
+        drop. `server.down` refuses new connections, as a server that is not
+        back yet does. A query on a connection that never selected a database
+        fails, as it does on a real server.
         """
+        server = server if server is not None else SimpleNamespace(down=False)
 
-        def build(url: str):
-            fake = SimpleNamespace(url=url, fails=False, closed=False, queries=[], used=[])
+        def build(url: str, **options):
+            fake = SimpleNamespace(
+                url=url,
+                options=options,
+                fails=False,
+                closed=False,
+                queries=[],
+                used=[],
+                listeners={},
+            )
 
             async def connect(target: str | None = None) -> None:
-                return None
+                if server.down:
+                    raise ConnectionRefusedError("the server is not accepting connections")
 
             async def signin(_credentials: dict) -> None:
                 return None
@@ -767,27 +791,40 @@ class TestReconnection:
                     raise ConnectionClosedError(None, None)
                 fake.used.append(database)
 
-            async def query(sql: str, params: dict | None = None) -> list:
+            async def answer(sql: str, params: dict | None = None) -> list:
                 if fake.fails:
                     raise ConnectionClosedError(None, None)
+                if not fake.used:
+                    raise RuntimeError("Specify a namespace and database to use")
                 fake.queries.append(sql)
                 return []
 
             async def close() -> None:
                 fake.closed = True
 
+            def subscribe(event: str, listener):
+                fake.listeners.setdefault(event, []).append(listener)
+                return lambda: None
+
+            async def version() -> str:
+                return "surrealdb-3.0.5"
+
             fake.connect = connect
             fake.signin = signin
             fake.use = use
-            fake.query = query
+            fake.answer = answer
+            # Late-bound, so a test can swap `answer` for a misbehaving one.
+            fake.query = _shaped(lambda sql, params=None: fake.answer(sql, params))
             fake.close = close
+            fake.subscribe = subscribe
+            fake.version = version
             built.append(fake)
             return fake
 
         return build
 
-    async def _connected(self, monkeypatch, built: list, url: str):
-        monkeypatch.setattr(surrealdb_adapter, "AsyncSurreal", self._factory(built))
+    async def _connected(self, monkeypatch, built: list, url: str, server=None):
+        monkeypatch.setattr(surrealdb_adapter, "AsyncSurreal", self._factory(built, server))
         store = SurrealDBStorage(url=url, database="main")
         await store.connect()
         return store
@@ -802,6 +839,51 @@ class TestReconnection:
         assert await store.get_node("anything") is None  # must not raise
         assert len(built) == 2, "no replacement connection was built"
         assert built[0].closed, "the dead connection was left open"
+
+    @pytest.mark.skipif(
+        surrealdb_adapter.SDK_MAJOR < 3,
+        reason="the 2.x SDK reports no drop; the test above covers its path",
+    )
+    async def test_a_drop_the_connection_reports_is_rebuilt_before_the_next_call(self, monkeypatch):
+        """The 3.x path: nothing is sent on the dropped connection at all.
+
+        Sending would not raise. The SDK would open a fresh socket, signed in
+        as nobody and pointed at no database, and the call would fail there.
+        """
+        built: list = []
+        store = await self._connected(monkeypatch, built, "ws://127.0.0.1:8000/rpc")
+        sent_before = len(built[0].queries)
+
+        for listener in built[0].listeners["disconnected"]:
+            listener()
+
+        assert await store.get_node("anything") is None
+        assert len(built) == 2, "no replacement connection was built"
+        assert len(built[0].queries) == sent_before, "a query went out on the dropped connection"
+        assert built[0].closed, "the dead connection was left open"
+
+    async def test_a_rebuild_that_finds_the_server_down_is_tried_again(self, monkeypatch):
+        """The first call after a drop can arrive before the server is back.
+
+        That call fails. The one after it must rebuild again, never send on the
+        attempt that failed half way: that connection signed nobody in and
+        selected no database, so every later call would fail for the life of
+        the process.
+        """
+        built: list = []
+        server = SimpleNamespace(down=False)
+        store = await self._connected(monkeypatch, built, "ws://127.0.0.1:8000/rpc", server)
+
+        built[0].fails = True
+        server.down = True
+        with pytest.raises(ConnectionRefusedError):
+            await store.get_node("anything")
+
+        server.down = False
+        assert await store.get_node("anything") is None
+        assert len(built) == 3
+        assert built[1].closed, "the failed attempt was left open"
+        assert built[1].queries == [], "a query went out on the failed attempt"
 
     async def test_an_embedded_connection_is_never_rebuilt(self, monkeypatch):
         """`mem://` holds the graph *inside* the connection object.
@@ -832,7 +914,7 @@ class TestReconnection:
             built[0].fails = True
             raise ConnectionClosedError(None, None)
 
-        built[0].query = drop_once  # dies mid-read, once "other" is selected
+        built[0].answer = drop_once  # dies mid-read, once "other" is selected
 
         assert await store.viz_list_nodes("other") == []
 
@@ -866,17 +948,17 @@ class TestReconnection:
 
         original_build = surrealdb_adapter.AsyncSurreal
 
-        def build_then_die_in_migration(url: str):
-            fake = original_build(url)
-            healthy_query = fake.query
+        def build_then_die_in_migration(url: str, **options):
+            fake = original_build(url, **options)
+            healthy = fake.answer
 
-            async def query(sql: str, params: dict | None = None) -> list:
+            async def answer(sql: str, params: dict | None = None) -> list:
                 # The version 5 step reading the graph's topics through `query_nodes`.
                 if sql.startswith("SELECT * FROM topic WHERE status"):
                     raise ConnectionClosedError(None, None)
-                return await healthy_query(sql, params)
+                return await healthy(sql, params)
 
-            fake.query = query
+            fake.answer = answer
             return fake
 
         monkeypatch.setattr(surrealdb_adapter, "AsyncSurreal", build_then_die_in_migration)
@@ -886,14 +968,30 @@ class TestReconnection:
         assert len(built) == 2, "the failed rebuild was itself rebuilt"
 
 
-class TestFullTextDialectAndIdfFloor:
-    """Where the two SurrealDBs this adapter drives do not agree.
+class TestAnEmbeddedUrlWithoutTheEngine:
+    """The 3.x SDK ships the in-process engine as a separate package."""
 
-    `mem://` is not a connection to the standalone server; it is an older
-    SurrealDB core compiled into the Python SDK. Most of full-text search is
-    identical on the two — the analyzer, the match operator, `search::score`,
-    and positive scores to seven decimal places — but two things are not, and
-    both are load-bearing enough to pin here rather than discover later.
+    async def test_it_is_refused_naming_the_extra(self, monkeypatch):
+        from surrealdb.errors import UnsupportedEngineError
+
+        def no_engine(url: str, **options):
+            raise UnsupportedEngineError(url)
+
+        monkeypatch.setattr(surrealdb_adapter, "AsyncSurreal", no_engine)
+        store = SurrealDBStorage(url="mem://")
+
+        with pytest.raises(RuntimeError, match=r"install 'epimemer\[embedded\]'"):
+            await store.connect()
+
+
+class TestFullTextDialectAndIdfFloor:
+    """Where the embedded engine and the standalone server do not agree.
+
+    `mem://` is not a connection to the standalone server; it is a SurrealDB
+    core compiled into the SDK, older than the 3.0.5 server under the 2.x SDK
+    and newer (4.0) under the 3.x SDK. The analyzer and the match operator are
+    the same on all three, but the index dialect and the IDF are not, and both
+    are load-bearing enough to pin here rather than discover later.
     """
 
     CORPUS = (
@@ -924,13 +1022,14 @@ class TestFullTextDialectAndIdfFloor:
         assert await store.text_search(["4417"], corpus="nodes", node_type=NodeType.FACT)
 
     async def test_an_uninformative_term_cannot_delete_a_real_hit(self, store):
-        """The per-reference score floor, and why the adapter applies its own.
+        """The contract ("contributes nothing") on an engine that does not clamp.
 
-        This engine does not clamp IDF at zero — a term in more than half the
-        corpus scores *negative* here where the server scores `0.0`. Summed
-        across an OR, an uninformative term would then drag a genuine hit below
-        the truncation and delete it. `math::max` is what makes the contract
-        ("contributes nothing") true on both.
+        A term in half the corpus or more scores `0.0` on the server. The 2.x
+        SDK's engine scores it *negative*, which summed across an OR would drag
+        a genuine hit below the truncation and delete it, so the adapter floors
+        each reference with `math::max`. The 4.0 engine scores it *positive*,
+        which would keep every ticket, so the adapter scales each reference to
+        the clamped IDF from the term's own counts.
         """
         facts = await self._seed(store)
 
@@ -940,11 +1039,11 @@ class TestFullTextDialectAndIdfFloor:
 
         assert [node_id for node_id, _ in with_noise] == [facts[0].id]
 
-    async def test_a_multi_token_term_of_mostly_common_words_is_lost_here(self, store):
-        """A known divergence, pinned so it is a decision rather than a surprise.
+    async def test_a_multi_token_term_of_mostly_common_words(self, store):
+        """A known divergence of the 2.x SDK's engine, pinned so it is a decision.
 
         A term is one match reference, and its score is the engine's own sum
-        over its tokens — which this core does not floor. `JIRA-4417` in a
+        over its tokens — which that core does not floor. `JIRA-4417` in a
         corpus where *every* document says JIRA is two heavily-negative tokens
         plus one strongly positive one, and the total goes below zero: the
         adapter cannot floor what it never sees separately, and splitting the
@@ -952,15 +1051,20 @@ class TestFullTextDialectAndIdfFloor:
         standalone server stops matching conjunctively as soon as the `WHERE`
         gains that structure (measured — the near-miss comes back).
 
-        On the server the same call returns the fact. The divergence needs a
-        corpus where the identifier's common half is above the floor, which the
-        five-ticket graph below is and a real graph is not: adding six unrelated
-        facts is enough to make both engines agree, which is the second half of
-        this test.
+        On the server the same call returns the fact, and so does the 4.0
+        engine, whose IDF is positive for every token. On the 2.x SDK's engine
+        the divergence needs a corpus where the identifier's common half is
+        above the floor, which the five-ticket graph below is and a real graph
+        is not: adding six unrelated facts is enough to make every engine
+        agree, which is the second half of this test.
         """
         facts = await self._seed(store)
 
-        assert await store.text_search(["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT) == []
+        found = await store.text_search(["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT)
+        if surrealdb_adapter.SDK_MAJOR < 3:
+            assert found == []
+        else:
+            assert [node_id for node_id, _ in found] == [facts[0].id]
 
         await self._seed(
             store,
@@ -1036,7 +1140,7 @@ class TestAGraphANewerEpimemerWrote:
         # A database holding nothing but a newer marker, so any table this code
         # defined on the way in would show.
         await store.db.use(store.namespace, "newer")
-        await store.db.query("UPSERT schema_version:current SET version = 99;")
+        await store._query("UPSERT schema_version:current SET version = 99;")
         await store.db.use(store.namespace, "main")
 
         with pytest.raises(SchemaTooNew) as refused:
@@ -1061,7 +1165,7 @@ class TestAGraphANewerEpimemerWrote:
         writer = SurrealDBStorage(url=url)
         await writer.connect()
         await writer.store_node(Topic(id="t1", content="written by a newer Epimemer"))
-        await writer.db.query("UPSERT schema_version:current SET version = 99;")
+        await writer._query("UPSERT schema_version:current SET version = 99;")
         await writer.close()
 
         store = SurrealDBStorage(url=url)
@@ -1071,12 +1175,13 @@ class TestAGraphANewerEpimemerWrote:
 
         # A bare connection, since opening the graph through the adapter is what
         # is refused.
-        reader = AsyncSurreal(url)
-        await reader.connect(url)
+        reader = surrealdb_adapter._new_connection(url)
+        await reader.connect()
+        read = surrealdb_adapter._first_result
         try:
             await reader.use(store.namespace, "main")
-            assert await reader.query("SELECT VALUE version FROM schema_version:current;") == [99]
-            assert await reader.query("SELECT VALUE content FROM topic;") == [
+            assert await read(reader, "SELECT VALUE version FROM schema_version:current;") == [99]
+            assert await read(reader, "SELECT VALUE content FROM topic;") == [
                 "written by a newer Epimemer"
             ]
         finally:
@@ -1144,9 +1249,10 @@ class TestIntegersWiderThan64Bits:
 
 
 class TestTheVersionReadOnAFreshDatabase:
-    """A served SurrealDB answers a read on an undefined table with an error
-    where the embedded engine answers with nothing. The integration suite
-    caught the first form; this pins that both mean version 0."""
+    """A served SurrealDB and the 4.0 engine the 3.x SDK embeds answer a read
+    on an undefined table with an error, where the 2.x SDK's engine answers
+    with nothing. The integration suite caught the first form; this pins that
+    both mean version 0."""
 
     async def test_a_missing_table_reads_as_version_zero(self):
         from surrealdb.errors import NotFoundError
@@ -1164,14 +1270,19 @@ class TestTheVersionReadOnAFreshDatabase:
 
 
 class TestACompletionThatLosesAWriteConflictIsRetried:
-    """Two completions writing the reflect record at once conflict on SurrealDB
-    rather than one waiting, and the loser is retried. Pinned here: the phrase
-    the retry matches is the one the engine actually sends, the bound is five
-    attempts, and anything else is raised at once."""
+    """Two completions writing the reflect record at once can conflict on
+    SurrealDB rather than one waiting, and the loser is retried. Pinned here:
+    the phrase the retry matches is the one the engine actually sends, the
+    bound is five attempts, and anything else is raised at once."""
 
     async def test_the_engine_says_what_the_retry_matches(self, store):
         """A reworded message would turn every conflict into a failed reflect,
-        so the real one is provoked rather than assumed."""
+        so the real one is provoked rather than assumed.
+
+        The 4.0 engine the 3.x SDK embeds makes the second completion wait
+        instead, so there the outcome is pinned: one completion clears the
+        count, the other finds it cleared, and the round moves once.
+        """
         await store.bump_reflect_counter()
 
         results = await asyncio.gather(
@@ -1181,8 +1292,13 @@ class TestACompletionThatLosesAWriteConflictIsRetried:
         )
 
         failures = [r for r in results if isinstance(r, Exception)]
-        assert failures, "two completions at once no longer conflict; revisit the retry"
-        assert all(surrealdb_adapter._RETRYABLE in str(failure) for failure in failures)
+        if surrealdb_adapter.SDK_MAJOR < 3:
+            assert failures, "two completions at once no longer conflict; revisit the retry"
+            assert all(surrealdb_adapter._RETRYABLE in str(failure) for failure in failures)
+        else:
+            assert not failures
+            assert sorted(rows[0]["cleared"] for rows in results) == [0, 1]
+            assert {rows[0]["reflect_round"] for rows in results} == {1}
 
     def _conflicting(self, store, monkeypatch, failures: int, message: str) -> list[str]:
         calls: list[str] = []

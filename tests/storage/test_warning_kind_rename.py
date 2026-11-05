@@ -64,7 +64,7 @@ class TestTheNewValueIsWhatAFreshRowCarries:
             )
         )
 
-        stored = await store.db.query("SELECT kind FROM decision WHERE uid = 'dec-fresh'")
+        stored = await store._query("SELECT kind FROM decision WHERE uid = 'dec-fresh'")
         assert stored[0]["kind"] == NEW_KIND
         await store.close()
 
@@ -84,16 +84,16 @@ class TestAnOldRowReadsBackAsTheNewKind:
     async def test_surrealdb_rewrites_it_when_the_graph_is_opened(self, embedded_url):
         seeded = SurrealDBStorage(url=embedded_url)
         await seeded.connect()
-        await seeded.db.query("CREATE decision CONTENT $data", {"data": _row("dec-old")})
+        await seeded._query("CREATE decision CONTENT $data", {"data": _row("dec-old")})
         # The marker the setup has just stamped, removed: this graph stands in
         # for one written before version 6 existed.
-        await seeded.db.query("DELETE schema_version:current")
+        await seeded._query("DELETE schema_version:current")
         await seeded.close()
 
         reopened = SurrealDBStorage(url=embedded_url)
         await reopened.connect()
 
-        stored = await reopened.db.query("SELECT kind FROM decision WHERE uid = 'dec-old'")
+        stored = await reopened._query("SELECT kind FROM decision WHERE uid = 'dec-old'")
         assert stored[0]["kind"] == NEW_KIND
 
         # The point of the rewrite: selecting on the kind reaches the row again.

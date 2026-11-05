@@ -165,7 +165,7 @@ async def test_an_embedded_graph_stamps_its_tags_on_open(embedded_url):
     ids = await _seeded_graph(store)
     # The marker `_setup_schema` has just stamped, removed: this graph is
     # standing in for one written before the version existed.
-    await store.db.query("DELETE schema_version:current")
+    await store._query("DELETE schema_version:current")
     assert await store.count_nodes_without_metacontext() == 2
     await store.close()
 
@@ -178,7 +178,7 @@ async def test_an_embedded_graph_stamps_its_tags_on_open(embedded_url):
     # The tag tagging nothing is the one node left, and it is the one the rule
     # says nothing about: a name used from nowhere.
     assert await reopened.count_nodes_without_metacontext() == 1
-    stored = await reopened.db.query("SELECT VALUE version FROM schema_version:current")
+    stored = await reopened._query("SELECT VALUE version FROM schema_version:current")
     assert int(stored[0]) == 6
     await reopened.close()
 

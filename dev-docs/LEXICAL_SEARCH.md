@@ -37,8 +37,8 @@ feature that closes the gap.
 ## 2. What the engine does
 
 Measured against a SurrealDB 3.0.5 server. Several of these contradict the
-2.x documentation. The embedded `mem://` core the Python SDK ships is an
-older engine and differs again; §11 has the differences.
+2.x documentation. The embedded `mem://` engine differs again, and which
+engine it is depends on the SDK line; §11 has the differences.
 
 **2.1 The index keyword is `FULLTEXT` on 3.x.** 2.x used `SEARCH`, and each
 engine rejects the other's spelling. `_setup_schema` negotiates the dialect.
@@ -273,24 +273,41 @@ asked.
 
 ---
 
-## 11. Two engines
+## 11. The embedded engines
 
-The Python SDK's embedded `mem://` core is an older SurrealDB than the 3.0.5
-server, and the two differ in ways the adapter has to absorb:
+The `mem://` engine the unit suite runs is compiled into the SDK. Under the
+2.x SDK it is an older SurrealDB than the 3.0.5 server; under the 3.x SDK it is
+SurrealDB 4.0. They differ from the server in ways the adapter has to absorb.
+For a term in `n` of a table's `N` rows, write `x = (N - n + 0.5) / (n + 0.5)`.
 
-- **Dialect.** The embedded core requires 2.x `SEARCH`; the server requires
-  `FULLTEXT`. `_setup_schema` negotiates.
-- **Negative IDF.** The embedded core returns negative IDF where the server
-  clamps at zero. A per-reference `math::max(…, 0)` aligns single-token terms
-  and cross-term sums, but not tokens inside one multi-token term:
-  `JIRA-4417`, in a corpus where every document says `JIRA`, is lost on the
-  embedded core and scores positively on the server. Not fixable from the
-  query layer (per-token refs break 3.0.5's conjunctive matching). R8 removes
-  the user-facing consequence: exact-containing hits for declared terms no
-  longer depend on the score, so the divergence is confined to fallback
-  ranking.
+- **Dialect.** The 2.x SDK's engine requires 2.x `SEARCH`; the server and the
+  4.0 engine require `FULLTEXT`. `_setup_schema` negotiates.
+- **IDF.** The server's IDF is `ln(x)` clamped at zero. The 2.x SDK's engine
+  returns `ln(x)` unclamped, negative above `n = N/2`, so each reference is
+  floored with `math::max(…, 0)`. The 4.0 engine returns `ln(1 + x)`, positive
+  for every term, so `text_search` first counts `N` and each term's `n`, one
+  round trip more, and scales each reference by `max(ln x, 0) / ln(1 + x)`.
+  That gives a single-token term, which every R3 fallback term is, the
+  server's IDF exactly, and zeroes a term in half the rows or more, as the
+  server does. The adapter reads the engine's version on connect and treats
+  4.0 and later this way; releases between 3.0.5 and 4.0 are unmeasured and
+  treated as 3.0.5.
+- **Multi-token terms.** A term's score is the engine's own sum over its
+  tokens, which the adapter cannot floor or scale token by token: per-token
+  refs break 3.0.5's conjunctive matching. On the 2.x SDK's engine,
+  `JIRA-4417` in a corpus where every document says `JIRA` is lost, where the
+  server scores it positively. On the 4.0 engine a term is weighted by how many
+  rows hold all its tokens, so a term whose tokens are each common but rarely
+  together keeps a positive score the server would clamp to zero. R8 removes
+  the user-facing consequence of both: exact-containing hits for declared
+  terms do not depend on the score, so the divergence is confined to the
+  ranking of token-only hits.
+- **Term frequency.** The 2.x SDK's engine matches the server's positive
+  scores to seven decimal places. The 4.0 engine's term-frequency part differs
+  for a row that holds a token more than once, so its scores match the
+  server's only where each token appears once.
 
 Parity across engines is rare-term only, like parity across backends. A
 change to SurrealDB's `text_search` therefore needs `make test-integration` as
-well as the unit suite, because the embedded engine the unit suite runs
-differs from the server.
+well as the unit suite on both SDK lines, because the embedded engines the
+unit suite runs differ from the server and from each other.

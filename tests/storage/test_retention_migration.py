@@ -30,7 +30,7 @@ EDGE_AT = datetime(2026, 8, 29, 9, 30, tzinfo=UTC)
 
 async def _confirmed_edge(store: SurrealDBStorage, src_id: str, dst_id: str) -> None:
     """One `review_confirmed` edge, under a type nothing can produce any more."""
-    await store.db.query(
+    await store._query(
         "CREATE node_edge CONTENT {"
         "  uid: rand::uuid::v4(), src_id: $src, dst_id: $dst,"
         "  type: 'review_confirmed', judged_by: $judge, created_at: $at"
@@ -55,7 +55,7 @@ async def _prose_retention(store: SurrealDBStorage, node_id: str, anchors: list[
     await store.record_decision(record)
     # `covers` is a field of the current model, so the write above stored it
     # empty. A row written before the field existed had no key at all.
-    await store.db.query("UPDATE decision UNSET covers WHERE uid = $uid", {"uid": record.id})
+    await store._query("UPDATE decision UNSET covers WHERE uid = $uid", {"uid": record.id})
     return record.id
 
 
@@ -83,7 +83,7 @@ async def _seed_double_written_graph(store: SurrealDBStorage) -> dict[str, str]:
     #       suppressed the nomination, so the verdict exists only as an edge.
     await _confirmed_edge(store, orphaned.id, orphaned.id)
 
-    await store.db.query("DELETE schema_version:current")
+    await store._query("DELETE schema_version:current")
 
     return {
         "stale_a": stale_a.id,
@@ -97,12 +97,12 @@ async def _seed_double_written_graph(store: SurrealDBStorage) -> dict[str, str]:
 
 
 async def _schema_version(store: SurrealDBStorage) -> int | None:
-    stored = await store.db.query("SELECT VALUE version FROM schema_version:current")
+    stored = await store._query("SELECT VALUE version FROM schema_version:current")
     return int(stored[0]) if stored else None
 
 
 async def _confirmed_edge_count(store: SurrealDBStorage) -> int:
-    rows = await store.db.query("SELECT uid FROM node_edge WHERE type = 'review_confirmed'")
+    rows = await store._query("SELECT uid FROM node_edge WHERE type = 'review_confirmed'")
     return len(rows or [])
 
 
@@ -200,7 +200,7 @@ async def test_a_graph_already_at_version_2_still_gets_this_step(embedded_url):
     store = SurrealDBStorage(url=embedded_url)
     await store.connect()
     ids = await _seed_double_written_graph(store)
-    await store.db.query("UPSERT schema_version:current SET version = 2")
+    await store._query("UPSERT schema_version:current SET version = 2")
     await store.close()
 
     reopened = SurrealDBStorage(url=embedded_url)
@@ -228,7 +228,7 @@ async def test_a_row_that_already_has_covers_is_left_alone(embedded_url):
         certainty_basis="re-read; it holds [covers: stale-anchor]",
     )
     await store.record_decision(record)
-    await store.db.query("DELETE schema_version:current")
+    await store._query("DELETE schema_version:current")
     await store.close()
 
     reopened = SurrealDBStorage(url=embedded_url)

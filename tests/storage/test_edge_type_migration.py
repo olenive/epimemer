@@ -24,7 +24,7 @@ from epimemer.storage.surrealdb_adapter import SurrealDBStorage
 
 async def _rename_type(store: SurrealDBStorage, edge: NodeEdge, old_name: str) -> None:
     """Put one stored edge back under the name it carried before the split."""
-    await store.db.query(
+    await store._query(
         "UPDATE node_edge SET type = $type WHERE uid = $uid",
         {"type": old_name, "uid": edge.id},
     )
@@ -49,7 +49,7 @@ async def _seed_pre_split_graph(store: SurrealDBStorage) -> dict[str, str]:
 
     # The marker `_setup_schema` has just stamped, removed: this graph is
     # standing in for one written before the version existed.
-    await store.db.query("DELETE schema_version:current")
+    await store._query("DELETE schema_version:current")
 
     return {
         "topic": topic.id,
@@ -62,12 +62,12 @@ async def _seed_pre_split_graph(store: SurrealDBStorage) -> dict[str, str]:
 
 
 async def _types_by_uid(store: SurrealDBStorage) -> dict[str, str]:
-    rows = await store.db.query("SELECT uid, type FROM node_edge")
+    rows = await store._query("SELECT uid, type FROM node_edge")
     return {row["uid"]: row["type"] for row in rows}
 
 
 async def _schema_version(store: SurrealDBStorage) -> int | None:
-    stored = await store.db.query("SELECT VALUE version FROM schema_version:current")
+    stored = await store._query("SELECT VALUE version FROM schema_version:current")
     return int(stored[0]) if stored else None
 
 
