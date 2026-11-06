@@ -875,7 +875,12 @@ async def memory_store_decomposition(
             the metacontexts that do exist.
         tags: Optional document-level tag names applied to every node. Each tag
             becomes (or reuses) a Topic linked by a tagged_with_topic edge. Every node
-            also gets a sourced_from edge to the document.
+            also gets a sourced_from edge to the document. A tag with no space
+            in it also reuses a topic of the same name up to case and
+            separators, stored or among this call's `topics`, where no topic
+            node created from a tag answers; the response then warns with
+            `tag_joined_topic`, giving that topic's description, so check it
+            is what the tag means.
         tag_descriptions: {tag name: one line saying what the tag covers}.
             **Required for every tag in this call that does not exist yet, both
             document-level and per-node; the call is refused without them and
@@ -892,7 +897,9 @@ async def memory_store_decomposition(
             written and comes back in `warnings`: changing a live description is
             enrichment, through apply_reflection. An entry for an existing tag
             that has no description yet **is** written, so a graph fills in as
-            it is used. A call that creates no tags needs no dict.
+            it is used. The same holds for a topic a tag reuses: its own
+            description stands, and one without a description takes yours. A
+            call that creates no tags needs no dict.
         timeline_id: Optional timeline to propose timepoints onto — use it when
             the document belongs to a timeline you have already created (a
             novel's chronology, a project history). It must exist. Omitted,
@@ -2025,7 +2032,11 @@ async def memory_reflect(
 
     Reads only — nothing here changes the graph. Identifies:
     - Similar topic pairs that could be consolidated under a parent (this also
-      covers duplicate source/tag/entity Topics)
+      covers duplicate source/tag/entity Topics). A pair of one name, both
+      written without a space and equal up to case and separators, such as a
+      tag `table-sessions` beside a topic `table_sessions`, is listed whatever
+      its similarity and carries `same_name: true`. Merge it or record a
+      verdict in `similarities`; unjudged, it comes back on every reflect
     - Topics with high internal variance that could be split. A topic somebody
       stood behind since its material last moved (a description confirmed or
       written, a split declined) is not offered again until it moves. Answer
@@ -2255,8 +2266,13 @@ async def memory_apply_reflection(
             an unjudged pair does.
         merges: Fuse near-duplicate topics into one combined topic; the sources
             are retired as MERGED history. Each: {source_ids: [str], content: str}.
-            A merge is applied only if every pair of sources is at least
-            merge_similarity_threshold similar, else it is rejected — use this
+            A merge is applied only if every pair of sources is at least 0.92
+            similar, a fixed bar this call does not change, else it is
+            rejected: counted in `merges_rejected` and listed in
+            `topic_merges_refused` with the lowest-scoring `pair`, its
+            `similarity` and the `threshold` it fell below. Sources of one name
+            merge whatever their similarity: a pair reflect marks `same_name`,
+            or tags whose names differ only in case and separators. Use this
             only for true duplicates, and `parents` for merely related topics.
             Sources standing in different metacontexts are refused into
             `topic_merges_refused`: the survivor stands in every metacontext its

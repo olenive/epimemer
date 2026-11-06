@@ -1,7 +1,8 @@
 # Topic nodes created from tags
 
 A tag is the string passed in `tags=[...]`, and it resolves, by name, to a
-topic node created from a tag. The code is `tag_key` and `tag_by_key` in
+topic node created from a tag, or to a topic of the same name. The code is
+`tag_key`, `one_name`, `tag_by_key` and `topic_by_name` in
 `epimemer/pipelines/name_resolution.py`, and `created_from_tag`,
 `combined_metacontext_set` and `stamp_tag_metacontexts` in
 `epimemer/pipelines/metacontexts.py`, called from `epimemer/mcp/tools.py`.
@@ -22,13 +23,19 @@ repair: there is no nomination to review, no merge to perform, and no verdict
 to record.
 
 Resolution looks the name up exactly first, which is the common case and
-keeps the named content index, and on a miss compares the normalised key
-against the active topic nodes created from tags before creating anything.
-Two limits keep it narrow:
+keeps the named content index. On a miss it compares the normalised key
+against the active topic nodes created from tags, then against the other
+active topics and the topics the same call extracts that are **one name** with
+the tag, before creating anything. Two limits keep it narrow:
 
-- **Tags only.** A tag is a name and a statement topic is prose, so letting an
-  extracted topic answer to a normalised tag name would hand a tag's topic
-  node to something nobody wrote as a tag.
+- **One name means tag-shaped.** Two names are one name when neither has
+  whitespace in it and their `tag_key`s are equal. A topic extracted under a
+  slug such as `table-sessions` was written as a name, and a tag minted beside
+  it split the material between two nodes, `extracted_under_topic` edges on
+  one and `tagged_with_topic` edges on the other. A statement topic with a
+  space in it, such as `claim kind`, is prose and never answers to a tag.
+  Between two tags the key alone decides, spaces and all, and an existing tag
+  answers before any other topic.
 - **The Topic branch only**, where a reference could be a node id, a Topic
   name or a document's source name. A normalised match against a filename
   would resolve `ISSUES.md` to `issuesmd`, which nothing asked for.
@@ -36,9 +43,13 @@ Two limits keep it narrow:
 Where the spelling asked for differs from the one resolved to, the
 `store_decomposition` response lists it under `tags_resolved_to`, so a caller
 learns this graph's spelling rather than silently getting a different tag from
-the one it named. `rename_topic` refuses a new name that another active topic
-already answers to up to spelling, since the rename would leave two nodes
-answering to one name.
+the one it named. Where a tag resolves to a topic node not created from a tag,
+the response carries a `tag_joined_topic` warning naming the tag, the topic and
+the topic's description, so the caller sees the meaning the tag joined. The
+tag's description is not written over one the topic has, and a topic with none
+takes it. `rename_topic` refuses a new name that another active topic already
+answers to up to spelling, since the rename would leave two nodes answering to
+one name.
 
 ### 1.1 What the similarity bar sorts
 
@@ -52,16 +63,21 @@ genuine duplicate, `claim-kind` · `claim_kind`, sat below the bar at 0.9196.
 `tag_key` gets all twelve pairs right: normalising the graph's topics
 collapses exactly those two duplicates and no others.
 
-### 1.2 An equal key clears the similarity bar
+### 1.2 One name clears the similarity bar
 
-`claim-kind` against `claim_kind` scores 0.9196, so without an exception the
-merge that cleans the pair up is refused. **An equal `tag_key` passes the bar
-where every source is a tag**: an identical normalised name is a stronger
-proof that two tags are one tag than any cosine between their spellings, and
-§1.1 shows cosine cannot make the call. It stays narrow: a pair with different
-keys is judged by the bar, and a merge with any statement topic among its
-sources is untouched. An existing equal-key pair is therefore cleaned up
-through `apply_reflection(merges=[...])`, with no script of its own.
+`claim-kind` against `claim_kind` scores 0.9196, and the tag `table-sessions`
+scored 0.7053 against the topic extracted under the same slug, because the tag
+embeds on its name and description and the statement topic on its name alone
+(`TOPIC_DESCRIPTIONS.md` §2.3). Without an exception the merge that cleans
+either pair up is refused. **A merge whose sources are one name passes the
+bar**, and so does one whose sources are all tags of one `tag_key`: an
+identical normalised name is a stronger proof of one topic than any cosine,
+and §1.1 shows cosine cannot make the call. It stays narrow: a pair with
+different keys is judged by the bar, and so is a statement topic with a space
+in it. A mixed pair still meets the metacontext gate (§2). An existing pair of
+one name is therefore cleaned up through `apply_reflection(merges=[...])`,
+with no script of its own, and a merge the bar does refuse comes back in
+`topic_merges_refused` naming its lowest-scoring pair, the score and the bar.
 
 A duplicate that does exist can also be judged: two tags used from one world
 are a same-metacontext pair (§2), so `one_claim` is available for them.
@@ -95,10 +111,12 @@ meaning, and the material it marks is not a usable substitute.
    miss path indexed rather than a scan, which is not worth a field on a path
    that was about to write a node. Add it when a graph makes the cost
    measurable.
-4. **Reflect keeps nominating tag pairs on name similarity.** With `tag_key`
-   in force the equal-key class cannot recur, and skipping every tag pair
-   would also hide real synonyms that share no key, `reflect` and
-   `reflection` among them. Revisit if the noise returns.
+4. **Reflect nominates a pair of one name whatever it scores**, with its real
+   score and `same_name: true`, through the verdict machinery every other
+   pair uses, so a recorded verdict stops it returning. Other tag pairs are
+   still nominated on name similarity: skipping them would hide real synonyms
+   that share no key, `reflect` and `reflection` among them. Revisit if the
+   noise returns.
 
 ---
 

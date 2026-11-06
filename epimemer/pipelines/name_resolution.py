@@ -10,7 +10,9 @@ a separator, and an exact match makes them two topic nodes. Cosine cannot make
 the call either: those two score 0.9196 while `dev-session-2026-09-05` and
 `dev-session-2026-09-06` score 0.9935, so any threshold that unifies the first
 pair unifies the second, which is two different days of work. `tag_key` collapses
-the spelling and nothing else. `dev-docs/TAG_IDENTITY.md` carries the
+the spelling and nothing else. A topic extracted under a slug such as
+`table-sessions` is the same name as the tag, so `one_name` lets the two answer
+to each other where both are tag-shaped. `dev-docs/TAG_IDENTITY.md` carries the
 measurements.
 
 **A name whose node was retired still points somewhere.** A merge retires its
@@ -67,20 +69,56 @@ def tag_key(name: str) -> str:
     return re.sub(r"[\s_-]+", "", name.strip().lower())
 
 
+def tag_shaped(name: str) -> bool:
+    """Whether `name` reads as a tag: one word, with no whitespace in it.
+
+    A slug such as `table-sessions` is a name whoever wrote it, a tag or a
+    topic's content. A name with a space in it, such as `claim kind`, reads as
+    prose, which is what a statement topic's content usually is.
+    """
+    stripped = name.strip()
+    return bool(stripped) and not any(char.isspace() for char in stripped)
+
+
+def one_name(*names: str) -> bool:
+    """Whether these names are one name: every one tag-shaped, and one `tag_key`.
+
+    The test a tag and a topic node not created from a tag are held to at ingest,
+    in reflect's nomination and at the merge bar. Two tags are held to the wider
+    `tag_key` equality alone, spaces and all.
+    """
+    return all(tag_shaped(name) for name in names) and len({tag_key(n) for n in names}) == 1
+
+
 def tag_by_key(name: str, topics: list[Topic]) -> Topic | None:
     """The tag among `topics` whose name is `name` up to spelling.
 
-    Tags only. A statement topic's content is prose, and letting one answer to a
-    normalised tag name would hand a tag's topic node to something nobody wrote
-    as a tag. Ties go to the first, which is the older node where the caller passed
-    them in creation order: the spelling already in the graph wins, so a graph
-    settles on one house spelling rather than following whatever was typed last.
+    Tags only, matched on `tag_key` alone, so `design decisions` and
+    `design-decisions` are one tag. Ties go to the first, which is the older node
+    where the caller passed them in creation order: the spelling already in the
+    graph wins, so a graph settles on one house spelling rather than following
+    whatever was typed last.
     """
     wanted = tag_key(name)
     for topic in topics:
         if created_from_tag(topic) and tag_key(topic.content) == wanted:
             return topic
     return None
+
+
+def topic_by_name(name: str, topics: list[Topic]) -> Topic | None:
+    """The topic among `topics` that answers to `name` up to spelling.
+
+    A tag first, through `tag_by_key`, so a name already carried by a tag stays
+    with it. Then any topic node that is `one_name` with it: a statement topic
+    whose content is a slug was written as a name, and a tag of that name is the
+    same name. A statement topic whose content has a space in it is prose and
+    never answers here. Ties go to the first, as in `tag_by_key`.
+    """
+    tag = tag_by_key(name, topics)
+    if tag is not None:
+        return tag
+    return next((topic for topic in topics if one_name(name, topic.content)), None)
 
 
 async def resolve_name(

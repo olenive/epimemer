@@ -104,7 +104,7 @@ Each key is a worklist, not a verdict:
 
 | Key | Nominates | Applied via |
 |---|---|---|
-| `similar_pairs` | topic pairs at or above `similarity_threshold` (0.85 by default) | `merges` or `parents` |
+| `similar_pairs` | topic pairs at or above `similarity_threshold` (0.85 by default), and every pair of one name whatever its similarity, marked `same_name: true` | `merges` or `parents` |
 | `split_candidates` | topics whose material bisects into two clusters, skipping any somebody stood behind since its material last moved | `splits` or `splits_declined` |
 | `enrichment_candidates` | topics whose material moved since somebody last stood behind the description, with the change itself; and topics nobody has described yet, with a sample | `enrichments` or `descriptions_confirmed` |
 | `contradictions` | same-metacontext active fact pairs at or above 0.80, the one nomination bar, which `merge_facts` also gates on, so a pair listed here is mergeable | `record_contradiction`, then `supersessions`; or `similarities` where neither fits |
@@ -270,12 +270,16 @@ Every kind of decision is optional and they are applied in one call:
 
 **`merges` is the one consolidation that retires nodes from the active graph**,
 so the bar is deliberately high: a merge is applied only if *every* pair of
-sources clears 0.92, and otherwise it is rejected and counted in
-`merges_rejected`. Two spellings of one tag name, such as `claim-kind` and
-`claim_kind`, are the exception: they normalise to one key and merge whatever
-their similarity. **The bar is not a parameter of the call**: a caller does not
-choose the bar its own merge is checked against, here or in `merge_facts`. For
-topics that are merely related rather than duplicates, use `parents`.
+sources clears 0.92, and otherwise it is rejected, counted in
+`merges_rejected` and listed in `topic_merges_refused` with the pair that
+scored lowest, its `similarity` and the `threshold`. Sources of one name are
+the exception and merge whatever their similarity: two tags whose names
+normalise to one key, such as `claim-kind` and `claim_kind`, and any topics
+written without a space whose names normalise to one key, such as the tag
+`table-sessions` and an extracted topic `table_sessions`. **The bar is not a
+parameter of the call**: a caller does not choose the bar its own merge is
+checked against, here or in `merge_facts`. For topics that are merely related
+rather than duplicates, use `parents`.
 
 **`enrichments` writes a description beside a name that does not change.** Each
 entry is `{topic_id, description}`, and the write is in place: the topic keeps

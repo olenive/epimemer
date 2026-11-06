@@ -4,6 +4,32 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.5] — 2026-11-06
+
+### Changed
+
+- A tag with no space in it resolves to a topic of the same name up to case
+  and separators, stored or among the call's `topics`, when no topic node
+  created from a tag answers. The response warns with `tag_joined_topic`,
+  naming the tag, the topic and the topic's description. The tag's
+  description is not written over one the topic has, and a topic without one
+  takes it. `find_nodes(tagged_with_topic=...)` resolves a name the same way.
+- `reflect` lists every pair of active topics of one name in `similar_pairs`,
+  whatever their similarity, with the real score and `same_name: true`. A
+  verdict in `similarities` stops the pair coming back.
+- `apply_reflection` merges topics of one name whatever their similarity,
+  whether or not every source is a tag. The 0.92 bar stays fixed for every
+  other merge.
+
+### Fixed
+
+- One `store_decomposition` call that tagged a name and extracted a topic of
+  that name made two topic nodes, one per kind, which reflect never offered
+  and `apply_reflection` refused to merge. It makes one.
+- A topic merge the similarity bar refuses is listed in `topic_merges_refused`
+  with the lowest-scoring `pair`, its `similarity` and the `threshold`. It was
+  only counted in `merges_rejected`, which stays.
+
 ## [0.4.4] — 2026-11-05
 
 ### Added

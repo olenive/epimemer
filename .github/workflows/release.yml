@@ -1,8 +1,9 @@
 name: Release
 
 # A tag `vX.Y.Z` builds the wheel, proves it installs, publishes it to
-# TestPyPI, and then, after the `pypi` environment's approval, to PyPI.
-# Both publish steps use PyPI's trusted publishing, so no token is stored.
+# TestPyPI, and then to PyPI, with no manual step: the `pypi` environment
+# has no required reviewer, so a tag push is the release. Both publish
+# steps use PyPI's trusted publishing, so no token is stored.
 #
 # TestPyPI is the rehearsal, so PyPI waits for it. The rehearsal gets a second
 # attempt because its one failure so far was a five-second network timeout

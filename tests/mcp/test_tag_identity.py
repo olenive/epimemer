@@ -16,6 +16,7 @@ from epimemer.core.types import (
     BASE_METACONTEXT_ID,
     EdgeType,
     EmbeddingRecord,
+    Fact,
     JudgeRef,
     NodeEdge,
     NodeStatus,
@@ -26,6 +27,7 @@ from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
 from epimemer.mcp.config import ServerConfig
 from epimemer.pipelines.metacontexts import TAG_EXTRACTION_METHOD, created_from_tag
+from epimemer.pipelines.name_resolution import tag_key
 
 CRITIC = JudgeRef(agent_id="critic", digest="d1")
 
@@ -124,7 +126,8 @@ class TestOneTagHoweverItIsSpelled:
         assert [t.content for t in await _tag_topics(storage)] == ["brand-new"]
 
     async def test_a_statement_topic_does_not_capture_a_tag_name(self, storage, embedder, config):
-        """An extracted topic is prose, and must not answer to a normalised tag name."""
+        """An extracted topic with a space in it is prose, and must not answer to
+        a normalised tag name: only a tag-shaped name is one name with a tag."""
         prose = Topic(content="claim kind", source_id="seg1", extraction_method="agent")
         await storage.store_node(prose)
         await _ingest(storage, embedder, config, "A document.", tags=["claim_kind"])
@@ -219,10 +222,13 @@ class TestAnEqualKeyClearsTheSimilarityBar:
         assert result["topics_merged"] == 0
         assert result["merges_rejected"] == 1
 
-    async def test_a_statement_source_is_still_held_to_the_bar(self, storage, embedder, config):
-        """The exemption is for tags. One statement among the sources withdraws it."""
+    async def test_a_prose_statement_source_is_still_held_to_the_bar(
+        self, storage, embedder, config
+    ):
+        """A statement topic written as prose shares the key and is still not one
+        name with the tag, so the bar decides."""
         a = await self._tag_with_vector(storage, embedder, "claim-kind", [1.0] + [0.0] * 7)
-        b = Topic(content="claim_kind", source_id="seg1", extraction_method="agent")
+        b = Topic(content="claim kind", source_id="seg1", extraction_method="agent")
         await storage.store_node(b)
         await storage.store_embedding(
             EmbeddingRecord(item_id=b.id, model_id=embedder.model_id, vector=[0.0, 1.0] + [0.0] * 6)
@@ -235,3 +241,295 @@ class TestAnEqualKeyClearsTheSimilarityBar:
         )
         assert result["topics_merged"] == 0
         assert result["merges_rejected"] == 1
+
+
+async def _decompose(storage, embedder, config, text, entries, *, tags, tag_descriptions=None):
+    """Store one decomposition of `text`, one entry of `entries` per segment."""
+    seg, _ = await tools.segment_text(text, storage, embedder, config)
+    assert len(seg["segments"]) == len(entries)
+    stored, _ = await tools.store_decomposition(
+        document_id=seg["document_id"],
+        segments=[
+            {"segment_id": segment["segment_id"], **entry}
+            for segment, entry in zip(seg["segments"], entries, strict=True)
+        ],
+        storage=storage,
+        embedding_provider=embedder,
+        metacontext_id=BASE_METACONTEXT_ID,
+        tags=tags,
+        tag_descriptions=_descriptions(tags) if tag_descriptions is None else tag_descriptions,
+        judge=CRITIC,
+    )
+    return stored
+
+
+async def _topics_keyed(storage, key: str) -> list[Topic]:
+    """Every active topic node whose name normalises to `key`."""
+    nodes = await storage.query_nodes(node_type=NodeType.TOPIC)
+    return [n for n in nodes if isinstance(n, Topic) and tag_key(n.content) == key]
+
+
+def _joined(stored) -> list[dict]:
+    return [w for w in stored.get("warnings", []) if w["kind"] == "tag_joined_topic"]
+
+
+TABLE_SESSIONS = "Running a tabletop game from a session, one folder per playthrough."
+
+# Two unit vectors whose cosine is 0.7, about what the `table-sessions` twins scored.
+APART_A = [1.0] + [0.0] * 7
+APART_B = [0.7, (1 - 0.7**2) ** 0.5] + [0.0] * 6
+
+
+class TestATagAndAnExtractedTopicOfOneName:
+    """A tag-shaped name is one name, whichever of the two wrote it first.
+
+    One call that tagged `table-sessions` and extracted a topic of that name
+    minted two topic nodes, a statement topic and a tag, and the merge bar kept
+    them apart. The tag now files under the topic, and the response says which
+    topic and what it is described as, so the caller sees the meaning it joined.
+    """
+
+    async def test_a_tag_and_an_extracted_topic_of_one_name_are_one_node(
+        self, storage, embedder, config
+    ):
+        stored = await _decompose(
+            storage,
+            embedder,
+            config,
+            "A table session.",
+            [
+                {
+                    "topics": [{"content": "foo-bar", "description": TABLE_SESSIONS}],
+                    "facts": ["a claim"],
+                }
+            ],
+            tags=["foo-bar"],
+        )
+
+        (topic,) = await _topics_keyed(storage, "foobar")
+        assert topic.content == "foo-bar"
+        assert not created_from_tag(topic)
+        assert stored["tags_created"] == 0
+        (warning,) = _joined(stored)
+        assert warning["detail"] == {
+            "tag": "foo-bar",
+            "topic": "foo-bar",
+            "description": TABLE_SESSIONS,
+        }
+        assert warning["subjects"] == [topic.id]
+        assert "'foo-bar'" in warning["message"] and TABLE_SESSIONS in warning["message"]
+
+    async def test_the_tagged_fact_hangs_off_the_topic_and_the_topic_not_off_itself(
+        self, storage, embedder, config
+    ):
+        await _decompose(
+            storage,
+            embedder,
+            config,
+            "A table session.",
+            [{"topics": [{"content": "foo-bar"}], "facts": ["a claim"]}],
+            tags=["foo-bar"],
+        )
+
+        (topic,) = await _topics_keyed(storage, "foobar")
+        tagged = await storage.get_edges_to(topic.id, edge_type=EdgeType.TAGGED_WITH_TOPIC)
+        fact = await storage.get_node_by_content("a claim", node_type=NodeType.FACT)
+        assert {edge.src_id for edge in tagged} == {fact.id}
+
+    async def test_an_undescribed_topic_takes_the_tag_description(self, storage, embedder, config):
+        """The caller described the name once, under `tag_descriptions`, and a
+        topic with no description of its own takes it, as an undescribed tag does."""
+        await _decompose(
+            storage,
+            embedder,
+            config,
+            "A table session.",
+            [{"topics": [{"content": "foo-bar"}], "facts": ["a claim"]}],
+            tags=["foo-bar"],
+            tag_descriptions={"foo-bar": TABLE_SESSIONS},
+        )
+
+        (topic,) = await _topics_keyed(storage, "foobar")
+        assert topic.description == TABLE_SESSIONS
+
+    async def test_a_tag_resolves_to_a_topic_a_later_segment_extracts(
+        self, storage, embedder, config
+    ):
+        """Every node of the call is built before any tag is applied, so a
+        document-level tag on the first segment reaches a topic in the second,
+        and needs no description of its own."""
+        stored = await _decompose(
+            storage,
+            embedder,
+            config,
+            "First paragraph here.\n\nSecond paragraph there.",
+            [
+                {"facts": ["a claim"]},
+                {"topics": [{"content": "foo-bar", "description": TABLE_SESSIONS}]},
+            ],
+            tags=["foo-bar"],
+            tag_descriptions={},
+        )
+
+        (topic,) = await _topics_keyed(storage, "foobar")
+        assert not created_from_tag(topic)
+        assert len(_joined(stored)) == 1
+
+    async def test_a_stored_topic_spelled_another_way_takes_the_tag(
+        self, storage, embedder, config
+    ):
+        await _decompose(
+            storage,
+            embedder,
+            config,
+            "The first session.",
+            [{"topics": [{"content": "foo_bar", "description": TABLE_SESSIONS}]}],
+            tags=[],
+        )
+
+        stored = await _decompose(
+            storage,
+            embedder,
+            config,
+            "The second session.",
+            [{"facts": ["a claim"]}],
+            tags=["foo-bar"],
+        )
+
+        (topic,) = await _topics_keyed(storage, "foobar")
+        assert topic.content == "foo_bar"
+        assert stored["tags_resolved_to"] == {"foo-bar": "foo_bar"}
+        (warning,) = _joined(stored)
+        assert warning["detail"]["topic"] == "foo_bar"
+        assert warning["detail"]["description"] == TABLE_SESSIONS
+        fact = await storage.get_node_by_content("a claim", node_type=NodeType.FACT)
+        tagged = await storage.get_edges_from(fact.id, edge_type=EdgeType.TAGGED_WITH_TOPIC)
+        assert [edge.dst_id for edge in tagged] == [topic.id]
+
+    async def test_the_described_topic_keeps_its_description(self, storage, embedder, config):
+        """The tag's sentence is not written over the topic's own."""
+        await _decompose(
+            storage,
+            embedder,
+            config,
+            "The first session.",
+            [{"topics": [{"content": "foo_bar", "description": TABLE_SESSIONS}]}],
+            tags=[],
+        )
+
+        stored = await _decompose(
+            storage,
+            embedder,
+            config,
+            "The second session.",
+            [{"facts": ["a claim"]}],
+            tags=["foo-bar"],
+            tag_descriptions={"foo-bar": "Something else entirely."},
+        )
+
+        (topic,) = await _topics_keyed(storage, "foobar")
+        assert topic.description == TABLE_SESSIONS
+        assert "description_not_written" in [w["kind"] for w in stored["warnings"]]
+
+    async def test_a_tag_node_still_wins_over_an_extracted_topic(self, storage, embedder, config):
+        """Where a tag of the name exists already, the tag answers, as before."""
+        await _ingest(storage, embedder, config, "First.", tags=["foo_bar"])
+        tag = await _named(storage, "foo_bar")
+
+        stored = await _decompose(
+            storage,
+            embedder,
+            config,
+            "Second.",
+            [{"topics": [{"content": "Foo-Bar"}], "facts": ["another claim"]}],
+            tags=["foo-bar"],
+        )
+
+        fact = await storage.get_node_by_content("another claim", node_type=NodeType.FACT)
+        tagged = await storage.get_edges_from(fact.id, edge_type=EdgeType.TAGGED_WITH_TOPIC)
+        assert [edge.dst_id for edge in tagged] == [tag.id]
+        assert _joined(stored) == []
+
+    async def test_find_nodes_reaches_the_topic_by_the_tag_spelling(
+        self, storage, embedder, config
+    ):
+        """The read path resolves the way ingest files: a name reaches a topic
+        node of one name, tag or not."""
+        topic = Topic(content="foo_bar", source_id="seg1", extraction_method="agent")
+        fact = Fact(content="a claim", source_id="seg1")
+        await storage.store_node(topic)
+        await storage.store_node(fact)
+        await storage.store_edge(
+            NodeEdge(src_id=fact.id, dst_id=topic.id, type=EdgeType.TAGGED_WITH_TOPIC)
+        )
+
+        found, _ = await tools.find_nodes(storage, tagged_with_topic="foo-bar")
+        assert [node["content"] for node in found["nodes"]] == ["a claim"]
+
+
+class TestReflectNominatesOneNameByName:
+    """A pair that is one name is offered whatever its cosine.
+
+    The two `table-sessions` nodes scored 0.7053, under the 0.85 nomination bar,
+    because one embeds on its name and description and the other on its name
+    alone, so reflect never showed the duplicate.
+    """
+
+    async def _seeded(self, storage, embedder, content, vector, *, tag: bool):
+        topic = Topic(
+            content=content,
+            source_id=None if tag else "seg1",
+            extraction_method=TAG_EXTRACTION_METHOD if tag else "agent",
+        )
+        await storage.store_node(topic)
+        await storage.store_edge(
+            NodeEdge(src_id=topic.id, dst_id=BASE_METACONTEXT_ID, type=EdgeType.HAS_METACONTEXT)
+        )
+        await storage.store_embedding(
+            EmbeddingRecord(item_id=topic.id, model_id=embedder.model_id, vector=vector)
+        )
+        return topic
+
+    async def _pairs(self, storage, embedder) -> list[dict]:
+        result, _ = await tools.reflect(storage, embedder)
+        return result["similar_pairs"]
+
+    async def test_a_one_name_pair_below_the_bar_is_nominated_and_marked(self, storage, embedder):
+        a = await self._seeded(storage, embedder, "foo-bar", APART_A, tag=True)
+        b = await self._seeded(storage, embedder, "foo_bar", APART_B, tag=False)
+
+        (pair,) = await self._pairs(storage, embedder)
+
+        assert {pair["topic_a"]["id"], pair["topic_b"]["id"]} == {a.id, b.id}
+        assert pair["same_name"] is True
+        assert pair["similarity"] == pytest.approx(0.7, abs=1e-4)
+
+    async def test_a_pair_of_different_names_below_the_bar_is_not(self, storage, embedder):
+        await self._seeded(storage, embedder, "foo-bar", APART_A, tag=True)
+        await self._seeded(storage, embedder, "foo-baz", APART_B, tag=False)
+
+        assert await self._pairs(storage, embedder) == []
+
+    async def test_a_cosine_pair_carries_no_marker(self, storage, embedder):
+        await self._seeded(storage, embedder, "foo-bar", APART_A, tag=True)
+        await self._seeded(storage, embedder, "foo-baz", APART_A, tag=False)
+
+        (pair,) = await self._pairs(storage, embedder)
+        assert "same_name" not in pair
+
+    async def test_a_recorded_verdict_stops_the_pair_coming_back(self, storage, embedder):
+        a = await self._seeded(storage, embedder, "foo-bar", APART_A, tag=True)
+        b = await self._seeded(storage, embedder, "foo_bar", APART_B, tag=False)
+        assert len(await self._pairs(storage, embedder)) == 1
+
+        recorded, _ = await tools.apply_reflection(
+            storage,
+            embedder,
+            similarities=[
+                {"pair": [a.id, b.id], "verdict": "distinct", "because": "the tag means more"}
+            ],
+            judge=CRITIC,
+        )
+
+        assert recorded["similarities_recorded"] == 1
+        assert await self._pairs(storage, embedder) == []

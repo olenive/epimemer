@@ -338,9 +338,9 @@ export interface AdvisoryRaised extends BaseEvent {
   /**
    * What sort of thing was pointed out: disjoint_premises, cross_metacontext,
    * same_metacontext_variant, same_metacontext_contradiction,
-   * description_not_written. A free string here for the reason a verb is one:
-   * the panel groups by whatever arrives rather than by an enum the frontend
-   * would have to be kept in step with.
+   * description_not_written, tag_joined_topic. A free string here for the
+   * reason a verb is one: the panel groups by whatever arrives rather than by
+   * an enum the frontend would have to be kept in step with.
    */
   kind: string;
   /** The warning's own sentence, word for word. */

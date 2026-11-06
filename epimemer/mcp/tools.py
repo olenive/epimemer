@@ -114,6 +114,7 @@ from epimemer.pipelines.embedding_text import embedding_text
 from epimemer.pipelines.graph_construction.edge_creation import DecomposedSegment
 from epimemer.pipelines.query.types import SeedProvenance
 from epimemer.pipelines.reflection.review import SIMILARITY_NOMINATION_THRESHOLD
+from epimemer.pipelines.reflection.topic_consolidation import PairScore
 from epimemer.pipelines.review.apply import (
     RejudgeRefused,
     ReviewRefused,
@@ -1020,6 +1021,46 @@ def _description_field(entry: DecompositionEntry, cls: type) -> dict:
     return {"description": entry.description}
 
 
+def _description_not_written(topic: Topic) -> Advisory:
+    """The warning that a description supplied for a tag was not written, because
+    the topic node the tag resolved to carries one already."""
+    return Advisory(
+        kind=AdvisoryKind.DESCRIPTION_NOT_WRITTEN,
+        message=(
+            f"'{topic.content}' is already described, so the description "
+            f"supplied for it was not written. The stored one is judged prose "
+            f"with a history trail; to replace it, send "
+            f"apply_reflection(enrichments=[...]), which keeps the wording it "
+            f"replaces."
+        ),
+        subjects=[topic.id],
+        detail={"tag": topic.content, "stored": topic.description},
+    )
+
+
+def _tag_joined_topic(tag: str, topic: Topic) -> Advisory:
+    """The warning that a tag filed under a topic node not created from a tag.
+
+    A tag and a tag-shaped topic of one name are one topic node, so whatever the
+    call tagged becomes that topic's material. The description goes in the
+    message because it is the meaning the tag has just joined, and the caller is
+    the one who can tell whether it is the meaning the tag was given.
+    """
+    meaning = topic.description
+    described = f'described as "{meaning}"' if meaning else "with no description"
+    return Advisory(
+        kind=AdvisoryKind.TAG_JOINED_TOPIC,
+        message=(
+            f"The tag '{tag}' was filed under '{topic.content}', a topic node not "
+            f"created from a tag, {described}. A tag and a topic of one name are "
+            f"one topic node, so what this call tagged '{tag}' is now that topic's "
+            f"material. If the tag means something else, tag with another name."
+        ),
+        subjects=[topic.id],
+        detail={"tag": tag, "topic": topic.content, "description": topic.description},
+    )
+
+
 EXTRACTED_TIMELINE_NAME = "Extracted"
 
 # How many times ingest proposes its timepoints before giving up on a timeline
@@ -1255,8 +1296,11 @@ async def store_decomposition(
 
     Every node gets a `sourced_from` edge to the originating document, and a
     `has_metacontext` edge to the metacontext. `tags` (document-level) and per-node
-    tags are resolved-or-created (by exact name) as Topics linked by
-    `tagged_with_topic` edges, so a repeated tag reuses one Topic. Each such
+    tags are resolved-or-created (by name, up to case and separators) as Topics
+    linked by `tagged_with_topic` edges, so a repeated tag reuses one Topic. A
+    tag-shaped name also resolves to a topic of one name that is stored or
+    extracted in this call, with a `tag_joined_topic` warning naming the topic
+    and its description (`dev-docs/TAG_IDENTITY.md` §1). Each such
     topic node also joins this call's metacontext, once per call and only where
     it does not already stand there, so a name ends up standing in every
     metacontext it is used from. Everything is persisted in one atomic write.
@@ -1270,8 +1314,12 @@ async def store_decomposition(
     from epimemer.pipelines.graph_construction.edge_creation import (
         edge_creation_net,
     )
-    from epimemer.pipelines.metacontexts import TAG_EXTRACTION_METHOD, metacontext_edges
-    from epimemer.pipelines.name_resolution import resolve_name, tag_by_key, tag_key
+    from epimemer.pipelines.metacontexts import (
+        TAG_EXTRACTION_METHOD,
+        created_from_tag,
+        metacontext_edges,
+    )
+    from epimemer.pipelines.name_resolution import one_name, resolve_name, tag_key, topic_by_name
 
     # Imported as a module: the `propose_timepoints` flag above would otherwise
     # shadow the function of the same name.
@@ -1320,9 +1368,9 @@ async def store_decomposition(
         """The topic node this tag name already resolves to, or `None`.
 
         Two questions, cheapest first: does the store hold the name as written,
-        and does it hold it under another spelling. Only the second reads more
-        than one node, and only where the answer would otherwise have been to
-        write one.
+        and does it hold it under another spelling, a tag first and then any
+        topic node that is one name with it. Only the second reads more than one
+        node, and only where the answer would otherwise have been to write one.
         """
         nonlocal active_topics
         # `resolve_name` follows a retirement forward, so a tag whose node was
@@ -1335,15 +1383,16 @@ async def store_decomposition(
                     for node in await storage.query_nodes(node_type=NodeType.TOPIC)
                     if isinstance(node, Topic)
                 ]
-            existing = tag_by_key(name, active_topics)
+            existing = topic_by_name(name, active_topics)
         return existing if isinstance(existing, Topic) else None
 
     async def _tag_topic(name: str) -> Topic:
         """Resolve-or-create the Topic a tag names, adding new ones to the batch.
 
-        Everything this call names was resolved into `tag_cache` before any of
-        the document was built, so a miss here is a name being minted — with
-        the description the pre-pass refused the call for lacking.
+        Everything this call names was resolved into `tag_cache` before any tag
+        was applied, to a stored topic node or to a topic this call extracts, so
+        a miss here is a name being minted, with the description the pre-pass
+        refused the call for lacking.
         """
         key = tag_key(name)
         if key in tag_cache:
@@ -1414,31 +1463,38 @@ async def store_decomposition(
     # put them on the same successor, and describing it twice would write the
     # second sentence over the first without keeping it.
     resolved_ids: set[str] = set()
+    # The topics this call extracts, by their place in it, so a tag can resolve
+    # to one before any node is built. A topic extracted under a slug is a name,
+    # and minting a tag of that name beside it would split the material between
+    # two nodes that the merge bar then keeps apart.
+    extracted_here = [
+        ((seg_index, entry_index), _decomposition_entry(entry).content)
+        for seg_index, seg_data in enumerate(segments)
+        for entry_index, entry in enumerate(seg_data.get("topics", []))
+    ]
+    # The place of each topic this call extracts that a tag files under, and that
+    # tag's key. A place takes at most one key, since one name has one key.
+    joins_extracted: dict[tuple[int, int], str] = {}
     for key, tag_name in named_tags.items():
         stored_tag = await _stored_tag(tag_name)
         if stored_tag is None:
-            if key not in supplied_descriptions:
+            place = next(
+                (place for place, content in extracted_here if one_name(tag_name, content)),
+                None,
+            )
+            if place is not None:
+                joins_extracted[place] = key
+            elif key not in supplied_descriptions:
                 undescribed.append(tag_name)
             continue
         tag_cache[key] = stored_tag
+        if not created_from_tag(stored_tag):
+            advisories.append(_tag_joined_topic(tag_name, stored_tag))
         if key not in supplied_descriptions or stored_tag.id in resolved_ids:
             continue
         resolved_ids.add(stored_tag.id)
         if stored_tag.description:
-            advisories.append(
-                Advisory(
-                    kind=AdvisoryKind.DESCRIPTION_NOT_WRITTEN,
-                    message=(
-                        f"'{stored_tag.content}' is already described, so the "
-                        f"description supplied for it was not written. The stored "
-                        f"one is judged prose with a history trail; to replace it, "
-                        f"send apply_reflection(enrichments=[...]), which keeps the "
-                        f"wording it replaces."
-                    ),
-                    subjects=[stored_tag.id],
-                    detail={"tag": stored_tag.content, "stored": stored_tag.description},
-                )
-            )
+            advisories.append(_description_not_written(stored_tag))
         else:
             to_describe.append((key, stored_tag))
 
@@ -1457,9 +1513,17 @@ async def store_decomposition(
             f"name this graph already holds keeps the description it has."
         )
 
-    # Collected here and turned into typed edges by one net after the loop.
-    decomposed_segments: list[DecomposedSegment] = []
-    for seg_data in segments:
+    # Every node of the call is built before any tag is applied, so a tag that
+    # files under a topic this call extracts reaches it from whichever segment
+    # carries the tag.
+    built: list[
+        tuple[
+            DecomposedSegment,
+            list[tuple[EpistemicNode, list[str]]],
+            dict[str, list[ValidityInterval]],
+        ]
+    ] = []
+    for seg_index, seg_data in enumerate(segments):
         segment_id = seg_data["segment_id"]
         segment = segments_by_id.get(segment_id)
         if segment is None:
@@ -1475,8 +1539,19 @@ async def store_decomposition(
             (Fact, seg_data.get("facts", []), facts),
             (Inference, seg_data.get("inferences", []), inferences),
         ):
-            for entry in entries:
+            for entry_index, entry in enumerate(entries):
                 parsed = _decomposition_entry(entry)
+                joined_key = joins_extracted.get((seg_index, entry_index)) if cls is Topic else None
+                description = _description_field(parsed, cls)
+                # A topic a tag files under, with no description of its own,
+                # takes the one supplied for the tag, as an undescribed tag
+                # does. One it already carries stands.
+                if (
+                    joined_key is not None
+                    and not description.get("description")
+                    and joined_key in supplied_descriptions
+                ):
+                    description = {"description": supplied_descriptions[joined_key]}
                 node = cls(
                     content=parsed.content,
                     source_id=segment_id,
@@ -1496,7 +1571,7 @@ async def store_decomposition(
                         else {}
                     ),
                     **_claim_kind_field(parsed, cls),
-                    **_description_field(parsed, cls),
+                    **description,
                 )
                 bucket.append(node)
                 if parsed.validity:
@@ -1504,15 +1579,30 @@ async def store_decomposition(
                 names = doc_tag_names + parsed.tags
                 if names:
                     tag_assignments.append((node, names))
+                if joined_key is not None:
+                    tag_cache[joined_key] = node
+                    advisories.append(_tag_joined_topic(named_tags[joined_key], node))
+                    if parsed.description and joined_key in supplied_descriptions:
+                        advisories.append(_description_not_written(node))
 
-        decomposed_segments.append(
-            DecomposedSegment(
-                segment=segment,
-                topics=topics,
-                facts=facts,
-                inferences=inferences,
+        built.append(
+            (
+                DecomposedSegment(
+                    segment=segment,
+                    topics=topics,
+                    facts=facts,
+                    inferences=inferences,
+                ),
+                tag_assignments,
+                validity_by_node,
             )
         )
+
+    # Collected here and turned into typed edges by one net after the loop.
+    decomposed_segments: list[DecomposedSegment] = []
+    for decomposed, tag_assignments, validity_by_node in built:
+        decomposed_segments.append(decomposed)
+        topics, facts, inferences = decomposed.topics, decomposed.facts, decomposed.inferences
 
         seg_nodes: list[EpistemicNode] = [*topics, *facts, *inferences]
         batch_nodes.extend(seg_nodes)
@@ -1545,6 +1635,10 @@ async def store_decomposition(
         for node, names in tag_assignments:
             for name in names:
                 topic = await _tag_topic(name)
+                # A topic the tag filed under already is that name, and an edge
+                # from a node to itself would say nothing.
+                if topic.id == node.id:
+                    continue
                 batch_edges.append(
                     NodeEdge(
                         src_id=node.id,
@@ -1588,13 +1682,21 @@ async def store_decomposition(
     # Once per tag per call, whatever the tag's tally of nodes, and only where
     # the topic node does not already stand here: one batched read over the
     # tags this call resolved, rather than one per tagged node. A tag minted in
-    # this call has no edges yet and gets the edge in the same atomic batch.
+    # this call has no edges yet and gets the edge in the same atomic batch. A
+    # topic this call extracts has its edge in the batch already.
     tag_topic_ids = sorted({topic.id for topic in tag_cache.values()})
     if tag_topic_ids:
         stated = await storage.get_edges_for(
             tag_topic_ids, direction="from", edge_type=EdgeType.HAS_METACONTEXT
         )
+        written_here = {
+            edge.src_id
+            for edge in batch_edges
+            if edge.type == EdgeType.HAS_METACONTEXT and edge.dst_id == metacontext_id
+        }
         for tag_topic_id in tag_topic_ids:
+            if tag_topic_id in written_here:
+                continue
             if all(edge.dst_id != metacontext_id for edge in stated[tag_topic_id]):
                 batch_edges.extend(metacontext_edges(tag_topic_id, [metacontext_id], judge=judge))
 
@@ -2644,12 +2746,13 @@ async def _resolve_node_reference(value: str, storage: StorageBackend) -> str:
     source name (e.g. "ISSUES.md"). Falls back to the raw value if none match.
 
     The Topic branch resolves the way `_tag_topic` writes, so a name reaches the
-    topic node it made: a retirement is followed forward, and a tag is then
-    matched up to spelling. Neither applies to the branches either side of it. A
+    topic node it made or filed under: a retirement is followed forward, and the
+    name is then matched up to spelling, a tag first and then any topic node that
+    is one name with it. Neither applies to the branches either side of it. A
     node id is already an id, and normalising a document's source name would
     have `ISSUES.md` answer to `issuesmd`, which nothing asked for.
     """
-    from epimemer.pipelines.name_resolution import resolve_name, tag_by_key
+    from epimemer.pipelines.name_resolution import resolve_name, topic_by_name
 
     if await storage.get_node(value) is not None:
         return value
@@ -2657,9 +2760,9 @@ async def _resolve_node_reference(value: str, storage: StorageBackend) -> str:
     if isinstance(topic, Topic):
         return topic.id
     topics = await storage.query_nodes(node_type=NodeType.TOPIC)
-    tag = tag_by_key(value, [node for node in topics if isinstance(node, Topic)])
-    if tag is not None:
-        return tag.id
+    named = topic_by_name(value, [node for node in topics if isinstance(node, Topic)])
+    if named is not None:
+        return named.id
     doc = await storage.get_document_by_source(value)
     if doc is not None:
         return doc.id
@@ -4627,6 +4730,7 @@ async def reflect(
     its class carrying `deferred`. `deferral_defaults` is the process default
     from `ServerConfig`; `None` is the built-in one.
     """
+    from epimemer.pipelines.name_resolution import one_name
     from epimemer.pipelines.reflection.archival import (
         candidate_payload,
         nominate_archival_candidates,
@@ -4657,7 +4761,9 @@ async def reflect(
 
     model_id = embedding_provider.model_id
 
-    # 2. Find similar topic pairs for consolidation
+    # 2. Find similar topic pairs for consolidation. A pair that is one name is
+    #    offered whatever it scores, and says so, so the reader can tell a pair
+    #    the name nominated from one the vectors did.
     async def _consolidation():
         pairs = await find_similar_topic_pairs(
             storage,
@@ -4671,6 +4777,7 @@ async def reflect(
                 "topic_b": {"id": b.id, "content": b.content},
                 "similarity": round(score, 4),
             }
+            | ({"same_name": True} if one_name(a.content, b.content) else {})
             for a, b, score in pairs
         ]
 
@@ -5124,6 +5231,38 @@ _KEEP_AND_DEFER = (
 )
 
 
+def _merge_bar_refusal(
+    source_ids: list[str], weakest: PairScore, threshold: float, model_id: str
+) -> dict:
+    """A topic merge the similarity bar held back, naming the pair that held it.
+
+    The weakest pair decides the bar, so it is the one worth naming: the agent
+    learns whether the merge fell just short or was never close, and which
+    source to leave out where there were more than two.
+    """
+    a, b = weakest.a, weakest.b
+    if weakest.score is None:
+        why = (
+            f"'{a.content}' ({a.id}) and '{b.content}' ({b.id}) cannot be scored, "
+            f"because one of them has no stored embedding under {model_id}, and a "
+            f"merge whose similarity cannot be checked is refused."
+        )
+    else:
+        why = (
+            f"'{a.content}' ({a.id}) and '{b.content}' ({b.id}) score "
+            f"{weakest.score:.4f}, below the merge bar of {threshold} that every "
+            f"pair of sources must reach. Topics that are related rather than "
+            f"duplicates belong under a parent."
+        )
+    return {
+        "source_ids": source_ids,
+        "reason": why,
+        "pair": [a.id, b.id],
+        "similarity": None if weakest.score is None else round(weakest.score, 4),
+        "threshold": threshold,
+    }
+
+
 async def apply_reflection(
     storage: StorageBackend,
     embedding_provider: EmbeddingProvider,
@@ -5191,10 +5330,14 @@ async def apply_reflection(
     merges: [{source_ids: [str], content: str}] — fuse near-duplicate topics
         into one combined topic (sources retained as MERGED history). Each merge
         is applied only if *every* pair of sources clears
-        merge_similarity_threshold; otherwise it is rejected. This is the one
-        consolidation that retires nodes from the active graph, so the bar is
-        high by design — use parents for merely related (not duplicate) topics.
-        (Sources, tags, and entities are also Topics, so they consolidate here.)
+        merge_similarity_threshold; otherwise it is rejected, counted in
+        `merges_rejected` and listed in `topic_merges_refused` with the pair
+        that scored lowest, its score and the bar. Sources that are one name
+        (`one_name`), or tags of one `tag_key`, merge whatever they score. This
+        is the one consolidation that retires nodes from the active graph, so
+        the bar is high by design: use parents for merely related (not
+        duplicate) topics. (Sources, tags, and entities are also Topics, so they
+        consolidate here.)
     supersessions: [{old_id: str, by_id: str, because: str}] — resolve a
         flagged/contested node (from reflect's pending_review) by superseding
         ``old_id`` with an existing node ``by_id``. Atomic: marks old superseded
@@ -5348,7 +5491,7 @@ async def apply_reflection(
         metacontext_edges,
         shared_metacontext_set,
     )
-    from epimemer.pipelines.name_resolution import tag_key
+    from epimemer.pipelines.name_resolution import one_name, tag_key
     from epimemer.pipelines.reflection.batch_validation import (
         malformed_entries,
         refusal_message,
@@ -5367,7 +5510,10 @@ async def apply_reflection(
         SimilarityRefused,
         apply_similarity_decision,
     )
-    from epimemer.pipelines.reflection.topic_consolidation import all_pairs_above_threshold
+    from epimemer.pipelines.reflection.topic_consolidation import (
+        all_pairs_above_threshold,
+        weakest_pair,
+    )
     from epimemer.pipelines.reflection.topic_enrichment import described, reembedded
 
     # 0. Nothing is applied until the whole batch is known to be applicable.
@@ -5740,20 +5886,32 @@ async def apply_reflection(
             continue
 
         merging_tags = all(created_from_tag(s) for s in sources)
-        # One normalised name across every source is a stronger proof that these
-        # are one tag than any cosine between their spellings, and the bar cannot
-        # make that call: `claim-kind` and `claim_kind` score 0.9196 while two
-        # different days of work score 0.9935. `dev-docs/TAG_IDENTITY.md` has the
-        # measurements. Narrow on purpose: tags only, and only where the keys are
-        # equal.
-        same_tag_key = merging_tags and len({tag_key(s.content) for s in sources}) == 1
+        # One name across every source is a stronger proof that these are one
+        # topic than any cosine between them, and the bar cannot make that call:
+        # `claim-kind` and `claim_kind` score 0.9196 while two different days of
+        # work score 0.9935, and a tag scored 0.71 against the statement topic
+        # extracted under its own slug, because one embeds its description and
+        # the other does not. `dev-docs/TAG_IDENTITY.md` has the measurements.
+        # Tags pass on an equal `tag_key` alone; any other source must be
+        # tag-shaped as well, since a statement topic with a space in it is prose.
+        named_alike = one_name(*(s.content for s in sources)) or (
+            merging_tags and len({tag_key(s.content) for s in sources}) == 1
+        )
 
         # Only collapse genuine duplicates: every pair must clear the bar, or
         # the merge is refused (distinct-but-related topics are left untouched).
-        if not same_tag_key and not await all_pairs_above_threshold(
+        if not named_alike and not await all_pairs_above_threshold(
             sources, storage, model_id, merge_similarity_threshold
         ):
             merges_rejected += 1
+            # Named rather than only counted: an agent told a bare number cannot
+            # tell a pair that fell just short from one that was never close,
+            # nor which of three sources held the merge back.
+            weakest = await weakest_pair(sources, storage, model_id)
+            if weakest is not None:
+                topic_merges_refused.append(
+                    _merge_bar_refusal(source_ids, weakest, merge_similarity_threshold, model_id)
+                )
             continue
 
         # The gate facts have had since dedup, arriving late here because topic

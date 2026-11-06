@@ -60,6 +60,11 @@ class AdvisoryKind(str, Enum):
     # nothing here to proceed against; what the agent needs to know is that the
     # sentence it wrote was not the one the graph now holds.
     DESCRIPTION_NOT_WRITTEN = "description_not_written"
+    # A tag at ingest that resolved to a topic node not created from a tag, such
+    # as a topic a document extracted under the same slug. One name is one topic
+    # node, so the join is right; what the agent needs is the topic's
+    # description, which is the meaning the tag has just joined.
+    TAG_JOINED_TOPIC = "tag_joined_topic"
 
 
 class AdvisoryStance(str, Enum):
@@ -102,6 +107,7 @@ ADVISORY_STANCE: dict[AdvisoryKind, AdvisoryStance] = {
     AdvisoryKind.SAME_METACONTEXT_VARIANT: AdvisoryStance.OBJECTS,
     AdvisoryKind.SAME_METACONTEXT_CONTRADICTION: AdvisoryStance.ESCALATES,
     AdvisoryKind.DESCRIPTION_NOT_WRITTEN: AdvisoryStance.ESCALATES,
+    AdvisoryKind.TAG_JOINED_TOPIC: AdvisoryStance.ESCALATES,
 }
 
 

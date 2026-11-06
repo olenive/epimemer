@@ -66,10 +66,11 @@ nothing and reads as a clean graph.
 | `same_metacontext_variant` | `record_variant` within one metacontext | objects |
 | `same_metacontext_contradiction` | `record_contradiction` within one metacontext | escalates |
 | `description_not_written` | `store_decomposition`, for a tag this graph already describes | escalates |
+| `tag_joined_topic` | `store_decomposition`, for a tag that resolved to a topic node not created from a tag | escalates |
 
 `ADVISORY_STANCE` says whether a kind argues with the call (*objects*) or
 reports that the call was right and the result wants a person (*escalates*).
-Two kinds escalate, and they do it for different reasons.
+Three kinds escalate, and they do it for different reasons.
 `same_metacontext_contradiction` is a real conflict in one world, which is
 exactly what is worth putting to a person, and the tool that recorded it was
 the right tool. `description_not_written` reports a sentence the graph declined
@@ -77,6 +78,9 @@ to store: the ingest was right, the stored description stands because it is
 judged prose with a history trail, and what the agent needs to know is that the
 words it wrote are not the words the graph now holds. Replacing one goes
 through `apply_reflection`, where the wording it replaced is kept.
+`tag_joined_topic` reports a resolution: a tag and a topic of one name are one
+topic node (`TAG_IDENTITY.md` §1), and the warning carries that topic's
+description, which is the meaning the tag has just joined.
 
 The stance decides the journal row. `proceeded_despite_warning` is written only
 where a warning objects, because *despite* means something argued against the

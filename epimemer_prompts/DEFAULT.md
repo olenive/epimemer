@@ -173,6 +173,9 @@ from metacontexts, which change retrieval scope; these do not.
   is the name you pass; it becomes (or reuses, by name up to case and
   separators, reported in `tags_resolved_to`) a **Topic**, the topic node
   created from that tag, and a `tagged_with_topic` edge links the node to it.
+  A tag with no space in it reuses a topic of the same name the same way,
+  stored or in the same call (`foo-bar` beside a topic written `foo_bar`), and
+  the response warns with `tag_joined_topic`, giving that topic's description.
   That topic node joins the metacontext you are ingesting into, so a name ends
   up standing in every metacontext it is used from. The edge is a retrieval
   index for `find_nodes` and carries no evidential weight: corroboration
@@ -404,13 +407,15 @@ reading it and proceeding.
 `disjoint_premises`, `cross_metacontext` and `same_metacontext_variant` say *this may be
 the wrong call*; proceeding past one is journalled, whether or not the graph
 was set to show it to you, and a later agent reads those back with
-`review(mode="warning")`. Two say the reverse, that the call was right and
+`review(mode="warning")`. Three say the reverse, that the call was right and
 nothing is recorded against it: `same_metacontext_contradiction`, where the
-conflict found wants a person, and `description_not_written`, where a
+conflict found wants a person, `description_not_written`, where a
 `tag_descriptions` entry named a tag the graph already describes and the stored
-description stands. `notify_user: true` means raise it with the user, whichever
-kind it came from. `configure_warnings` sets what a graph does with them; ask the user
-before changing it.
+description stands, and `tag_joined_topic`, where a tag filed under a topic node
+of the same name that was not created from a tag; it carries that topic's
+description, so check it is what the tag means. `notify_user: true` means raise
+it with the user, whichever kind it came from. `configure_warnings` sets what a
+graph does with them; ask the user before changing it.
 
 **Human-in-the-loop.**
 - When a response returns `notify_user: true`, surface it in conversation and
@@ -603,7 +608,12 @@ if useful.
   pair still carries a `similarity`, `contradiction` or `variant_of` edge,
   because withdrawing one of those is a verdict rather than a question.
 - **Source, topic and entity consolidation** is ordinary topic merge:
-  they are Topics, so pass `merges=[...]` for synonymous ones.
+  they are Topics, so pass `merges=[...]` for synonymous ones. A merge needs
+  every pair of sources at 0.92 similarity or above, a fixed bar; one it holds
+  back comes back in `topic_merges_refused` naming the weakest pair and its
+  score. A `similar_pairs` entry marked `same_name: true` is two topic nodes
+  answering to one name, offered whatever their similarity and merged when you
+  list it.
 - **Judge every relation pair you are shown, including the ones you
   decline.** `relation_verdicts=[{pair: [a, b], kind, verdict: "distinct" |
   "synonymous", because}]`: `distinct` for two different relationships that

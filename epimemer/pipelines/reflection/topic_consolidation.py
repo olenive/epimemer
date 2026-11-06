@@ -1,11 +1,15 @@
 """Topic consolidation for the reflection layer.
 
 Finds similar topic pairs for `reflect` to nominate, holds the merge safety bar
-(`all_pairs_above_threshold`), and merges two topics into one
+(`all_pairs_above_threshold`, with `weakest_pair` naming the pair a refusal
+turned on), and merges two topics into one
 (`merge_similar_topics`, which marks the sources merged).
 """
 
 import math
+from itertools import combinations
+
+from pydantic import BaseModel
 
 from epimemer.core.types import (
     EpistemicNode,
@@ -16,6 +20,7 @@ from epimemer.core.types import (
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.pipelines.graph_construction.versioning import merge_nodes
+from epimemer.pipelines.name_resolution import tag_key, tag_shaped
 from epimemer.pipelines.reflection.pair_scoring import (
     similar_pairs,
     stack_uniform_width,
@@ -41,6 +46,26 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
+class PairScore(BaseModel):
+    """Two nodes and the cosine between their stored embeddings.
+
+    `score` is `None` where either node has no stored embedding, so their
+    similarity cannot be checked at all.
+    """
+
+    a: EpistemicNode
+    b: EpistemicNode
+    score: float | None
+
+
+async def _stored_vectors(
+    nodes: list[EpistemicNode], storage: StorageBackend, model_id: str
+) -> list[list[float] | None]:
+    """Each node's stored vector under `model_id`, in order, `None` where it has none."""
+    by_item = await storage.get_embeddings_for_items([node.id for node in nodes], model_id=model_id)
+    return [by_item[node.id][0].vector if by_item[node.id] else None for node in nodes]
+
+
 async def all_pairs_above_threshold(
     nodes: list[EpistemicNode],
     storage: StorageBackend,
@@ -53,19 +78,56 @@ async def all_pairs_above_threshold(
     near-duplicates are collapsed. Returns False if any node lacks a stored
     embedding — if similarity cannot be verified, the merge is refused.
     """
-    by_item = await storage.get_embeddings_for_items([node.id for node in nodes], model_id=model_id)
-    vectors: list[list[float]] = []
-    for node in nodes:
-        embeddings = by_item[node.id]
-        if not embeddings:
-            return False
-        vectors.append(embeddings[0].vector)
+    vectors = await _stored_vectors(nodes, storage, model_id)
+    if any(vector is None for vector in vectors):
+        return False
+    return all(
+        _cosine_similarity(a, b) >= threshold
+        for a, b in combinations([v for v in vectors if v is not None], 2)
+    )
 
-    for i in range(len(vectors)):
-        for j in range(i + 1, len(vectors)):
-            if _cosine_similarity(vectors[i], vectors[j]) < threshold:
-                return False
-    return True
+
+async def weakest_pair(
+    nodes: list[EpistemicNode], storage: StorageBackend, model_id: str
+) -> PairScore | None:
+    """The pair of `nodes` the merge bar is decided by, or `None` with no pair.
+
+    The lowest cosine among them, read from the same stored vectors
+    `all_pairs_above_threshold` reads, so a refusal names the pair that caused
+    it. A pair whose similarity cannot be checked comes first, since it fails
+    any bar.
+    """
+    vectors = await _stored_vectors(nodes, storage, model_id)
+    scored = [
+        PairScore(
+            a=nodes[i],
+            b=nodes[j],
+            score=(
+                None
+                if vectors[i] is None or vectors[j] is None
+                else _cosine_similarity(vectors[i], vectors[j])
+            ),
+        )
+        for i, j in combinations(range(len(nodes)), 2)
+    ]
+    return min(
+        scored,
+        key=lambda pair: -math.inf if pair.score is None else pair.score,
+        default=None,
+    )
+
+
+def _one_name_pairs(topics: list[Topic]) -> list[tuple[int, int]]:
+    """Every `(i, j)`, `i < j`, whose two topics are one name, in index order.
+
+    `one_name` asked of every pair, answered by grouping on `tag_key` among the
+    tag-shaped names, so the pass is linear in the topics rather than quadratic.
+    """
+    by_key: dict[str, list[int]] = {}
+    for index, topic in enumerate(topics):
+        if tag_shaped(topic.content):
+            by_key.setdefault(tag_key(topic.content), []).append(index)
+    return sorted(pair for group in by_key.values() for pair in combinations(group, 2))
 
 
 async def find_similar_topic_pairs(
@@ -75,11 +137,17 @@ async def find_similar_topic_pairs(
     similarity_threshold: float = 0.85,
     model_id: str | None = None,
 ) -> list[tuple[Topic, Topic, float]]:
-    """Find pairs of active topics with high embedding similarity.
+    """Find pairs of active topics with high embedding similarity, or one name.
 
     Retrieves all active topics from storage, looks up their stored embeddings,
     and computes pairwise cosine similarity. Returns pairs above the threshold,
     sorted by score descending.
+
+    **A pair that is one name is returned whatever it scores**, with its real
+    score. A tag embeds on its name and description and a statement topic on its
+    name alone, so a tag and a topic extracted under the same slug scored 0.71 on
+    one real graph and were never offered, while the name says they are one
+    topic.
 
     **Pairs somebody has already judged are dropped**, on the same terms as the
     fact and inference sweeps and through the same read. Without it,
@@ -125,10 +193,19 @@ async def find_similar_topic_pairs(
         return []
     topic_list = [by_id[topic_id] for topic_id in kept_ids]
 
+    scored = {
+        (i, j): similarity for i, j, similarity in similar_pairs(vectors, similarity_threshold)
+    }
+    for i, j in _one_name_pairs(topic_list):
+        scored.setdefault(
+            (i, j),
+            _cosine_similarity(topic_vectors[topic_list[i].id], topic_vectors[topic_list[j].id]),
+        )
+
     judged = await already_judged_pairs(kept_ids, storage)
     pairs = [
         (topic_list[i], topic_list[j], similarity)
-        for i, j, similarity in similar_pairs(vectors, similarity_threshold)
+        for (i, j), similarity in scored.items()
         if frozenset({topic_list[i].id, topic_list[j].id}) not in judged
     ]
 

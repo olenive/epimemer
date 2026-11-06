@@ -33,9 +33,11 @@ from epimemer.core.types import (
     EmbeddingRecord,
     Fact,
     NodeEdge,
+    Topic,
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
+from epimemer.pipelines.metacontexts import TAG_EXTRACTION_METHOD
 from epimemer.pipelines.reflection.batch_validation import (
     DELIBERATELY_PER_ENTRY,
     REQUIRED_KEYS,
@@ -515,3 +517,75 @@ class TestTheGuardDoesNotDriftFromTheCode:
             f"REQUIRED_KEYS demands {sorted(set(REQUIRED_KEYS[field]) - read)} "
             f"on a {field} entry, which apply_reflection no longer reads"
         )
+
+
+# Two unit vectors whose cosine is 0.7, about what the `table-sessions` twins
+# scored: a tag embedded on its name and description against a statement topic
+# embedded on the bare name.
+_APART_A = [1.0] + [0.0] * 7
+_APART_B = [0.7, (1 - 0.7**2) ** 0.5] + [0.0] * 6
+
+
+async def _topic_in_the_real(storage, embedding_provider, content, vector, *, tag: bool) -> Topic:
+    topic = Topic(
+        content=content,
+        source_id=None if tag else "seg-1",
+        extraction_method=TAG_EXTRACTION_METHOD if tag else "agent",
+    )
+    await storage.store_node(topic)
+    await storage.store_edge(
+        NodeEdge(src_id=topic.id, dst_id=BASE_METACONTEXT_ID, type=EdgeType.HAS_METACONTEXT)
+    )
+    await storage.store_embedding(
+        EmbeddingRecord(item_id=topic.id, model_id=embedding_provider.model_id, vector=vector)
+    )
+    return topic
+
+
+class TestATopicMergeIsDecidedByNameOrByAReason:
+    """A pair that is one name merges whatever its cosine, and a merge the bar
+    holds back says which pair held it and by how much."""
+
+    async def test_a_merge_of_topics_equal_under_tag_key_is_not_rejected_by_cosine(
+        self, storage, embedding_provider
+    ):
+        tag = await _topic_in_the_real(
+            storage, embedding_provider, "table-sessions", _APART_A, tag=True
+        )
+        statement = await _topic_in_the_real(
+            storage, embedding_provider, "table_sessions", _APART_B, tag=False
+        )
+
+        result, _ = await tools.apply_reflection(
+            storage,
+            embedding_provider,
+            merges=[{"source_ids": [tag.id, statement.id], "content": "table-sessions"}],
+        )
+
+        assert result["topics_merged"] == 1
+        assert result["merges_rejected"] == 0
+        assert result["topic_merges_refused"] == []
+
+    async def test_a_rejected_merge_names_its_reason(self, storage, embedding_provider):
+        a = await _topic_in_the_real(
+            storage, embedding_provider, "dev-session-1", _APART_A, tag=True
+        )
+        b = await _topic_in_the_real(
+            storage, embedding_provider, "dev-session-2", _APART_B, tag=True
+        )
+
+        result, _ = await tools.apply_reflection(
+            storage,
+            embedding_provider,
+            merges=[{"source_ids": [a.id, b.id], "content": "dev-session"}],
+        )
+
+        assert result["topics_merged"] == 0
+        assert result["merges_rejected"] == 1
+        (refused,) = result["topic_merges_refused"]
+        assert refused["source_ids"] == [a.id, b.id]
+        assert set(refused["pair"]) == {a.id, b.id}
+        assert refused["similarity"] == pytest.approx(0.7, abs=1e-4)
+        assert refused["threshold"] == 0.92
+        assert "0.7" in refused["reason"] and "0.92" in refused["reason"]
+        assert "'dev-session-1'" in refused["reason"] and "'dev-session-2'" in refused["reason"]
