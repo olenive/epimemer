@@ -403,7 +403,7 @@ compute, each with a `kind`, a one-sentence `message` and structured
 choosing what to write, so **read it and write differently** rather than
 reading it and proceeding.
 
-**Read the `kind`, because two of them say opposite things.**
+**Read the `kind`: the kinds fall in two groups that say opposite things.**
 `disjoint_premises`, `cross_metacontext` and `same_metacontext_variant` say *this may be
 the wrong call*; proceeding past one is journalled, whether or not the graph
 was set to show it to you, and a later agent reads those back with

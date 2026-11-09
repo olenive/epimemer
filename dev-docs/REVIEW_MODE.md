@@ -401,14 +401,14 @@ the node.
 ### 7.8 Futile cycles
 
 `merge_cycle_limit` (default 2, per graph, `configure_merge`) refuses a merge
-of a fact with that many completed merge-and-reverse cycles, counted per node
-from closed `merged` episodes, because pair matching misses `A+B` then `A+C`.
-Two cycles can be two judges disagreeing; a third is oscillation. A refusal
-rather than a warning, because agents proceed past warnings, and it names the
-setting so a legitimate merge has recourse. It runs after the
-cross-metacontext, event and unjudged-`claim_kind` refusals and before the
-similarity bar. Merging a different source set evades it, and that is
-accepted.
+of a fact or an inference with that many completed merge-and-reverse cycles,
+counted per node from closed `merged` episodes, because pair matching misses
+`A+B` then `A+C`. Two cycles can be two judges disagreeing; a third is
+oscillation. A refusal rather than a warning, because agents proceed past
+warnings, and it names the setting so a legitimate merge has recourse. It runs
+after the cross-metacontext, event and unjudged-`claim_kind` refusals and
+before the similarity bar. Merging a different source set evades it, and that
+is accepted.
 
 ### 7.9 The payload
 

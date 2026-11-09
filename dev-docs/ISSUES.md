@@ -57,7 +57,7 @@ on that path, which refuses them by construction, and fastmcp's
 anything reaches the wire. `claim_agent` logs "no elicitation channel to the
 user" and binds an approved judge unconfirmed (`description_confirmed: false`),
 even when the seat changed, which is the case the picker exists for. Seen with
-Claude Code 2.1.287.
+Claude Code 2.1.287 through 2.1.319.
 
 **Why it matters.** The user's approval on a changed seat (a new model, client
 or conversation) degrades silently to the agent's own report of who it is.
@@ -68,7 +68,7 @@ return `_NO_CHANNEL`; `tools.claim_agent` decides what `_NO_CHANNEL` means.
 
 **The decision.** Keep binding unconfirmed (today's behaviour, designed for
 clients without elicitation, and the only way writes work on Claude Code
-2.1.287), or refuse to bind when the seat changed and no question can be put,
+2.1.287 through 2.1.319), or refuse to bind when the seat changed and no question can be put,
 which blocks every write on that client? The era's own route for a question is
 a multi-round-trip result: the tool returns an `InputRequiredResult` and reads
 the answer from `ctx.input_responses` when the client calls again, which

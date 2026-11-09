@@ -90,10 +90,10 @@ its own facts, relate to siblings, and sit in a metacontext:
   `RawDocument`; a named publisher or author (`published_by`) is an entity
   **Topic**. "Which nodes came from X" is a traversal (see `find_nodes`).
 - **A tag becomes a topic node**: a *tag* is the name passed in `tags=`. It
-  resolves by name to a Topic, the topic node created from that tag, and a
-  `tagged_with_topic` edge links the node to it. Consolidating tags *is* topic
-  merge. That edge is a retrieval index and carries no evidential weight:
-  `supports` is the edge corroboration reads.
+  resolves by name to the topic node created from that tag, or to an extracted
+  topic of the same name, and a `tagged_with_topic` edge links the node to it.
+  Consolidating tags *is* topic merge. The edge is a retrieval index with no
+  evidential weight: `supports` is the edge corroboration reads.
 - **Relations are open vocabulary**: engine edges are a typed enum; user
   relations use one `RELATED` sentinel with a free `label` and a `kind`
   (`relationship`, followed in retrieval, or `attribution`, not followed).
@@ -274,11 +274,11 @@ judge**, so `reflect` returns pairs with their scores rather than verdicts.
 Every nomination has a recordable answer, including the negative one, and a
 recorded answer is not asked for again until something under it changes;
 `reopen` puts a question back without asserting anything about the answer. A
-topic merge applies only when every pair of sources clears a fixed bar that is
-not a parameter of the call, because a caller must not choose the bar its own
-merge is checked against. A merge is reversible: the record a reversal needs
-is captured on the survivor when the merge is made. Detail:
-[docs/REFLECTION.md](docs/REFLECTION.md).
+topic merge applies only when every pair of sources clears a fixed bar, or the
+sources are one name; the bar is not a parameter of the call, because a caller
+must not choose the bar its own merge is checked against. A merge is
+reversible: the record a reversal needs is captured on the survivor when the
+merge is made. Detail: [docs/REFLECTION.md](docs/REFLECTION.md).
 
 ## Agent Interface (MCP)
 
@@ -306,10 +306,10 @@ a claim was **true** is `search(valid_as_of=…)`.
 Four backends implement one `StorageBackend` protocol, in full, with no
 capability flags: **in-memory** (fast, ephemeral, used by most tests),
 **SQLite** (persistent, a file per graph and nothing to run), **SurrealDB**
-(persistent; served over `ws://`, or embedded via `mem://`, `file://` or
-`surrealkv://`) and **Postgres** (persistent, for a graph several servers
-share). Callers invoke the protocol unconditionally, and guard tests compare
-signatures.
+(served over `ws://`, or in-process via `mem://`, `file://` or `surrealkv://`
+with the `embedded` extra) and **Postgres** (persistent, for a graph several
+servers share). Callers invoke the protocol unconditionally, and guard tests
+compare signatures.
 
 ### Multi-graph support
 

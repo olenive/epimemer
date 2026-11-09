@@ -97,11 +97,30 @@ return those three.
 | `GET /api/snapshot` | `session`, `graph` | session | The snapshot (§5). Any graph the session's backend holds, not only its active one. |
 | `GET /api/embeddings` | `session`, `graph`, `node_type` (optional) | session | The embeddings (§6). |
 | `GET /api/warnings` | `session` | session | What the active graph does about warnings, in the shape the MCP tool `configure_warnings` returns, naming the graph. |
-| `GET /api/retrievals` | `session` | session | `{"records": [...]}`: this session's retrieval records, payloads included, each a serialised `RetrievalRecord` from `epimemer/mcp/retrieval_records.py`. |
+| `GET /api/retrievals` | `session` | session | `{"records": [...]}`: the session's own 20 most recent retrieval records (below) across every graph, oldest first, payloads included whatever the bind. |
 | `WS /ws` | | hub | The client event stream (§7). |
 | `WS /ingest` | | hub | The session side (§8). A client does not use it. |
 
 `backend` is the storage kind: `memory`, `sqlite`, `surrealdb` or `postgres`.
+
+**The retrieval record** is what one tool call handed the agent, the
+serialised `RetrievalRecord` from `epimemer/mcp/retrieval_records.py`. The
+route above and the `retrieval_recorded` event (§7.4) carry the same shape:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `record_id` | string | The record's place in its session, counted from one and zero-padded to twelve digits, so string order is numeric order |
+| `at` | timestamp | When the tool answered |
+| `tool` | string | The tool's name, such as `epimemer.search` |
+| `query` | string | A one-line summary of the call's input, such as `query=` and the first 50 characters of a search |
+| `graph` | string | The session's active graph when the tool answered |
+| `retrieved` | list of `{node_id, provenance, score}`, or null | The nodes the response named, at most 200. Null means the tool did not declare them, which differs from an empty list: a focus view should dim nothing for null and everything for `[]`. `provenance` is `lexical` or `segment` (a BM25 match on the node or on a segment it came from), `vector` (embedding similarity), `expanded` (reached by graph expansion from a match) or `direct` (an unranked tool); `score` is its similarity or BM25 score, null where the tool ranks nothing |
+| `truncated` | bool | True when a cap cut `retrieved` or `response_text` |
+| `response_text` | string | The text the tool returned, at most 20,000 characters |
+
+`query` and `response_text` are for display, and their wording is each
+tool's own. On a non-loopback bind (§2) the `retrieval_recorded` event carries
+both as empty strings and every other field unchanged.
 
 ## 5. The snapshot
 
@@ -360,7 +379,7 @@ than the `{"error"}` body of §4.
 
 ### 7.1 Connecting and subscribing
 
-A client opens `WS /ws`. The hub sends nothing until the client subscribes:
+A client opens `WS /ws`. The hub sends no events until the client subscribes:
 
 ```
 {"subscribe": {"session": "<session_id>", "graphs": ["<name>", ...]}}
@@ -375,12 +394,14 @@ On subscribe the hub **replays** that session's two rings, oldest first:
 the actions ring (`graph_action_recorded` and `advisory_raised`, the most
 recent 512 together, in arrival order) and then the retrievals ring
 (`retrieval_recorded`, the most recent 20). Replay is filtered by the same
-session-and-graph test the live stream uses. Replay does **not** include
-`node_stored`, `edge_stored` or any other event: a client builds its picture
-of the graph from the snapshot and then applies live events to it. The rings
-belong to the session and survive a client reload and the session
-reconnecting to the hub, but not a hub restart, and a restarted MCP server is
-a new session with empty rings.
+session-and-graph test the live stream uses, and is those two rings only: a
+client builds its picture of the graph from the snapshot and then applies
+live events to it. Pipeline events are live only, `pipeline_started` among
+them, so a client that subscribes during a run has no topology for that run
+until the next one starts. The rings belong to the session and survive a
+client reload and the session reconnecting within the 300 seconds it stays
+listed (§7.3), but not a hub restart, and a restarted MCP server is a new
+session with empty rings.
 
 ### 7.2 Every message
 
@@ -388,8 +409,8 @@ Every message the hub sends on `/ws` is one JSON object with a `seq`
 integer added. `seq` is **per connection**: it starts at 1 with the first
 message on this socket and increases by one per message of any kind, system
 messages and replay included. It says nothing about position in any
-session's stream and resets when the client reconnects. The dashboard treats
-a gap as a reason to refetch the snapshot; so should any client.
+session's stream and resets when the client reconnects. On a gap the
+dashboard highlights its Refresh button; a client should refetch the snapshot.
 
 ### 7.3 System messages
 
@@ -417,7 +438,7 @@ event carries:
 | `event_type` | string | Discriminator, below |
 | `category` | `"graph"` or `"pipeline"` | |
 | `timestamp` | timestamp | When the producer created it |
-| `graph` | string | The graph it is about; empty on a few system events |
+| `graph` | string | The graph it is about; empty on the document, segment, embedding and pipeline events |
 | `session_id` | string | Added by the hub |
 | `seq` | integer | Added by the hub, §7.2 |
 
@@ -432,11 +453,15 @@ The graph events:
 | `embedding_stored` | `item_id`, `model_id`, `dimensions` | The association only, never the vector |
 | `document_stored` | `document_id`, `content_preview`, `metadata` | |
 | `segment_stored` | `segment_id`, `source_id`, `text_preview`, `span_start`, `span_end` | |
-| `graph_action_recorded` | `action_id`, `verb`, `subjects` (ids), `counts` (dict of int), `summary`, `judged_by` (or null) | One human-meaningful act at its transaction boundary; `verb` is one of `stored`, `corrected`, `world_changed`, `merged`, `archived`, `restored`, `undetermined`, or a timeline decision kind. `action_id` is monotonic per session and is the position a log should use, since `seq` is not one |
-| `advisory_raised` | `action_id`, `tool`, `kind`, `message`, `subjects`, `detail`, `action`, `surfaced`, `notify_user`, `judged_by` | A warning a tool computed, published whether or not the agent was shown it |
-| `retrieval_recorded` | `record` (dict) | What a tool handed the agent; structural only on a non-loopback bind (§2) |
+| `graph_action_recorded` | `action_id`, `verb`, `subjects` (ids), `counts` (dict of int), `summary`, `judged_by` (or null) | One human-meaningful act at its transaction boundary; `verb` is one of `stored`, `corrected`, `world_changed`, `merged`, `archived`, `restored`, `undetermined`, or the `DecisionKind` of a timeline decision or a reopen. `action_id` is the position a log should use, since `seq` is not one |
+| `advisory_raised` | `action_id`, `tool`, `kind`, `message`, `subjects`, `detail`, `action`, `surfaced`, `notify_user`, `judged_by` (or null) | A warning a tool computed, published whether or not the agent was shown it |
+| `retrieval_recorded` | `record` | The retrieval record of §4 |
 | `graph_switched` | `previous_graph`, `new_graph` | The session's active graph changed; a `session_connected` with the new `active_graph` is sent just before it |
-| `reflect_counter_updated` | `count`, `threshold`, `suggested` | |
+| `reflect_counter_updated` | `count`, `threshold`, `suggested` | Reflection pressure changed on the graph in `graph`, the session's active one: `count` is the `store_decomposition` calls recorded there since its last reflect, `threshold` is that graph's override or else the process default, and `suggested` is `count >= threshold`. The same three as `reflect` in `GET /api/graphs` |
+
+`graph_action_recorded` and `advisory_raised` share one `action_id`
+sequence per session, counted from one and zero-padded to twelve digits so
+string order is numeric order. A client may deduplicate across both by it.
 
 The pipeline events, which describe the Petri nets the session runs
 (segment, store, reflect and the rest) and are what the dashboard's
@@ -450,6 +475,12 @@ pipeline strip draws:
 | `tokens_updated` | `pipeline_name`, `place_token_counts` (dict of int) |
 | `pipeline_completed` | `pipeline_name`, `transitions_fired`, `duration_ms` |
 | `pipeline_failed` | `pipeline_name`, `error`, `transition_name` (or null), `transitions_fired`, `duration_ms` |
+
+Pipeline events carry an empty `graph`, so every client subscribed to the
+session receives them whatever its `graphs` list. A run's only identity is
+its `pipeline_name`: two concurrent runs of one pipeline cannot be told
+apart, and a `transition_completed` is matched to its `transition_fired` by
+`pipeline_name` and `transition_name`.
 
 ### 7.5 Ordering and loss
 
@@ -483,7 +514,8 @@ The methods are `list_graphs`, `snapshot` (`{"graph"}`), `embeddings`
 
 The Pydantic models are the source of truth: the view models and events in
 `epimemer/visualization/events.py`, the session messages in
-`epimemer/visualization/protocol.py`, and `ValidityInterval` in
+`epimemer/visualization/protocol.py`, `RetrievalRecord` in
+`epimemer/mcp/retrieval_records.py`, and `ValidityInterval` in
 `epimemer/core/temporal.py`. A client in another language generates its
 types from `model_json_schema()` on those classes, or writes them by hand
 and checks them against snapshots and events a real session produced. No
@@ -503,7 +535,5 @@ number of §3 is the promise.
   bump.
 - **The contents of any `metadata` dict**, on nodes, edges, timelines or
   timepoints, except `timepoint_id` on a `timelink` edge.
-- **The retrieval record's shape**, which belongs to the MCP layer and is
-  carried opaquely here.
 - **Cross-session ordering**, and delivery of events a session could not
   send (§7.5).

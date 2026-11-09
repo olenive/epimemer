@@ -33,7 +33,7 @@ the tag, before creating anything. Two limits keep it narrow:
   slug such as `table-sessions` was written as a name, and a tag minted beside
   it split the material between two nodes, `extracted_under_topic` edges on
   one and `tagged_with_topic` edges on the other. A statement topic with a
-  space in it, such as `claim kind`, is prose and never answers to a tag.
+  space in it, such as `claim kind`, is prose and answers only to a tag of its exact spelling.
   Between two tags the key alone decides, spaces and all, and an existing tag
   answers before any other topic.
 - **The Topic branch only**, where a reference could be a node id, a Topic
@@ -53,15 +53,15 @@ one name.
 
 ### 1.1 What the similarity bar sorts
 
-Topic merge requires every pair of sources to score at least 0.92 cosine, and
-on bare tag names that bar sorts the wrong way. Over the 306 active topics of
-one real graph, eleven pairs cleared it: ten were dated session tags
-(`dev-session-2026-09-05` · `dev-session-2026-09-06` at 0.9935, down to
-0.9593), which name different days and must never merge, and one was
-`design-decisions` · `design decisions` (0.9741), which should. The other
-genuine duplicate, `claim-kind` · `claim_kind`, sat below the bar at 0.9196.
-`tag_key` gets all twelve pairs right: normalising the graph's topics
-collapses exactly those two duplicates and no others.
+Outside §1.2's exception, topic merge requires every pair of sources to score
+at least 0.92 cosine, and on bare tag names that bar sorts the wrong way. Over
+the 306 active topics of one real graph, eleven pairs cleared it: ten were
+dated session tags (`dev-session-2026-09-05` · `dev-session-2026-09-06` at
+0.9935, down to 0.9593), which name different days and must never merge, and
+one was `design-decisions` · `design decisions` (0.9741), which should. The
+other genuine duplicate, `claim-kind` · `claim_kind`, sat below the bar at
+0.9196. `tag_key` gets all twelve pairs right: normalising the graph's
+topics collapses exactly those two duplicates and no others.
 
 ### 1.2 One name clears the similarity bar
 
@@ -86,7 +86,7 @@ are a same-metacontext pair (§2), so `one_claim` is available for them.
 
 - **Moving the similarity threshold.** The pairs that must not merge score
   above both pairs that should, so no single value separates them, and the
-  bar is a default on every graph, there to stop a false merge, the most
+  bar is fixed for every graph, there to stop a false merge, the most
   damaging thing this system can do.
 - **Comparing tags by the material they tag.** The cosine between the
   centroids of each tag's tagged nodes sorts worse (`claim-kind` ·
@@ -126,7 +126,8 @@ meaning, and the material it marks is not a usable substitute.
 the nodes tagged with it.** The set is derived from use, never from a
 judgment, and it only grows: each `store_decomposition` writes a
 `has_metacontext` edge from the tag's topic node to the call's metacontext,
-unless the node already holds that edge.
+unless the node already holds that edge. A tag that resolves to an extracted
+topic (§1) stamps that node the same way, since the tag used it as a name.
 
 For a fact the union would be the worst outcome available:
 `shared_metacontext_set` says why a claim derived from a real source and a

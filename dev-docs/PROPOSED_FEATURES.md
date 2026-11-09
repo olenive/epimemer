@@ -175,7 +175,7 @@ first.
   already in hand.
 - **Value-driven consolidation thresholds.** Archival thresholds are settled
   (importance ceiling, judgment age); merge and split still key off embedding
-  similarity alone.
+  similarity and, for a topic merge, a shared name.
 - **Contradiction resolution strategy.** A contradiction between claims is
   recorded and held, and a judge can retire one side with `supersede_by`; a
   dispute about order has `resolve_temporal_contradiction`. Whether and how

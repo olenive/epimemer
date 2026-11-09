@@ -86,7 +86,7 @@ non-default `EPIMEMER_CLIENT_STATE_DIR`, give the hook the same directory with
 
 ### Verify Connection
 
-In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 59 tools.
+In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with the tools below.
 
 ## Available Tools
 

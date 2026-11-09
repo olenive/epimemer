@@ -345,7 +345,7 @@ provenance and score, and the response text. The id list and the text are
 both capped, and the record says when a cap cut them. The dashboard reads
 these: pick one and it dims everything that retrieval did *not* return. A
 record from a tool that declared no ids is listed as *not declared*, and
-picking one dims every node, the same as a retrieval that returned nothing.
+picking one dims nothing; a declared retrieval that returned nothing dims all.
 
 `retrieved` is the set of node ids **present in the response**, for every
 tool, rather than what the tool looked at: `reflect` scans the whole active

@@ -80,7 +80,7 @@ breaking a gap that costs 8px gains nothing and adds noise.
 - At most `MAX_BREAKS`, largest first; beyond that the axis stops being an
   axis.
 - Each break is a fixed-width plate labelled with the elapsed span in human
-  units ("~600 years", "3 days").
+  units ("~600 years", "~3 days").
 - Breaks are recomputed on zoom from the visible domain only, so zooming into a
   cluster dissolves the break that was hiding the space around it. Hysteresis
   stops flicker during a zoom drag: a break persists until its gap falls well
@@ -118,7 +118,7 @@ under "active only".
 
 ### 6.1 Read path
 
-The hub reads timelines through `viz_list_timelines(database)` on every
+A snapshot reads timelines through `viz_list_timelines(database)` on every
 backend, because it must read any graph of a session without switching the
 connection, and `query_timelines()` reads the active graph. `viz_*` methods
 are never registered as MCP tools or imported under `epimemer/mcp/`.
@@ -443,7 +443,7 @@ they must be different on screen; if the model refuses to claim something
 | **`temporally_followed_by`** | A small elbow connector from the end of one claim's bar to the start of the next, with a terminal dot: order, not replacement. The renderer must be cycle-safe, since recurrence makes cycles legal for this edge |
 | Status **`HISTORICAL`** | Fainter bar (lower opacity), **never hidden**: still true of its period |
 | Status **`CORRECTED`** | Hidden by default, mirroring `include_corrected=off`; struck through when summoned by choosing *Corrected* in the status filter |
-| The **now-line** | A dashed **neutral** rule across the axis, labelled "now". It is the timeline's `reference_time`, never wall-clock |
+| The **now-line** | A dashed **neutral** rule across the axis, labelled "now". It is the timeline's `reference_time`, or the wall clock where none is stated |
 
 ### 13.2 Rules: places a reasonable rendering would lie
 

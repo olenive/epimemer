@@ -467,7 +467,7 @@ which site is hot; `EXPLAIN` says whether each call is O(1) or O(table).
 ```bash
 make bench BENCH_N=1000,3000                      # in-memory
 
-docker run -d --rm --name bench-surreal -p 8001:8000 \
+docker run -d --rm --name bench-surreal -p 127.0.0.1:8001:8000 \
   surrealdb/surrealdb:latest start --user root --pass root memory
 EPIMEMER_BENCH_URL=ws://localhost:8001/rpc make bench BENCH_N=1000,2000
 docker rm -f bench-surreal

@@ -152,8 +152,8 @@ and active graph to pick in the session selector.
 
 ## B.0 Layout
 
-The knowledge graph takes most of the viewport; pipelines are ambient
-awareness. The strip sits under the graph at a fixed height and collapses from
+The graph and the timeline take most of the viewport; pipelines are ambient
+awareness. The strip runs along the bottom at a fixed height and collapses from
 the header's **Pipelines** button.
 
 - One **tile** per `pipeline_name`. Tiles persist across runs and across

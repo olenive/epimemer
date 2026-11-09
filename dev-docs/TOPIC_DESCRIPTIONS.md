@@ -18,8 +18,8 @@ review as a caller sees them.
 ### 1.1 A topic's content is its identity
 
 Topics are joined by name on `content`: `store_decomposition` resolves the
-topic node a tag names by looking for a topic whose content is the tag name,
-and `find_nodes(tagged_with_topic=...)` resolves a name the same way. Anything
+topic node a tag names by content, up to spelling, and
+`find_nodes(tagged_with_topic=...)` resolves a name the same way. Anything
 that moves `content` splits the tag: the write path mints a second topic node,
 and the read path finds nothing and returns an empty list, with no error. So
 nothing that only describes a topic may touch its `content`.
@@ -41,9 +41,9 @@ that have nothing to do with what it means. A description separates them
 ### 2.2 `content` is the name, and name resolution follows it
 
 Topic merge has to be free to name its survivor, so a lookup that stopped at
-ACTIVE would split a tag the way §1.1 describes: merge `design decisions` and
-`design-decisions` into `design-decisions`, then ingest a document tagged
-`design decisions`, and the lookup would find no live node with that name and
+ACTIVE would split a tag the way §1.1 describes: merge `design-decisions` and
+`design-choices` into `design-choices`, then ingest a document tagged
+`design-decisions`, and the lookup would find no live node with that name and
 mint a fresh one.
 
 So `resolve_name`, which both call sites use, follows a `MERGED` or
@@ -198,7 +198,7 @@ of the kind enrichment would write, embedded on `all-MiniLM-L6-v2` through
   tag resolves by name, exactly and then up to spelling. It reaches `search`
   on the bare name, where a query of `reflect` scores 0.476 against the
   described `reflect` while a query on what reflect *does* now finds it;
-  `find_nodes(tagged_with_topic=...)` keeps the exact-name path.
+  `find_nodes(tagged_with_topic=...)` resolves by name, as ingest does.
 - **Statement topics**, four real ones with a sentence of description each,
   score 0.86 to 0.96 against their own described selves: all above the 0.85
   nomination bar, two below the 0.92 merge bar.

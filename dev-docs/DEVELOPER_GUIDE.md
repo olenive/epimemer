@@ -320,8 +320,8 @@ thread.
 4. Build the Petri net factory with the `@petri_net` decorator
 5. Write tests in `tests/pipelines/test_your_pipeline.py`
 6. If it needs an MCP tool: add the function to `mcp/tools.py`, register it in
-   `mcp/server.py`, and give it `expected_graph` (see *The active graph holds
-   still*)
+   `mcp/server.py`, give it `expected_graph` (see *The active graph holds
+   still*) and, if it calls `_judge_for_write`, `judge_token`
 
 ## Adding a new storage backend
 
@@ -358,8 +358,8 @@ thread.
      backend through a bundle, at the current version, so a new backend ports
      none of SurrealDB's migrations
 2. Add tests in `tests/storage/test_your_backend.py`, and add the backend to
-   the parity fixtures in `tests/conftest.py` and
-   `tests/storage/test_storage_parity.py`
+   the fixtures in `tests/conftest.py`, `tests/storage/test_storage_parity.py`
+   and `tests/storage/test_differential.py`
 3. Add a factory branch in `epimemer/mcp/config.py`
 
 ## Comparing timestamps
@@ -411,8 +411,8 @@ passed as datetimes, so nothing is rendered to text.
 
 ```python
 await store._query("SELECT * FROM fact WHERE created_at <= $at EXPLAIN", {"at": at})
-# {'operation': 'Iterate Table'}  → unindexed, use instant()
-# {'operation': 'Iterate Index'}  → indexed, pad on write instead
+# a TableScan child ('Iterate Table' in older plans)  → unindexed, use instant()
+# an IndexScan child ('Iterate Index' in older plans) → indexed, pad on write instead
 ```
 
 ## The CLI is not a remedy an agent can reach

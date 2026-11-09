@@ -275,8 +275,8 @@ asked.
 
 ## 11. The embedded engines
 
-The `mem://` engine the unit suite runs is compiled into the SDK. Under the
-2.x SDK it is an older SurrealDB than the 3.0.5 server; under the 3.x SDK it is
+The `mem://` engine the unit suite runs comes with the SDK. The 2.x SDK bundles
+an older SurrealDB than the 3.0.5 server; the 3.x SDK's `embedded` extra brings
 SurrealDB 4.0. They differ from the server in ways the adapter has to absorb.
 For a term in `n` of a table's `N` rows, write `x = (N - n + 0.5) / (n + 0.5)`.
 

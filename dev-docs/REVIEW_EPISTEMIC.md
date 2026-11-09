@@ -123,7 +123,7 @@ active/retired distinction. `CORRECTED` is never nominated. `reflect` keeps a
 similarity sweep as a safety net, because `check_conflicts` is opt-in, and
 reports mixed active/historical pairs under `recurrences`, separate from
 `contradictions`. `store_decomposition` reports facts that are word-for-word a
-retired claim, and never acts on them.
+historical claim, and never acts on them.
 
 **Ingest order is not validity order**: a 1970s memoir ingested today is older
 truth. Direction comes from `published_at` and interval witness points where

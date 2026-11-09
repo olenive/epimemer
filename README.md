@@ -79,21 +79,24 @@ the defaults: local embeddings and **in-memory storage, lost when the server
 exits**. See [Persistence](#persistence) for the setup that keeps a graph.
 
 Any other MCP client works the same way: the server speaks stdio, and
-`epimemer serve` is the command. The
+`epimemer serve` is the command. The server sends the agent its own guidance,
+so nothing is pasted into an agent's instructions. The
 [integration guide](https://github.com/olenive/epimemer/blob/main/INTEGRATION.md)
-has the full configuration, the canonical tool table, and how the server hands
-the agent its guidance, so nothing is pasted into an agent's instructions.
+has the full configuration and the canonical tool table.
 
 ## Persistence
 
-Persistent storage is a [SurrealDB](https://surrealdb.com) server, a
-SQLite file per graph with nothing to run, or a Postgres database for a graph
-several people share (both below). **The
-storage path is the whole difference between persistent and not.** `surreal
-start` takes an optional `[PATH]` whose default is `memory`, so a server
-started without one keeps the entire graph in RAM and loses it on restart,
-with no error and no warning. Every command here passes an explicit
-`rocksdb:` path.
+Persistent storage is one of three backends: a
+[SurrealDB](https://surrealdb.com) server, a SQLite file per graph with
+nothing to run, or a Postgres database for a graph several people share.
+
+### SurrealDB: a server you run
+
+**On SurrealDB the storage path is the whole difference between persistent
+and not.** `surreal start` takes an optional `[PATH]` whose default is
+`memory`, so a SurrealDB server started without one keeps the entire graph in
+RAM and loses it on restart, with no error and no warning. Both commands below
+pass an explicit `rocksdb:` path.
 
 ```bash
 # Docker: on disk, in a named volume that outlives the container.
@@ -108,7 +111,7 @@ docker run -d --name surrealdb -p 127.0.0.1:8000:8000 \
 surreal start --user root --pass root rocksdb:epimemer.db
 ```
 
-Then register the server with the backend named:
+Then register the Epimemer server with the backend named:
 
 ```bash
 claude mcp add epimemer \
@@ -160,6 +163,7 @@ writing one graph at once. Each server keeps its own active graph and its own
 judge claims; everything else lives in Postgres, so one server sees another's
 writes as soon as they are made, and the `epimemer agents` commands work
 against it too.
+
 Each graph is a schema of its own name in the database the DSN names, created
 on first use, so the database must exist and the role must be allowed to create
 schemas in it. The DSN is a URL or `key=value` pairs, so `sslmode` and a
@@ -173,6 +177,43 @@ a role that can write to the graph's schema.
 `epimemer graphs list` prints the backend, where its graphs live and the
 graphs on it, for any backend.
 
+## Using it
+
+Ask in plain words. "Store what we decided about the billing schema" has the
+agent ingest it, and "search the graph for what we know about rate limits
+before you answer" has it look first. The server's guidance already tells the
+agent to store what is worth keeping and to search before answering, so it
+often does both unasked.
+
+Before its first write the agent asks to be approved as a judge, the name its
+decisions are recorded under. A client with an approval prompt asks you;
+otherwise approve the name yourself:
+
+```bash
+# A persistent backend: repeat the variables the server was registered with
+EPIMEMER_STORAGE_BACKEND=sqlite EPIMEMER_GRAPH=default \
+  epimemer agents confirm "<name>"
+
+# In-memory storage: register the server with the name approved
+claude mcp add epimemer -e EPIMEMER_APPROVED_AGENTS="<name>" -- epimemer serve
+```
+
+If the server is already registered, remove that registration first, because
+`claude mcp add` refuses a name that exists:
+
+```bash
+claude mcp remove epimemer
+```
+
+One optional habit for a long session is a recurring prompt. In Claude Code:
+
+```
+/loop <interval> Is there anything from our recent discussion worth storing in the Epimemer graph? Keep it high level.
+```
+
+Set the interval shorter than your client's prompt-cache period, so each run
+also keeps the cache warm.
+
 ## Configuration
 
 All configuration is via `EPIMEMER_` environment variables:
@@ -184,7 +225,7 @@ All configuration is via `EPIMEMER_` environment variables:
 | `EPIMEMER_SURREALDB_USER` | `root` | SurrealDB username |
 | `EPIMEMER_SURREALDB_PASS` | `root` | SurrealDB password |
 | `EPIMEMER_SURREALDB_NAMESPACE` | `epimemer` | SurrealDB namespace |
-| `EPIMEMER_SURREALDB_DATABASE` | `default` | The graph a SurrealDB server opens when `EPIMEMER_GRAPH` is unset; SurrealDB keeps one database per graph |
+| `EPIMEMER_SURREALDB_DATABASE` | `default` | On the SurrealDB backend, the graph the server opens when `EPIMEMER_GRAPH` is unset; SurrealDB keeps one database per graph |
 | `EPIMEMER_SQLITE_DIR` | `~/.epimemer/graphs` | For the `sqlite` backend: the directory holding one `<graph>.sqlite` file per graph, created on first use |
 | `EPIMEMER_POSTGRES_DSN` | (empty) | For the `postgres` backend: the database holding one schema per graph, as a URL or `key=value` pairs. Required with that backend: the server refuses to start without it |
 | `EPIMEMER_GRAPH` | (empty) | The graph this server opens, on any backend. Unset, the server opens `default`, or `EPIMEMER_SURREALDB_DATABASE` on SurrealDB. **Set it per server**: see [which graph a server opens](https://github.com/olenive/epimemer/blob/main/INTEGRATION.md#which-graph-a-server-opens) |
@@ -290,17 +331,20 @@ description and puts the name back, asking about each node, since only a person
 can say which sentence was the name.
 
 All of these work against a served SurrealDB, a SQLite graph or Postgres, each
-of which a second process reaches as the server does. An embedded store (the
-in-memory backend, or a `mem://`, `file://` or `surrealkv://` SurrealDB URL,
-which need `epimemer[embedded]`) lives inside the server process, so a CLI
-writing to it would write to a separate copy the running server never reads.
-For the two settings, use `EPIMEMER_APPROVED_AGENTS` and
-`EPIMEMER_REQUIRE_JUDGE` instead; the command refuses and names the right
-variable rather than appearing to succeed.
+of which a second process reaches as the server does. The CLI reads the same
+`EPIMEMER_` variables as the server, so pass the ones the server was
+registered with: a shell without them names the in-memory default. An embedded
+store (the in-memory backend, or a `mem://`, `file://` or `surrealkv://`
+SurrealDB URL, which need `epimemer[embedded]`) lives inside the server
+process, so a CLI writing to it would write to a separate copy the running
+server never reads.
+To approve a judge or require one there, set `EPIMEMER_APPROVED_AGENTS` or
+`EPIMEMER_REQUIRE_JUDGE` instead; the command refuses and names the variable
+rather than appearing to succeed.
 
 ### Backup and restore
 
-Four commands, writing the same bundles as the `backup_graph` tool:
+Four commands, built on the same bundles the `backup_graph` tool writes:
 
 ```bash
 epimemer graphs export <graph> --to <path>     # a bundle of the whole graph
@@ -333,7 +377,7 @@ The `graphs` commands run against whatever store the configuration names, an
 embedded one included, and warn there: opened from outside the server it is
 empty, so an export writes an empty bundle and an import is lost on exit.
 
-Nothing runs on a schedule: when a response says `backup_suggested`, the agent
+No backup runs on a schedule: when a response says `backup_suggested`, the agent
 asks you, and on a yes calls `backup_graph`, which writes to
 `EPIMEMER_BACKUP_DESTINATION`. `EPIMEMER_BACKUP_THRESHOLD` sets how often it asks.
 
