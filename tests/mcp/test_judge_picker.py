@@ -55,6 +55,7 @@ class _ScriptedContext:
             "storage": storage,
             "version": VERSION,
             "connection_state": connection_state,
+            "read_installed_version": lambda: None,
         }
         self._answers = list(answers)
         self.asked: list[tuple[str, dict[str, str]]] = []

@@ -467,6 +467,148 @@ class TestATagAndAnExtractedTopicOfOneName:
         assert [node["content"] for node in found["nodes"]] == ["a claim"]
 
 
+async def _extracted(storage, embedder, config, content: str) -> Topic:
+    """Store a topic extracted under `content`, with no tag in the call."""
+    await _decompose(
+        storage,
+        embedder,
+        config,
+        f"A document about {content}.",
+        [{"topics": [{"content": content, "description": TABLE_SESSIONS}]}],
+        tags=[],
+    )
+    return await _named(storage, content)
+
+
+async def _merged(storage, embedder, sources: list[Topic], content: str) -> Topic:
+    result, _ = await tools.apply_reflection(
+        storage,
+        embedder,
+        merges=[{"source_ids": [source.id for source in sources], "content": content}],
+        judge=CRITIC,
+    )
+    assert result["topics_merged"] == 1, result
+    survivor = await _named(storage, content)
+    assert not created_from_tag(survivor)
+    return survivor
+
+
+async def _tag_merged_into_topic(storage, embedder, config, survivor: str = "foo-bar") -> Topic:
+    """A tag `foo-bar` and a topic extracted as `foo_bar`, merged by a judge."""
+    await _ingest(storage, embedder, config, "First.", tags=["foo-bar"])
+    tag = await _named(storage, "foo-bar")
+    topic = await _extracted(storage, embedder, config, "foo_bar")
+    return await _merged(storage, embedder, [tag, topic], survivor)
+
+
+async def _tagged_target(storage, fact: str) -> str:
+    node = await storage.get_node_by_content(fact, node_type=NodeType.FACT)
+    [edge] = await storage.get_edges_from(node.id, edge_type=EdgeType.TAGGED_WITH_TOPIC)
+    return edge.dst_id
+
+
+class TestATagMergedIntoATopicOfItsName:
+    """A judge who merged a tag into a topic has decided the two are one.
+
+    The survivor of a mixed merge is not stamped as a tag, so it is a topic
+    node not created from a tag. Its merge history says a tag of the same key
+    was among its sources, and that is what stops `tag_joined_topic` raising
+    on every later use of the tag. The history is the survivor's own
+    `merged_from`, so a graph that already holds such a survivor needs no
+    repair.
+    """
+
+    async def test_the_tag_used_after_the_merge_raises_no_warning(self, storage, embedder, config):
+        survivor = await _tag_merged_into_topic(storage, embedder, config)
+
+        stored = await _decompose(
+            storage, embedder, config, "Later.", [{"facts": ["a claim"]}], tags=["foo-bar"]
+        )
+
+        assert _joined(stored) == []
+        assert await _tagged_target(storage, "a claim") == survivor.id
+
+    async def test_another_spelling_of_the_tag_raises_none_either(self, storage, embedder, config):
+        survivor = await _tag_merged_into_topic(storage, embedder, config)
+
+        stored = await _decompose(
+            storage, embedder, config, "Later.", [{"facts": ["a claim"]}], tags=["Foo_Bar"]
+        )
+
+        assert _joined(stored) == []
+        assert await _tagged_target(storage, "a claim") == survivor.id
+
+    async def test_a_survivor_named_otherwise_is_reached_without_a_warning(
+        self, storage, embedder, config
+    ):
+        """The tag reaches the survivor through the merge, by its retired name."""
+        survivor = await _tag_merged_into_topic(
+            storage, embedder, config, survivor="table-sessions"
+        )
+
+        stored = await _decompose(
+            storage, embedder, config, "Later.", [{"facts": ["a claim"]}], tags=["foo-bar"]
+        )
+
+        assert _joined(stored) == []
+        assert await _tagged_target(storage, "a claim") == survivor.id
+
+    async def test_a_tag_of_another_key_still_warns(self, storage, embedder, config):
+        """The survivor's own name was never a tag, so a tag of that name joins it."""
+        survivor = await _tag_merged_into_topic(
+            storage, embedder, config, survivor="table-sessions"
+        )
+
+        stored = await _decompose(
+            storage,
+            embedder,
+            config,
+            "Later.",
+            [{"facts": ["a claim"]}],
+            tags=["table-sessions"],
+        )
+
+        (warning,) = _joined(stored)
+        assert warning["subjects"] == [survivor.id]
+
+    async def test_a_survivor_merged_again_raises_none(self, storage, embedder, config):
+        """The history is followed back through a survivor among the sources."""
+        first = await _tag_merged_into_topic(storage, embedder, config)
+        another = await _extracted(storage, embedder, config, "FOO-BAR")
+        survivor = await _merged(storage, embedder, [first, another], "foo-bar")
+
+        stored = await _decompose(
+            storage, embedder, config, "Later.", [{"facts": ["a claim"]}], tags=["foo-bar"]
+        )
+
+        assert _joined(stored) == []
+        assert await _tagged_target(storage, "a claim") == survivor.id
+
+    async def test_a_merge_of_topics_alone_still_warns(self, storage, embedder, config):
+        first = await _extracted(storage, embedder, config, "foo_bar")
+        second = await _extracted(storage, embedder, config, "Foo-Bar")
+        survivor = await _merged(storage, embedder, [first, second], "foo-bar")
+
+        stored = await _decompose(
+            storage, embedder, config, "Later.", [{"facts": ["a claim"]}], tags=["foo-bar"]
+        )
+
+        (warning,) = _joined(stored)
+        assert warning["subjects"] == [survivor.id]
+
+    async def test_a_topic_never_merged_with_a_tag_warns_every_time(
+        self, storage, embedder, config
+    ):
+        topic = await _extracted(storage, embedder, config, "foo_bar")
+
+        for text in ("Monday.", "Tuesday."):
+            stored = await _decompose(
+                storage, embedder, config, text, [{"facts": [f"{text} a claim"]}], tags=["foo-bar"]
+            )
+            (warning,) = _joined(stored)
+            assert warning["subjects"] == [topic.id]
+
+
 class TestReflectNominatesOneNameByName:
     """A pair that is one name is offered whatever its cosine.
 

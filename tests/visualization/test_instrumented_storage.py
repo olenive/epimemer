@@ -532,3 +532,70 @@ class TestResegmentEvents:
             )
 
         assert received == []
+
+
+class TestMaterialEventsNameTheirGraph:
+    """A document, a segment and an embedding are stored in one graph, and the
+    event says which, so the hub's graph filter keeps a viewer of another graph
+    from receiving their previews. Every route that publishes one is here."""
+
+    GRAPH = "games"
+    TEXT = "A passage only a viewer of this graph should read."
+
+    async def _in_graph(self, bus):
+        inner = InMemoryStorage()
+        await inner.switch_database(self.GRAPH)
+        await inner.store_document(RawDocument(id="d1", content=self.TEXT))
+        received: list = []
+        bus.subscribe(handler=lambda e: received.append(e))
+        return instrument_storage(inner, bus), received
+
+    def _segment(self, segment_id: str) -> Segment:
+        return Segment(
+            id=segment_id, source_id="d1", text=self.TEXT, span_start=0, span_end=len(self.TEXT)
+        )
+
+    def _embedding(self) -> EmbeddingRecord:
+        return EmbeddingRecord(item_id="n1", model_id="test-model", vector=[0.1, 0.2])
+
+    async def test_a_stored_document_names_its_graph(self, bus):
+        wrapped, received = await self._in_graph(bus)
+
+        await wrapped.store_document(RawDocument(id="d2", content=self.TEXT))
+
+        assert [(e.event_type, e.graph) for e in received] == [("document_stored", self.GRAPH)]
+
+    async def test_a_stored_segment_names_its_graph(self, bus):
+        wrapped, received = await self._in_graph(bus)
+
+        await wrapped.store_segment(self._segment("s1"))
+
+        assert [(e.event_type, e.graph) for e in received] == [("segment_stored", self.GRAPH)]
+
+    async def test_a_recut_segment_names_its_graph(self, bus):
+        wrapped, received = await self._in_graph(bus)
+        await wrapped.store_segment(self._segment("s-old"))
+        received.clear()
+
+        await wrapped.resegment_tx(
+            "d1",
+            [self._segment("s1")],
+            segmentation={"strategy": "agent", "passages": 1, "history": []},
+        )
+
+        assert [(e.event_type, e.graph) for e in received] == [("segment_stored", self.GRAPH)]
+
+    async def test_a_stored_embedding_names_its_graph(self, bus):
+        wrapped, received = await self._in_graph(bus)
+
+        await wrapped.store_embedding(self._embedding())
+
+        assert [(e.event_type, e.graph) for e in received] == [("embedding_stored", self.GRAPH)]
+
+    async def test_an_embedding_in_a_batch_names_its_graph(self, bus):
+        wrapped, received = await self._in_graph(bus)
+
+        await wrapped.write_batch_tx(embeddings=[self._embedding()])
+
+        embedded = [e for e in received if e.event_type == "embedding_stored"]
+        assert [e.graph for e in embedded] == [self.GRAPH]

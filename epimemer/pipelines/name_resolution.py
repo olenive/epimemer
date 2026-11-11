@@ -121,6 +121,35 @@ def topic_by_name(name: str, topics: list[Topic]) -> Topic | None:
     return next((topic for topic in topics if one_name(name, topic.content)), None)
 
 
+async def merged_with_tag(topic: Topic, key: str, storage: StorageBackend) -> bool:
+    """Whether a merge made `topic` one with a topic node created from a tag of this key.
+
+    A judge who merged such a tag with another topic decided that the tag and
+    the topic are one, so a tag of that key resolving to the survivor has
+    nothing left for the caller to check. The survivor of a mixed merge is not
+    created from a tag, so this reads its merge history instead: the sources in
+    `metadata["merged_from"]`, and theirs in turn where a source was itself a
+    survivor. The history is written by every topic merge, so a survivor made
+    before this check reads the same as one made after.
+    """
+    seen = {topic.id}
+    frontier: list[EpistemicNode] = [topic]
+    while frontier:
+        source_ids = [
+            source_id
+            for node in frontier
+            for source_id in node.metadata.get("merged_from") or []
+            if isinstance(source_id, str) and source_id not in seen
+        ]
+        seen.update(source_ids)
+        found = await storage.get_nodes(source_ids)
+        sources = [node for node in found.values() if isinstance(node, Topic)]
+        if any(created_from_tag(node) and tag_key(node.content) == key for node in sources):
+            return True
+        frontier = list(sources)
+    return False
+
+
 async def resolve_name(
     name: str, storage: StorageBackend, *, node_type: NodeType = NodeType.TOPIC
 ) -> EpistemicNode | None:

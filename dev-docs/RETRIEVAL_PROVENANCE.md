@@ -21,7 +21,7 @@ with the other panels are `VISUALISATION.md`, *Rules every panel follows*.
 | 2 | Focus mode dims by **desaturation**, never opacity | Opacity already encodes node status (§4.1) |
 | 3 | Dimmed nodes stay **clickable** | The interesting click is on a dimmed node: *why didn't this come back?* |
 | 4 | Response text lives in the **detail drawer**, as a second tab | §5 |
-| 5 | Records live in the **session process** and mirror into the hub, with the mirror stripped to metadata on a non-loopback bind | Payloads are the largest and most sensitive thing the system holds, and the dashboard is usually opened *after* the retrieval looked wrong (§3.2) |
+| 5 | Records live in the **session process** and mirror into the hub; on a non-loopback bind the hub holds and serves metadata only | Payloads are the largest and most sensitive thing the system holds, and the dashboard is usually opened *after* the retrieval looked wrong (§3.2) |
 
 ---
 
@@ -142,13 +142,15 @@ guard is the bind, not the process:
 - **Non-loopback bind (`EPIMEMER_VIZ_HOST` names anything other than
   `127.0.0.1`, `::1` or `localhost`): structural metadata only.** `record_id`,
   `at`, `tool`, `graph`, `truncated` and the retrieved ids; no query text, no
-  payload (`structural_only`). The Response tab for a dead session then says
-  so plainly. While the session lives, the `retrievals` read serves the
-  payload as before.
+  payload (`structural_only`). The Response tab then says so plainly, for a
+  live session as for a dead one: the `retrievals` read is cut the same way.
 
-The strip happens at the producer: the session reads `config.viz_host`, the
-same setting the hub binds, so a payload never leaves the process by that
-route rather than travelling and being discarded on arrival.
+The strip happens twice. The session reads `config.viz_host` and sends no
+payload, so where that setting matches the hub's bind the text never leaves
+the process. The hub applies the same cut, by the address it is itself bound
+to, to every record it takes in and every record `/api/retrievals` returns,
+because a hub can be started on another address than the one a session's
+configuration names (`epimemer/visualization/exposure.py`).
 
 The event carries the record as a plain dict, because `visualization/` sits
 below `mcp/` and importing the record type upward would invert the layering.

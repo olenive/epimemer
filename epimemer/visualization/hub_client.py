@@ -116,8 +116,8 @@ async def start_hub_client(
     like every other setting; omitting it reports the built-in policy, which is
     what ``configure_warnings`` reports in that case too.
     ``records`` returns this session's retrieval records, already serialized;
-    the ``retrievals`` RPC answers from it, payloads included, which is the
-    route that still works when the hub's mirror is guarded. It is a callable
+    the ``retrievals`` RPC answers from it, payloads included, and the hub
+    cuts the answer to structural metadata on a non-loopback bind. It is a callable
     rather than the log itself so this module stays ignorant of the record
     type, exactly as ``PublishEvent.payload`` is opaque to the hub.
     """

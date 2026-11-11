@@ -157,7 +157,9 @@ rule**, "the second Tuesday of every month", is a pattern on a timeline; see
 
 A node can leave the active set more than once, so its history is an
 **append-only list** of episodes. `query_changes` reads them, which is why a
-node that retired, returned and retired again reports three events.
+node that retired, returned and retired again reports three events, and so
+does `graph_as_of`, which leaves the node out of a snapshot taken during
+either spell.
 
 ---
 
@@ -285,4 +287,5 @@ bound which answers a wrong interval affected.
   is in government"* in 1997 and 2024 is one state, while *"Labour won the
   election"* in 1997 and 2024 is two events, and the sentences alone cannot
   tell them apart. The judgment is made at ingest and stored as
-  `Fact.claim_kind`; a fact ingested without one never merges.
+  `Fact.claim_kind`; a fact ingested without one does not merge until
+  `rejudge` supplies it.

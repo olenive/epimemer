@@ -387,7 +387,9 @@ whole journal.
 `certainty_ceiling` is for **counting**, not browsing; the ordering already
 covers browsing. *"Is anything below 0.5 still outstanding before I stop?"*
 is a gate, and a gate wants a number. It is inclusive, and it leaves unrated
-rows out entirely, since blank cannot be told from ordinary.
+rows out of the list, since blank cannot be told from ordinary.
+`unrated_count` is taken before the ceiling narrows the list, so it still
+says how many decisions the ceiling could not judge.
 
 **It sees only what was decided after the journal existed.** A decision made
 before that left no row, and nothing can reconstruct one.
@@ -414,9 +416,11 @@ where that finding goes.
 an ingest record covering forty-four facts otherwise tells the graph a
 reviewer checked forty-four when it checked six.
 
-**A retry must not read as a second opinion.** The same judge confirming the
-same decision twice is refused, naming the row that already says it; a
-*different* judge is a second opinion. On a graph that does not require a
+**A retry must not read as a second opinion.** The same judge confirming a
+decision twice, or dissenting from it twice, is refused over the subjects the
+earlier review already covers, naming the row that already says it. Naming
+other subjects of the decision is new work, and a *different* judge is a
+second opinion. On a graph that does not require a
 judge, two blanks cannot be told apart, so a retry there writes a second row.
 
 ## Revising a judgment: `rejudge`

@@ -97,6 +97,7 @@ class InstrumentedStorage:
         result = await self._inner.store_document(doc)
         await self._bus.publish(
             DocumentStored(
+                graph=self._inner.current_database,
                 document_id=doc.id,
                 content_preview=doc.content[:200],
                 metadata=doc.metadata,
@@ -121,6 +122,7 @@ class InstrumentedStorage:
         result = await self._inner.store_segment(segment)
         await self._bus.publish(
             SegmentStored(
+                graph=self._inner.current_database,
                 segment_id=segment.id,
                 source_id=segment.source_id,
                 text_preview=segment.text[:200],
@@ -484,6 +486,7 @@ class InstrumentedStorage:
             for embedding in embeddings:
                 await self._bus.publish(
                     EmbeddingStored(
+                        graph=graph,
                         item_id=embedding.item_id,
                         model_id=embedding.model_id,
                         dimensions=len(embedding.vector),
@@ -691,9 +694,11 @@ class InstrumentedStorage:
         replaced = await self._inner.resegment_tx(document_id, segments, segmentation=segmentation)
         # Committed already: emission is best-effort, on `write_batch_tx`'s rule.
         try:
+            graph = self._inner.current_database
             for segment in segments:
                 await self._bus.publish(
                     SegmentStored(
+                        graph=graph,
                         segment_id=segment.id,
                         source_id=segment.source_id,
                         text_preview=segment.text[:200],
@@ -738,6 +743,7 @@ class InstrumentedStorage:
         result = await self._inner.store_embedding(embedding)
         await self._bus.publish(
             EmbeddingStored(
+                graph=self._inner.current_database,
                 item_id=embedding.item_id,
                 model_id=embedding.model_id,
                 dimensions=len(embedding.vector),

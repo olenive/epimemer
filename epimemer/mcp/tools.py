@@ -3,6 +3,12 @@
 Each function is a pure async function with explicit dependencies —
 no global state, easily testable. The MCP server layer in server.py
 calls these and wraps the results.
+
+Every Epimemer module a tool uses is imported at the top of this file, never
+inside a function. A server outlives upgrades of the package it runs, and an
+import inside a function reads its module from disk on the first call, which
+after an upgrade is the new version, written against modules the server
+loaded in their old form. `tests/mcp/test_no_late_imports.py` holds the rule.
 """
 
 import logging
@@ -111,10 +117,124 @@ from epimemer.mcp.config import (
 from epimemer.mcp.retrieval_records import RetrievedNode
 from epimemer.mcp.types import ResponseMeta
 from epimemer.pipelines.embedding_text import embedding_text
-from epimemer.pipelines.graph_construction.edge_creation import DecomposedSegment
-from epimemer.pipelines.query.types import SeedProvenance
-from epimemer.pipelines.reflection.review import SIMILARITY_NOMINATION_THRESHOLD
-from epimemer.pipelines.reflection.topic_consolidation import PairScore
+from epimemer.pipelines.graph_construction.edge_creation import DecomposedSegment, edge_creation_net
+from epimemer.pipelines.graph_construction.versioning import (
+    ReverseRefused,
+    merge_nodes,
+    plan_subtopic_edges,
+    supersede_by_existing,
+    supersede_node,
+)
+from epimemer.pipelines.graph_construction.versioning import reverse_merge as _reverse_merge
+from epimemer.pipelines.metacontext_bases import check_base, metacontext_bases, write_base
+from epimemer.pipelines.metacontext_bases import set_metacontext_base as set_base
+from epimemer.pipelines.metacontexts import (
+    TAG_EXTRACTION_METHOD,
+    ReassignmentRefused,
+    combined_metacontext_set,
+    created_from_tag,
+    metacontext_edges,
+    shared_metacontext_set,
+)
+from epimemer.pipelines.metacontexts import reassign_metacontext as reassign_edges
+from epimemer.pipelines.name_resolution import (
+    merged_with_tag,
+    one_name,
+    resolve_name,
+    tag_key,
+    topic_by_name,
+)
+from epimemer.pipelines.query.corroboration import corroboration_for
+from epimemer.pipelines.query.graph_expansion import expand_via_graph
+from epimemer.pipelines.query.hybrid_retrieval import hybrid_retrieval_net
+from epimemer.pipelines.query.types import QueryRequest, QueryResult, SeedProvenance
+from epimemer.pipelines.query.validity import validity_for, verdict_for
+from epimemer.pipelines.reflection.archival import (
+    archive_nodes,
+    candidate_payload,
+    evidence_gone_for,
+    find_archival_candidates,
+    knowledge_in_degree_for,
+    never_retrieved_exclusion,
+    nominate_archival_candidates,
+)
+from epimemer.pipelines.reflection.batch_validation import malformed_entries
+from epimemer.pipelines.reflection.batch_validation import refusal_message as batch_refusal_message
+from epimemer.pipelines.reflection.boundaries import (
+    BoundaryRefused,
+    IntervalCorrectionRefused,
+    apply_boundary,
+    boundary_question,
+    declined_boundaries_for,
+    propose_boundaries,
+    record_boundary_decline,
+)
+from epimemer.pipelines.reflection.boundaries import correct_interval as correct_interval_edge
+from epimemer.pipelines.reflection.contradiction_detection import detect_contradictions
+from epimemer.pipelines.reflection.deferral import (
+    deferral_due,
+    deferral_settings_for,
+    deferral_wait,
+    deferrals_for,
+    record_deferral,
+)
+from epimemer.pipelines.reflection.fact_dedup import merge_refusal as fact_merge_refusal
+from epimemer.pipelines.reflection.fact_dedup import merged_confidence_basis
+from epimemer.pipelines.reflection.inference_dedup import (
+    merge_advisories,
+    nominate_inference_merges,
+)
+from epimemer.pipelines.reflection.inference_dedup import merge_refusal as inference_merge_refusal
+from epimemer.pipelines.reflection.relation_consolidation import (
+    related_edges_of_active_nodes,
+    sweep_similar_relation_pairs,
+)
+from epimemer.pipelines.reflection.relation_verdicts import (
+    RelationVerdictRefused,
+    apply_relation_verdict,
+)
+from epimemer.pipelines.reflection.reopening import annotate as annotate_reopened
+from epimemer.pipelines.reflection.reopening import reopen_notes
+from epimemer.pipelines.reflection.retention import (
+    UnknownAnchors,
+    confirmed_reasons_for,
+    outstanding_reasons,
+    record_retention,
+    uncovered_reasons,
+)
+from epimemer.pipelines.reflection.review import (
+    SIMILARITY_NOMINATION_THRESHOLD,
+    gather_pending_review,
+    metacontext_resolver,
+    metacontexts_for,
+    metacontexts_of,
+    review_labels_for,
+    same_metacontext,
+)
+from epimemer.pipelines.reflection.similar_inferences import nominate_similar_inferences
+from epimemer.pipelines.reflection.similarity_decisions import (
+    SimilarityRefused,
+    apply_similarity_decision,
+    symmetric_edge_between,
+    symmetric_edges_between,
+)
+from epimemer.pipelines.reflection.soundness import find_unsound_inferences
+from epimemer.pipelines.reflection.topic_consolidation import (
+    PairScore,
+    all_pairs_above_threshold,
+    find_similar_topic_pairs,
+    weakest_pair,
+)
+from epimemer.pipelines.reflection.topic_enrichment import (
+    _should_enrich,
+    changed_since,
+    described,
+    gather_associated_material_for,
+    material_contents,
+    reembedded,
+)
+from epimemer.pipelines.reflection.topic_hierarchy import get_ancestors, get_children
+from epimemer.pipelines.reflection.topic_splitting import should_split
 from epimemer.pipelines.review.apply import (
     RejudgeRefused,
     ReviewRefused,
@@ -132,12 +252,66 @@ from epimemer.pipelines.review.modes import (
     mode_refusal,
     passes_ceiling,
 )
+from epimemer.pipelines.segmentation.anchors import refusal_message as anchor_refusal_message
+from epimemer.pipelines.segmentation.anchors import segments_from_anchors
+from epimemer.pipelines.segmentation.doubts import doubt_cut
+from epimemer.pipelines.segmentation.paragraph_split import paragraph_split_segmentation_net
+from epimemer.pipelines.segmentation.record import AGENT_STRATEGY, cut_record, recut_record
+from epimemer.pipelines.segmentation.semantic_similarity import semantic_similarity_segmentation_net
+
+# Imported as a module too: `store_decomposition`'s `propose_timepoints` flag
+# would otherwise shadow the function of the same name.
+from epimemer.pipelines.timeline import functions as timeline_functions
+from epimemer.pipelines.timeline.functions import (
+    add_timepoint,
+    find_nearest,
+    get_in_range,
+    get_timepoint,
+)
+from epimemer.pipelines.timeline.ordering import (
+    active_timepoints,
+    add_constraints,
+    bounds_for,
+    build_graph,
+    contested_points,
+    hold,
+    points_after,
+    points_before,
+    points_between,
+    retire_constraint,
+    run_checks,
+    split_timepoint,
+)
+from epimemer.pipelines.timeline.ordering import merge_timepoints as merge_points
+from epimemer.pipelines.timeline.recurrence import (
+    OCCURRENCE_CAP,
+    find_recurrence,
+    materialise,
+    materialised_ids,
+    nearest_occurrence,
+    next_occurrence,
+    occurrences_in_window,
+    preview,
+    record_exception,
+    resolve_reference_time,
+)
+from epimemer.pipelines.timeline.recurrence import add_recurrence as add_rule
+from epimemer.pipelines.timeline.recurrence import end_recurrence as end_rule
+from epimemer.pipelines.transfer import (
+    default_bundle_name,
+    export_graph,
+    prune_bundles,
+    section_counts,
+    unreachable_destination,
+    write_bundle,
+)
 from epimemer.storage.protocol import (
     MAX_DEFERRAL_CAP,
     DeferralOverrides,
     DeferralSettings,
     MergeOverrides,
     MergeSettings,
+    PassagesCited,
     StorageBackend,
     TimelineConflict,
     WarningOverrides,
@@ -153,6 +327,8 @@ from epimemer.storage.protocol import (
 )
 from epimemer.visualization.event_bus import InProcessEventBus
 from epimemer.visualization.events import AdvisoryRaised
+from epimemer.visualization.instrumented_executor import execute_with_events
+from epimemer.visualization.phase_events import phase_pipeline
 
 
 async def _run_net(
@@ -182,8 +358,6 @@ async def _run_net(
     problem, since that is process-global state mutated across `await` points.
     """
     if event_bus is not None:
-        from epimemer.visualization.instrumented_executor import execute_with_events
-
         return await execute_with_events(graph, event_bus, pipeline_name, mode=mode)
 
     summary = await Runner.run(RunContext(graph=graph, mode=mode))
@@ -304,9 +478,9 @@ def wrong_graph(
       copied database produces, the ids resolve and the call
       lands.
 
-    Exempt, and the list is short because each is *about* graphs rather than in
-    one: `list_graphs` asks which exist, `use_graph` and `delete_graph` take the
-    graph as their argument, and `viz_status` is server-level.
+    Exempt, and the list is short because none of them works in a graph:
+    `list_graphs` asks which exist, `use_graph` and `delete_graph` take the
+    graph as their argument, and `viz_status` and `guide` are server-level.
 
     **The gate lives at the MCP boundary and nowhere else** — one home for the
     policy, on `_judge_for_write`'s reasoning: a second check on its own account
@@ -679,13 +853,6 @@ async def segment_text(
     `{kind, detail}`; a doubt refuses nothing, and the passages are stored
     either way. Cuts the agent supplied are never doubted: the agent chose them.
     """
-    from epimemer.pipelines.segmentation.anchors import refusal_message, segments_from_anchors
-    from epimemer.pipelines.segmentation.doubts import doubt_cut
-    from epimemer.pipelines.segmentation.paragraph_split import paragraph_split_segmentation_net
-    from epimemer.pipelines.segmentation.record import AGENT_STRATEGY, cut_record
-    from epimemer.pipelines.segmentation.semantic_similarity import (
-        semantic_similarity_segmentation_net,
-    )
 
     if cuts is not None and segmentation_strategy is not None:
         raise ValueError(
@@ -715,7 +882,7 @@ async def segment_text(
     if cuts is not None:
         cut = segments_from_anchors(doc, cuts)
         if not isinstance(cut, list):
-            raise ValueError(refusal_message(cut, tool="segment"))
+            raise ValueError(anchor_refusal_message(cut, tool="segment"))
         segments = cut
     elif strategy == "semantic":
         seg_graph = semantic_similarity_segmentation_net(doc, embedding_provider)
@@ -807,9 +974,6 @@ async def resegment(
     a cut is material rather than a verdict about the world, and the document
     carries no judge of its own.
     """
-    from epimemer.pipelines.segmentation.anchors import refusal_message, segments_from_anchors
-    from epimemer.pipelines.segmentation.record import recut_record
-    from epimemer.storage.protocol import PassagesCited
 
     doc = await storage.get_document(document_id)
     if doc is None:
@@ -817,7 +981,7 @@ async def resegment(
 
     cut = segments_from_anchors(doc, cuts)
     if not isinstance(cut, list):
-        raise ValueError(refusal_message(cut, tool="resegment"))
+        raise ValueError(anchor_refusal_message(cut, tool="resegment"))
 
     stored = await storage.get_segments_for_document(document_id)
     segmentation = recut_record(
@@ -1300,7 +1464,9 @@ async def store_decomposition(
     linked by `tagged_with_topic` edges, so a repeated tag reuses one Topic. A
     tag-shaped name also resolves to a topic of one name that is stored or
     extracted in this call, with a `tag_joined_topic` warning naming the topic
-    and its description (`dev-docs/TAG_IDENTITY.md` §1). Each such
+    and its description (`dev-docs/TAG_IDENTITY.md` §1). A stored topic that a
+    judge already merged with a tag of the same key raises no warning, since
+    that merge decided the two are one (`merged_with_tag`). Each such
     topic node also joins this call's metacontext, once per call and only where
     it does not already stand there, so a name ends up standing in every
     metacontext it is used from. Everything is persisted in one atomic write.
@@ -1311,19 +1477,6 @@ async def store_decomposition(
     rather than being guessed into a date. Pass `propose_timepoints=False` to
     skip it entirely.
     """
-    from epimemer.pipelines.graph_construction.edge_creation import (
-        edge_creation_net,
-    )
-    from epimemer.pipelines.metacontexts import (
-        TAG_EXTRACTION_METHOD,
-        created_from_tag,
-        metacontext_edges,
-    )
-    from epimemer.pipelines.name_resolution import one_name, resolve_name, tag_key, topic_by_name
-
-    # Imported as a module: the `propose_timepoints` flag above would otherwise
-    # shadow the function of the same name.
-    from epimemer.pipelines.timeline import functions as timeline_functions
 
     # A stated metacontext must resolve *here*, for the same reason a named timeline
     # must already exist: an edge pointing at nothing isolates the node it was
@@ -1488,7 +1641,9 @@ async def store_decomposition(
                 undescribed.append(tag_name)
             continue
         tag_cache[key] = stored_tag
-        if not created_from_tag(stored_tag):
+        # A topic a judge already merged with a tag of this key is that tag:
+        # the merge was the check this warning asks the caller to make.
+        if not created_from_tag(stored_tag) and not await merged_with_tag(stored_tag, key, storage):
             advisories.append(_tag_joined_topic(tag_name, stored_tag))
         if key not in supplied_descriptions or stored_tag.id in resolved_ids:
             continue
@@ -1759,8 +1914,6 @@ async def store_decomposition(
     # updates a row that already exists — and because a description written for
     # a document that then failed to land would describe a tag by a claim the
     # graph does not hold.
-    from epimemer.pipelines.reflection.topic_enrichment import described, reembedded
-
     for supplied_key, stored_tag in to_describe:
         newly_described = described(stored_tag, supplied_descriptions[supplied_key], judge=judge)
         await storage.store_node(newly_described)
@@ -1906,8 +2059,6 @@ async def _run_retrieval(
     event_bus: InProcessEventBus | None,
 ):
     """Run the hybrid-retrieval net once and return its QueryResult."""
-    from epimemer.pipelines.query.hybrid_retrieval import hybrid_retrieval_net
-    from epimemer.pipelines.query.types import QueryResult
 
     graph = hybrid_retrieval_net(request, embedding_provider, storage)
     # Concurrent, because the net forks: the vector arm waits on the embedder
@@ -1944,7 +2095,6 @@ async def _in_metacontext_nodes(
     (`storage/active_graph.py`) exists for. Batching is faster *and* sequential,
     so the trade goes away rather than being taken.
     """
-    from epimemer.pipelines.reflection.review import metacontexts_for
 
     metacontexts_by_node = await metacontexts_for([node.id for node in nodes], storage)
     wanted = set(metacontexts)
@@ -2143,10 +2293,6 @@ async def topic_tree(
     with it: what hangs below a topic the caller will not be shown is a shape
     they cannot read.
     """
-    from epimemer.pipelines.reflection.topic_hierarchy import (
-        get_ancestors,
-        get_children,
-    )
 
     if depth < 1:
         raise ValueError("depth must be at least 1")
@@ -2293,8 +2439,6 @@ async def _date_contested_for(
     if not named:
         return {}
 
-    from epimemer.pipelines.timeline.ordering import contested_points
-
     contested: dict[str, dict[str, str]] = {}
     for timeline_id in named:
         timeline = await storage.get_timeline(timeline_id)
@@ -2429,10 +2573,6 @@ async def search(
     disables): being retrieved is what tells a used node from a merely old one.
     Ranking is unaffected — see `_record_retrieval`.
     """
-    from epimemer.pipelines.query.corroboration import corroboration_for
-    from epimemer.pipelines.query.types import QueryRequest, SeedProvenance
-    from epimemer.pipelines.query.validity import validity_for, verdict_for
-    from epimemer.pipelines.reflection.review import review_labels_for
 
     await require_metacontexts(metacontexts, storage)
 
@@ -2634,8 +2774,9 @@ async def graph_as_of(
 ) -> tuple[dict, ResponseMeta]:
     """Snapshot the active knowledge set as it stood at instant `at`.
 
-    Returns the nodes that had been created by `at` and were not yet retired then
-    (the storage `at_time` temporal filter). This is a node-lifecycle snapshot
+    Returns the nodes that had been created by `at` and were in the active set at
+    that instant (the storage `at_time` temporal filter, which reads every spell a
+    node spent out of the active set). This is a node-lifecycle snapshot
     only: edges, metacontext, and review labels are *not* time-versioned, so they
     are intentionally omitted — they would reflect the present graph, not the
     graph at `at`.
@@ -2684,7 +2825,6 @@ async def query_changes(
     present-state labels are accurate). Results are grouped per window; a node
     that changed in several windows appears in each.
     """
-    from epimemer.pipelines.reflection.review import review_labels_for
 
     nt_enums = [NodeType(t) for t in node_types] if node_types else [None]
 
@@ -2752,7 +2892,6 @@ async def _resolve_node_reference(value: str, storage: StorageBackend) -> str:
     node id is already an id, and normalising a document's source name would
     have `ISSUES.md` answer to `issuesmd`, which nothing asked for.
     """
-    from epimemer.pipelines.name_resolution import resolve_name, topic_by_name
 
     if await storage.get_node(value) is not None:
         return value
@@ -2901,8 +3040,6 @@ async def _variants_in(
     `node_types` without `fact` lists nothing. Refused when the metacontext has
     no base, because there is nothing for its facts to vary from.
     """
-    from epimemer.pipelines.metacontext_bases import metacontext_bases
-    from epimemer.pipelines.reflection.review import metacontexts_for
 
     await require_metacontext(metacontext_id, storage)
     base = (await metacontext_bases(storage, [metacontext_id])).get(metacontext_id)
@@ -3055,9 +3192,6 @@ async def list_relations(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
     naming it, with the other label, the verdict, the reason, who judged, and
     when. Newest first, both rows of a disagreement included.
     """
-    from epimemer.pipelines.reflection.relation_consolidation import (
-        related_edges_of_active_nodes,
-    )
 
     counts: dict[tuple[str, str], int] = {}
     for e in await related_edges_of_active_nodes(storage):
@@ -3359,7 +3493,6 @@ async def update(
     *replaced* and is terminal, `temporally_followed_by` says only *came after*
     and survives the same claim becoming true again.
     """
-    from epimemer.pipelines.graph_construction.versioning import supersede_node
 
     old_node = await storage.get_node(node_id)
     if old_node is None:
@@ -3462,8 +3595,6 @@ async def rename_topic(
     merged through reflect, which moves their material and keeps both
     histories.
     """
-    from epimemer.pipelines.name_resolution import tag_key
-    from epimemer.pipelines.reflection.topic_enrichment import reembedded
 
     def refused(reason: str, **extra: str) -> tuple[dict, ResponseMeta]:
         declared = [value for key, value in extra.items() if key.endswith("_id")]
@@ -3687,7 +3818,6 @@ async def supersede_by(
     evidence_stale; the existing node keeps its own edges. Unlike `update`, no
     new node is created.
     """
-    from epimemer.pipelines.graph_construction.versioning import supersede_by_existing
 
     if old_id == existing_id:
         raise ValueError("A node cannot supersede itself")
@@ -3753,7 +3883,6 @@ async def check_conflicts(
     that distinction is the entire basis for choosing between `redundant` and
     `recurs`.
     """
-    from epimemer.pipelines.reflection.review import same_metacontext
 
     model_id = embedding_provider.model_id
     conflicts: list[dict] = []
@@ -3876,7 +4005,6 @@ async def record_contradiction(
     Either way the call goes through: the graph records what the agent asserted
     and records that it was told.
     """
-    from epimemer.pipelines.reflection.review import same_metacontext
 
     if a_id == b_id:
         raise ValueError("A node cannot contradict itself")
@@ -3956,7 +4084,6 @@ async def record_variant(
     share a metacontext, a same_metacontext note is returned so the agent can reconsider (a
     same-metacontext conflict is a contradiction, not a variant).
     """
-    from epimemer.pipelines.reflection.review import same_metacontext
 
     if a_id == b_id:
         raise ValueError("A node cannot be a variant of itself")
@@ -4066,11 +4193,6 @@ async def merge_facts(
     it is where the merge records which phrasing went away — afterwards the
     `derived_from` edge points at the survivor and nothing else remembers.
     """
-    from epimemer.pipelines.graph_construction.versioning import merge_nodes
-    from epimemer.pipelines.reflection.fact_dedup import (
-        merge_refusal,
-        merged_confidence_basis,
-    )
 
     sources: list[Fact] = []
     for source_id in source_ids:
@@ -4084,7 +4206,7 @@ async def merge_facts(
             )
         sources.append(node)
 
-    refusal = await merge_refusal(
+    refusal = await fact_merge_refusal(
         sources,
         storage,
         model_id=embedding_provider.model_id,
@@ -4183,12 +4305,6 @@ async def merge_inferences(
     grounds: an agent told no has a real alternative — record `SIMILARITY` and
     keep both — and refusing out loud is how it gets to choose it.
     """
-    from epimemer.pipelines.graph_construction.versioning import merge_nodes
-    from epimemer.pipelines.reflection.fact_dedup import merged_confidence_basis
-    from epimemer.pipelines.reflection.inference_dedup import (
-        merge_advisories,
-        merge_refusal,
-    )
 
     sources: list[Inference] = []
     for source_id in source_ids:
@@ -4203,7 +4319,7 @@ async def merge_inferences(
             )
         sources.append(node)
 
-    refusal = await merge_refusal(
+    refusal = await inference_merge_refusal(
         sources,
         storage,
         model_id=embedding_provider.model_id,
@@ -4315,12 +4431,6 @@ async def reverse_merge(
     A later re-merge writes a new survivor from what is known then. The old
     wording is returned here as `survivor_content` and is not resurrected.
     """
-    from epimemer.pipelines.graph_construction.versioning import (
-        ReverseRefused,
-    )
-    from epimemer.pipelines.graph_construction.versioning import (
-        reverse_merge as _reverse_merge,
-    )
 
     outcome = await _reverse_merge(survivor_id, storage, judge=judge)
     if isinstance(outcome, ReverseRefused):
@@ -4730,34 +4840,6 @@ async def reflect(
     its class carrying `deferred`. `deferral_defaults` is the process default
     from `ServerConfig`; `None` is the built-in one.
     """
-    from epimemer.pipelines.name_resolution import one_name
-    from epimemer.pipelines.reflection.archival import (
-        candidate_payload,
-        nominate_archival_candidates,
-    )
-    from epimemer.pipelines.reflection.boundaries import propose_boundaries
-    from epimemer.pipelines.reflection.contradiction_detection import detect_contradictions
-    from epimemer.pipelines.reflection.inference_dedup import nominate_inference_merges
-    from epimemer.pipelines.reflection.relation_consolidation import sweep_similar_relation_pairs
-    from epimemer.pipelines.reflection.reopening import annotate as annotate_reopened
-    from epimemer.pipelines.reflection.reopening import reopen_notes
-    from epimemer.pipelines.reflection.review import (
-        gather_pending_review,
-        metacontext_resolver,
-        metacontexts_for,
-        same_metacontext,
-    )
-    from epimemer.pipelines.reflection.similar_inferences import nominate_similar_inferences
-    from epimemer.pipelines.reflection.soundness import find_unsound_inferences
-    from epimemer.pipelines.reflection.topic_consolidation import find_similar_topic_pairs
-    from epimemer.pipelines.reflection.topic_enrichment import (
-        _should_enrich,
-        changed_since,
-        gather_associated_material_for,
-        material_contents,
-    )
-    from epimemer.pipelines.reflection.topic_splitting import should_split
-    from epimemer.visualization.phase_events import phase_pipeline
 
     model_id = embedding_provider.model_id
 
@@ -5479,42 +5561,6 @@ async def apply_reflection(
     graph can evaluate is still refused on its own, into the matching
     ``*_refused`` list, so one already-judged pair never costs a batch.
     """
-    from epimemer.pipelines.graph_construction.versioning import (
-        merge_nodes,
-        plan_subtopic_edges,
-        supersede_by_existing,
-    )
-    from epimemer.pipelines.metacontexts import (
-        TAG_EXTRACTION_METHOD,
-        combined_metacontext_set,
-        created_from_tag,
-        metacontext_edges,
-        shared_metacontext_set,
-    )
-    from epimemer.pipelines.name_resolution import one_name, tag_key
-    from epimemer.pipelines.reflection.batch_validation import (
-        malformed_entries,
-        refusal_message,
-    )
-    from epimemer.pipelines.reflection.boundaries import (
-        BoundaryRefused,
-        apply_boundary,
-        record_boundary_decline,
-    )
-    from epimemer.pipelines.reflection.relation_verdicts import (
-        RelationVerdictRefused,
-        apply_relation_verdict,
-    )
-    from epimemer.pipelines.reflection.review import metacontexts_of
-    from epimemer.pipelines.reflection.similarity_decisions import (
-        SimilarityRefused,
-        apply_similarity_decision,
-    )
-    from epimemer.pipelines.reflection.topic_consolidation import (
-        all_pairs_above_threshold,
-        weakest_pair,
-    )
-    from epimemer.pipelines.reflection.topic_enrichment import described, reembedded
 
     # 0. Nothing is applied until the whole batch is known to be applicable.
     #    The steps below share no transaction and their order is the anchoring
@@ -5543,7 +5589,7 @@ async def apply_reflection(
         }
     )
     if malformed:
-        raise ValueError(refusal_message(malformed))
+        raise ValueError(batch_refusal_message(malformed))
 
     parents_created = 0
     # Refusals rather than counts, because a metacontext mismatch is something the
@@ -6027,8 +6073,6 @@ async def apply_reflection(
 
     archive_data: dict = {"nodes": [], "edges": []}
     if to_archive:
-        from epimemer.pipelines.reflection.archival import archive_nodes
-
         archive_data = await archive_nodes(to_archive, storage)
         await storage.set_node_status_tx(
             to_archive,
@@ -6050,16 +6094,6 @@ async def apply_reflection(
     #     a caller who asked to archive a node and to keep it has contradicted
     #     itself, and the archive is reversible while a silent keep is not
     #     visible at all.
-    from epimemer.pipelines.reflection.archival import evidence_gone_for
-    from epimemer.pipelines.reflection.retention import (
-        UnknownAnchors,
-        confirmed_reasons_for,
-        outstanding_reasons,
-        record_retention,
-        uncovered_reasons,
-    )
-    from epimemer.pipelines.reflection.review import review_labels_for
-
     retentions_recorded = 0
     retained_skipped: list[dict] = []
 
@@ -6201,17 +6235,6 @@ async def apply_reflection(
     # 7c. Record the deferrals. After the keeps for the same reason they follow
     #     the archivals: a node this batch archived is refused here as it is
     #     there, and the archive is the answer that stands.
-    from epimemer.pipelines.reflection.archival import (
-        knowledge_in_degree_for,
-        never_retrieved_exclusion,
-    )
-    from epimemer.pipelines.reflection.deferral import (
-        deferral_settings_for,
-        deferral_wait,
-        deferrals_for,
-        record_deferral,
-    )
-
     deferrals_recorded: list[dict] = []
     deferred_skipped: list[dict] = []
 
@@ -6502,17 +6525,6 @@ async def reopen(
     the act, so a reopen whose row was lost would leave a question back on the
     worklist with nothing saying it had ever been declined.
     """
-    from epimemer.pipelines.reflection.boundaries import (
-        boundary_question,
-        declined_boundaries_for,
-    )
-    from epimemer.pipelines.reflection.deferral import (
-        deferral_due,
-        deferral_settings_for,
-        deferrals_for,
-    )
-    from epimemer.pipelines.reflection.retention import confirmed_reasons_for
-    from epimemer.pipelines.reflection.similarity_decisions import symmetric_edges_between
 
     nodes = list(node_ids or [])
     labels = list(relation_labels or [])
@@ -6827,14 +6839,17 @@ async def review(
         if agent_id is None
         else (agent_aliases(judge) if judge is not None else [agent_id.strip()])
     )
-    records = await storage.query_decisions(
+    selected = await storage.query_decisions(
         kinds=MODE_KINDS.get(mode), agent_ids=judge_ids, since=since, until=until
     )
-    records = [r for r in records if passes_ceiling(r, certainty_ceiling)]
-
-    reviewed = await storage.reviewed_decision_ids([r.id for r in records])
+    reviewed = await storage.reviewed_decision_ids([r.id for r in selected])
     if mode == "unreviewed":
-        records = [r for r in records if r.id not in reviewed]
+        selected = [r for r in selected if r.id not in reviewed]
+    # Counted before the ceiling narrows the list, because the ceiling leaves
+    # every unrated row out: counted after it, this is 0 on exactly the calls
+    # where the reader most needs to know how much the ceiling could not see.
+    unrated_count = sum(1 for r in selected if r.certainty is None)
+    records = [r for r in selected if passes_ceiling(r, certainty_ceiling)]
 
     subject_ids = list(dict.fromkeys(sid for record in records for sid in record.subject_ids))
     subjects = await storage.get_nodes(subject_ids) if subject_ids else {}
@@ -6912,8 +6927,9 @@ async def review(
         "truncated": len(ordered) > len(page),
         # Three results out of four hundred unrated rows is not the same answer
         # as three out of four, and only one of them means the graph is in good
-        # shape (§6.4). Counted over everything selected, not over the page.
-        "unrated_count": sum(1 for r in records if r.certainty is None),
+        # shape (§6.4). Counted over everything selected, not over the page,
+        # and `unrated_count` over the selection before `certainty_ceiling`.
+        "unrated_count": unrated_count,
         "unattributed_count": sum(1 for r in records if r.judged_by is None),
         "unreviewed_count": sum(1 for r in records if r.id not in reviewed),
         # The value **this call** used, never what the graph would have done:
@@ -7190,9 +7206,8 @@ async def reassign_metacontext(
     Not a supersession: the claim is unchanged and the world has not moved, so
     nothing is retired and no lineage moves.
     """
-    from epimemer.pipelines.metacontexts import ReassignmentRefused, reassign_metacontext
 
-    outcome = await reassign_metacontext(
+    outcome = await reassign_edges(
         storage,
         node_id=node_id,
         withdraw=withdraw,
@@ -7245,12 +7260,6 @@ async def correct_interval(
 
     Not a supersession.
     """
-    from epimemer.pipelines.reflection.boundaries import (
-        IntervalCorrectionRefused,
-    )
-    from epimemer.pipelines.reflection.boundaries import (
-        correct_interval as correct_interval_edge,
-    )
 
     try:
         parsed = [ValidityInterval.model_validate(entry) for entry in intervals]
@@ -7330,8 +7339,6 @@ async def query_graph(
     keeps only the edges between nodes that survived, so no returned edge
     points at a node the response left out.
     """
-    from epimemer.pipelines.query.graph_expansion import expand_via_graph
-    from epimemer.pipelines.reflection.review import review_labels_for
 
     await require_metacontexts(metacontexts, storage)
 
@@ -7404,7 +7411,6 @@ async def archive(
     max_age_days: int = 90,
 ) -> tuple[dict, ResponseMeta]:
     """Find and export archival candidates to a serializable format."""
-    from epimemer.pipelines.reflection.archival import archive_nodes, find_archival_candidates
 
     candidates = await find_archival_candidates(storage, max_age_days=max_age_days)
     archive_data = await archive_nodes(candidates, storage)
@@ -7685,9 +7691,6 @@ async def _ensure_symmetric_edge(
     pair regardless of direction, so repeated recording does not accumulate
     duplicates.
     """
-    from epimemer.pipelines.reflection.similarity_decisions import (
-        symmetric_edge_between,
-    )
 
     existing = await symmetric_edge_between(a_id, b_id, edge_type, storage)
     if existing is not None:
@@ -8007,9 +8010,6 @@ async def add_timeline_timepoint(
     about its points, and a point nothing ties to them yet is not that; the
     ordering assertion that ties it in clears the holds it touches.
     """
-    from epimemer.pipelines.timeline.functions import add_timepoint
-    from epimemer.pipelines.timeline.ordering import run_checks
-    from epimemer.pipelines.timeline.recurrence import materialise
 
     materialising = recurrence_id is not None or occurrence_start is not None
     if materialising:
@@ -8108,7 +8108,6 @@ async def order_timepoints(
     Opening a contradiction does not fail the call. The graph holds the
     disagreement; it does not decide it.
     """
-    from epimemer.pipelines.timeline.ordering import add_constraints
 
     try:
         parsed_basis = IntervalBasis(basis)
@@ -8196,13 +8195,11 @@ async def resolve_temporal_contradiction(
 
     **hold**: the sources genuinely disagree and nothing on hand settles it. The
     contradiction stays open and the point stays contested, but `reflect` stops
-    nominating it until a new constraint or a new dated point touching it
-    arrives.
+    nominating it until a new constraint touching one of its points arrives.
 
     Nothing is deleted and no constraint's stored content is edited: a
     re-pointed constraint is a retirement plus a fresh one, linked.
     """
-    from epimemer.pipelines.timeline.ordering import hold, retire_constraint, split_timepoint
 
     tl = await _load_timeline(storage, timeline_id)
     at = datetime.now(UTC)
@@ -8352,7 +8349,6 @@ async def merge_timepoints(
     source that ordered them said they are not one moment, and that constraint
     has to be retired with a reason first.
     """
-    from epimemer.pipelines.timeline.ordering import merge_timepoints as merge_points
 
     tl = await _load_timeline(storage, timeline_id)
     at = datetime.now(UTC)
@@ -8522,10 +8518,6 @@ async def add_recurrence(
     is easy to mistype in a way that still parses, and without a preview the
     mistake stays invisible until someone queries a window months later.
     """
-    from epimemer.pipelines.timeline.recurrence import (
-        add_recurrence as add_rule,
-    )
-    from epimemer.pipelines.timeline.recurrence import preview
 
     periodic = anchor is not None or period is not None
     refusal = None
@@ -8621,7 +8613,6 @@ async def end_recurrence(
     so "we thought it stopped in 1990, then learned it was 1993" reads as the
     correction it is rather than overwriting the first answer.
     """
-    from epimemer.pipelines.timeline.recurrence import end_recurrence as end_rule
 
     tl = await _load_timeline(storage, timeline_id)
     at = datetime.now(UTC)
@@ -8702,7 +8693,6 @@ async def record_recurrence_exception(
     which `query_timeline` reports beside every occurrence. A moved occurrence
     keeps that start as its identity and is reported at `moved_to`.
     """
-    from epimemer.pipelines.timeline.recurrence import record_exception
 
     if kind not in ("cancelled", "moved"):
         return (
@@ -8831,24 +8821,6 @@ async def query_timeline(
     The reference time is resolved **once** and passed down, so a long call
     cannot see two different values of "now".
     """
-    from epimemer.pipelines.timeline.functions import find_nearest, get_in_range
-    from epimemer.pipelines.timeline.ordering import (
-        active_timepoints,
-        bounds_for,
-        build_graph,
-        contested_points,
-        points_after,
-        points_before,
-        points_between,
-    )
-    from epimemer.pipelines.timeline.recurrence import (
-        OCCURRENCE_CAP,
-        materialised_ids,
-        nearest_occurrence,
-        next_occurrence,
-        occurrences_in_window,
-        resolve_reference_time,
-    )
 
     if basis not in ("all", "stated"):
         raise ValueError(f"`basis` must be 'all' or 'stated', not {basis!r}")
@@ -9040,10 +9012,6 @@ async def create_timelink(
     if tl is None:
         raise ValueError(f"Timeline '{timeline_id}' not found")
 
-    from epimemer.pipelines.timeline.functions import get_timepoint
-    from epimemer.pipelines.timeline.ordering import bounds_for, build_graph, contested_points
-    from epimemer.pipelines.timeline.recurrence import find_recurrence
-
     if recurrence_id is not None:
         recurrence = find_recurrence(tl, recurrence_id)
         if recurrence is None:
@@ -9144,7 +9112,6 @@ async def create_metacontext(
     the two part (`metacontext_bases.py`). Both are checked before anything is
     written, so a refused base leaves no metacontext behind.
     """
-    from epimemer.pipelines.metacontext_bases import check_base, metacontext_bases, write_base
 
     mc = Metacontext(content=content, description=description)
     if metacontext_id:
@@ -9178,7 +9145,6 @@ async def set_metacontext_base(
     one replaces the last, and `replaced` names it. No judge and no journal
     row: like creating the metacontext, this is structure rather than a claim.
     """
-    from epimemer.pipelines.metacontext_bases import set_metacontext_base as set_base
 
     outcome = await set_base(
         storage, metacontext_id=metacontext_id, base_id=base_id, diverges=diverges
@@ -9196,7 +9162,6 @@ async def _metacontext_bases_field(
     Keyed by each named metacontext that has a base. Absent when none has one,
     so a read on a graph that records no bases answers exactly as before.
     """
-    from epimemer.pipelines.metacontext_bases import metacontext_bases
 
     if not metacontexts:
         return {}
@@ -9215,7 +9180,6 @@ async def get_metacontexts_for_node(
     storage: StorageBackend,
 ) -> tuple[dict, ResponseMeta]:
     """Get all metacontexts associated with a node, each with the base it builds on."""
-    from epimemer.pipelines.metacontext_bases import metacontext_bases
 
     node = await storage.get_node(node_id)
     if node is None:
@@ -9388,14 +9352,6 @@ async def backup_graph(
     result says how many were kept and which went. With none set nothing is
     ever deleted, and the result says nothing about retention.
     """
-    from epimemer.pipelines.transfer import (
-        default_bundle_name,
-        export_graph,
-        prune_bundles,
-        section_counts,
-        unreachable_destination,
-        write_bundle,
-    )
 
     graph = storage.current_database
     if not destination:

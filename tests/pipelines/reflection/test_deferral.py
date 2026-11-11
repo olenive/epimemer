@@ -766,22 +766,28 @@ class TestAGraphRestoredBehindItsDeferrals:
 
 
 class TestHigherClassesAndTheLimit:
-    async def _retired(self, storage, n: int) -> None:
-        from datetime import UTC, datetime, timedelta
+    async def _evidence_stale(self, storage, n: int) -> None:
+        """`n` inferences resting on one corrected premise, each an
+        `evidence_stale` nominee, the class ranked above `never_retrieved`."""
+        from datetime import UTC, datetime
 
+        premise = Fact(
+            content="The parish kept three bridges.",
+            source_id="seg-1",
+            claim_kind=ClaimKind.STATE,
+            status=NodeStatus.CORRECTED,
+            superseded_at=datetime.now(UTC),
+        )
+        await storage.store_node(premise)
         for i in range(n):
-            await storage.store_node(
-                Fact(
-                    content=f"Retired claim {i}.",
-                    source_id="seg-1",
-                    status=NodeStatus.SUPERSEDED,
-                    superseded_at=datetime.now(UTC) - timedelta(days=120),
-                    value=ValueSignal(importance=0.2),
-                )
+            inference = Inference(content=f"Inference {i} on the bridges.", source_id="seg-1")
+            await storage.store_node(inference)
+            await storage.store_edge(
+                NodeEdge(src_id=inference.id, dst_id=premise.id, type=EdgeType.DERIVED_FROM)
             )
 
     async def test_a_due_node_still_leads_the_never_retrieved_that_fit(self, storage):
-        await self._retired(storage, 19)
+        await self._evidence_stale(storage, 19)
         for n in range(3):
             await _never_retrieved(storage, f"Bridge number {n}.")
         deferred = await _never_retrieved(storage, "The parish kept a ferry.")
@@ -791,13 +797,13 @@ class TestHigherClassesAndTheLimit:
         candidates = await _nominated(storage)
 
         assert len(candidates) == 20
-        assert [c.reason for c in candidates[:19]] == ["retired"] * 19
+        assert [c.reason for c in candidates[:19]] == ["evidence_stale"] * 19
         assert candidates[19].node_id == deferred.id
 
     async def test_higher_classes_that_fill_the_limit_leave_no_room(self, storage):
         """What the guide's wording has to allow for: the placement is first among
         the never_retrieved nominees, not first in the list."""
-        await self._retired(storage, 20)
+        await self._evidence_stale(storage, 20)
         deferred = await _never_retrieved(storage, "The parish kept a ferry.")
         await _defer(storage, deferred.id)
         await _advance(storage, 2)

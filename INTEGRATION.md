@@ -69,9 +69,15 @@ confirmed across a `/mcp` reconnect, and a model switch is noticed. Add it to
 ```
 
 No matcher, so `SessionStart` fires for every start reason (startup, resume,
-clear, compact, fork). The command prints nothing and always exits 0, so a
-problem in it never breaks a session; where it records nothing it says why in
-one line on stderr.
+clear, compact, fork). The command always exits 0, so a problem in it never
+breaks a session; where it records nothing it says why in one line on stderr.
+
+The hook keeps one small record per conversation in
+`~/.epimemer/client-state` and never deletes one. When records have gone 180
+days unused, a session start shows a one-line notice, at most once a month,
+and `epimemer client-state prune` deletes them after asking. A conversation
+whose record is deleted is asked to confirm its judge again if it is picked
+up later.
 
 `$PPID` is the id of the Claude Code process running the hook, and it links
 every hook event of that process to the conversation the server was started
@@ -88,10 +94,16 @@ non-default `EPIMEMER_CLIENT_STATE_DIR`, give the hook the same directory with
 
 In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with the tools below.
 
+### After an upgrade
+
+Reconnect every client (`/mcp` in Claude Code), which restarts its server. A
+running server keeps the code and the guide it started with, and adds a
+`stale_server` warning to every response until it is restarted.
+
 ## Available Tools
 
 Claude Code prefixes each tool as `mcp__epimemer__<name>`. This table is
-the canonical list of the 59 tools; other docs link here rather than
+the canonical list of the 60 tools; other docs link here rather than
 restate the count.
 
 ### Core Memory Operations
@@ -124,7 +136,7 @@ restate the count.
 
 | Tool | Purpose |
 |------|---------|
-| `check_conflicts` | Find active facts that may conflict with the given facts. You judge each pair |
+| `check_conflicts` | Find active and historical facts that may conflict with the given facts, or say the same thing. You judge each pair |
 | `record_contradiction` | Record a same-metacontext contradiction between two facts. Both stay active |
 | `record_variant` | Record two facts as cross-metacontext variants of one proposition |
 | `merge_facts` | Collapse facts that restate one claim into a single node, keeping every source. Refuses events, cross-metacontext pairs, and facts ingested without a `claim_kind` |
@@ -162,7 +174,7 @@ and when. See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
 | Tool | Purpose |
 |------|---------|
 | `graph_as_of` | Snapshot what the graph *held* at a past instant (transaction time). For what was *true* then, use `search(valid_as_of=…)` |
-| `query_changes` | Node births and retirements across one or more time windows |
+| `query_changes` | Node births, retirements and returns across one or more time windows |
 
 ### Archival
 
@@ -228,10 +240,10 @@ project, each naming its graph, is the configuration this is built for.
 **Every tool requires an `expected_graph`**, reads as well as writes, and
 refuses to run when it is missing or names a graph the server is not on. A
 wrong-graph read is the dangerous case: it returns a plausible answer from the
-wrong data and leaves no trace. Four tools are exempt because they are about
-graphs rather than in one: `list_graphs` asks which exist, `use_graph` and
-`delete_graph` take the graph as their argument, and `viz_status` is
-server-level.
+wrong data and leaves no trace. Five tools are exempt because none of them
+works in a graph: `list_graphs` asks which exist, `use_graph` and
+`delete_graph` take the graph as their argument, and `viz_status` and `guide`
+are server-level.
 
 State the graph you meant, worked out from the user's request or from your
 own `use_graph`. Do not copy the name out of a refusal: the check works only
@@ -281,6 +293,12 @@ change it. See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
 |------|---------|
 | `viz_status` | Report this session's visualization hub URL, whether the hub can see the session, and the session id to select in the viewer |
 
+### Guide
+
+| Tool | Purpose |
+|------|---------|
+| `guide` | Read the guide to using the tools well: the list of its sections, or one section by its key |
+
 ## Agent Guidance
 
 The server carries its own guidance, so nothing needs copying into an agent's
@@ -291,10 +309,13 @@ instructions. It comes in two sizes:
   context and are kept short. They are what must hold on every call: pass
   `expected_graph`, claim a judge, name the metacontext, record every verdict,
   read `warnings` first.
-- **The guide**, `epimemer_prompts/DEFAULT.md`, is the MCP prompt `guide`:
-  when to ingest, search, reflect and review, and what each warning means. Claude Code lists it as the slash command
-  `/mcp__epimemer__guide`; an agent should pull it before nontrivial memory
-  work rather than hold it in every context.
+- **The guide**, `epimemer_prompts/DEFAULT.md`, says when to ingest, search,
+  reflect and review, and what each warning means. An agent reads it through
+  the tool `guide`: with no arguments it returns the list of sections, and
+  with a section's key it returns that section, so an agent reads only what
+  the work at hand needs. A person can read it whole as the MCP prompt
+  `guide`, which Claude Code lists as the slash command
+  `/mcp__epimemer__guide`.
 
 Both files ship with the package. A project's own instructions can still add
 to them (which graph its work goes in, what to tag it with), and the rules

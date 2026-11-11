@@ -33,7 +33,7 @@ reading of how well the record backs the claim, supplied by a judge and never
 computed. A fact also carries a **claim kind**, `state` (a condition holding
 over a period) or `event` (an occurrence), judged at ingest and read by
 deduplication, which merges states and never events. It is nullable: an
-unjudged fact never merges.
+unjudged fact does not merge until `rejudge` supplies a kind.
 
 ### Inferences
 Higher-level interpretations reasoned from facts and context. Explicitly
@@ -241,14 +241,15 @@ because it is not the knowledge claim and editing it rewrites no history:
 
 | Mutated in place | Set by | Why it is not a version |
 |---|---|---|
-| `status`, `superseded_at` | supersede / merge | this is how a node is retired, and how "what the graph held at time T" is reconstructed: transaction time, never validity |
+| `status`, `superseded_at`, `lifecycle` | supersede / merge / restore | this is how a node is retired and returned, and how "what the graph held at time T" is reconstructed: transaction time, never validity |
 | `value.confidence`, `claim_kind` | the ingesting agent at `store_decomposition`, or absent; `rejudge` revises them and keeps the replaced value on the node | a judgment about the claim rather than the claim; a correction mints a new node instead |
 | `importance`, `importance_judged_at` | `judge_importance` | a recorded assessment of the same claim, with its own reason trail |
 | `retrieved_at` | `search` | a record that the node was read, not a change to what it says |
 
 - **Current state** = all nodes with `status = "active"`.
-- **State at time T** = all nodes where `created_at <= T` and
-  (`superseded_at IS NULL` or `superseded_at > T`).
+- **State at time T** = all nodes created by T that were not retired at T.
+  Each spell out of the active set is an episode in the node's `lifecycle`,
+  so a node retired and later restored is absent for the spell in between.
 
 Archival is an **export**, never a delete, and `historical` nodes are never
 archived for age ([docs/REFLECTION.md](docs/REFLECTION.md)).
@@ -297,7 +298,8 @@ reads it back least certain first. See
 [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
 
 Historical graph state is read with `graph_as_of` (a lifecycle snapshot at a
-past instant) and `query_changes` (births and retirements across a window),
+past instant) and `query_changes` (births, retirements and returns across a
+window),
 not via an `at_time` parameter on `search`. That is *transaction* time; when
 a claim was **true** is `search(valid_as_of=…)`.
 

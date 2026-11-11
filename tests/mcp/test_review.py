@@ -574,14 +574,17 @@ class TestTheCertaintyCeiling:
         result, _ = await tools.review(storage)
         assert result["certainty_ceiling"] is None
 
-    async def test_the_unrated_it_left_out_stay_counted_nowhere_misleading(self, storage):
-        """`unrated_count` is over what was selected, and the ceiling excludes
-        every unrated row — so it reads zero rather than reporting a population
-        the filter already removed."""
+    async def test_the_unrated_it_left_out_stay_counted(self, storage):
+        """The ceiling leaves every unrated row out of the list, so the count
+        is taken before it narrows. Counted after, it is zero on every call
+        that passes a ceiling, and a gate that reads *nothing outstanding*
+        would not say how many decisions it could not judge."""
         await storage.record_decision(_row(DecisionKind.INGEST, ["a"]))
         await storage.record_decision(_row(DecisionKind.INGEST, ["b"], certainty=0.3))
+        await storage.record_decision(_row(DecisionKind.INGEST, ["c"], certainty=0.9))
 
         result, _ = await tools.review(storage, certainty_ceiling=0.5)
 
         assert len(result["decisions"]) == 1
-        assert result["unrated_count"] == 0
+        assert result["decisions_scanned"] == 1
+        assert result["unrated_count"] == 1

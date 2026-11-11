@@ -56,6 +56,7 @@ async def _test_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         # The real lifespan reads this off the installed package; every judge
         # prompt opens with it.
         "version": "9.9.9",
+        "read_installed_version": lambda: None,
     }
 
 

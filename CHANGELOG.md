@@ -4,6 +4,89 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.6] — 2026-11-11
+
+### Added
+
+- A `guide` tool serves the agent guide one section at a time. Called with no
+  arguments it returns the overview and the list of sections, with a
+  section's key it returns that section, and with `all` the whole guide. An
+  agent has no way to fetch an MCP prompt, so the guide used to reach one
+  only when a person ran the slash command. The `guide` prompt stays for
+  people. The tool takes no `expected_graph`, like the other four that do
+  not work in a graph.
+- A `stale_server` warning on every response, errors and refusals included,
+  while the server runs a different Epimemer version from the one installed. It asks
+  for a reconnect, which restarts the server. No graph setting turns it off.
+
+### Changed
+
+- The agent guide is less than half its former length. It keeps which tool a
+  situation calls for, the judgment a call leaves to the agent and what the
+  terms mean, and leaves parameters, response fields and refusals to each
+  tool's description. Fourteen statements that had drifted from the code
+  were corrected first.
+- The `expected_graph` and `judge_token` parameter descriptions, repeated on
+  55 and 27 tools, are one line each, which takes about 14,000 characters off
+  the tool listing every client loads.
+- `reflect` no longer nominates retired nodes in `archival_candidates`. The
+  `retired` class had no answer, since `apply_reflection` archives and keeps
+  only active nodes, so each nominee came back on every reflect. The
+  `archive` tool still exports old corrected and merged nodes.
+- `review` takes `unrated_count` before `certainty_ceiling` narrows the list.
+  It used to read 0 on every call that passed a ceiling, because the ceiling
+  leaves unrated decisions out.
+
+### Fixed
+
+- A server that outlives an upgrade of the package keeps working. Tools
+  imported Epimemer modules on first use, so a long-running server could load
+  a new module file against the old modules it already held, and `reflect`
+  and `apply_reflection` failed with an import error until the client
+  reconnected. Every module the server runs is now loaded at startup, and the
+  guide is read once at startup for the same reason.
+- A conversation left open for more than 30 days keeps its judge. The client
+  hook deleted every state file not written for 30 days, and an open
+  conversation has no hook event to refresh its own, so its next write was
+  refused with the model unknown and the user was asked to confirm the judge
+  again on every reconnect. The hook now deletes nothing. When files have
+  gone 180 days unused it shows a notice at session start, at most once a
+  month, and `epimemer client-state prune` deletes them after asking. A
+  server marks its conversation's files used on every call.
+- `add_timepoint`, `query_timeline`, `query_changes` and `restore` answer a
+  malformed argument with an error response. They read it before the call
+  was logged, so the client got a bare tool failure with no sentence saying
+  which argument was wrong.
+- A tag that a judge merged into a topic of the same name no longer raises
+  `tag_joined_topic` on every later use. A tag that joins a topic it was
+  never merged with still warns each time.
+- `graph_as_of` leaves a node out for every spell it spent retired. It read
+  only the node's current retirement time, so a node retired and later
+  restored was reported as active during the spell in between.
+- Tool descriptions that said something other than what the server does. A
+  fact with no `claim_kind` merges once `rejudge` supplies one. Across
+  metacontexts only a `one_claim` verdict is refused. A topic merge of
+  nothing but topic nodes created from tags is allowed across metacontexts.
+  A repeated review is refused only over subjects it already covers. A held
+  temporal contradiction lifts on a new ordering constraint and never on a
+  new dated point alone. `reflect` names `similar_pairs`, `split_candidates`,
+  `contradictions` and `inference_merge_candidates`. `merge_facts` advises
+  keeping both facts and recording nothing when unsure; it used to advise a
+  similarity link, which counts the second fact's sources as support.
+
+### Security
+
+- A hub bound to a non-loopback address hands out no retrieval text.
+  `/api/retrievals` returned whole records, query and response text included,
+  to anyone who could reach the hub, and a hub started on another address
+  than a session's configuration named kept whole records and replayed them.
+  The hub now cuts every record it takes in and every record it serves to
+  structural metadata, going by the address it is itself bound to. On a
+  loopback bind nothing changes.
+- Document, segment and embedding events carry the graph they happened in.
+  They carried none, so a visualiser open on one graph received another
+  graph's document and segment previews. Pipeline events stay session-wide.
+
 ## [0.4.5] — 2026-11-06
 
 ### Changed

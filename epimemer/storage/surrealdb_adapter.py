@@ -52,6 +52,7 @@ from epimemer.core.types import (
     moved_edge_types,
     recorded_relation_label,
     standing_relation_pairs,
+    was_active_at,
     with_retirement,
     with_return,
 )
@@ -2084,16 +2085,18 @@ class SurrealDBStorage:
                     {"status": status.value},
                 )
             else:
+                # Active at that instant, whatever the status is now. The query
+                # finds what was born by then and `was_active_at` decides the
+                # rest, from the spells out of the active set.
                 rows = await self._query(
-                    f"SELECT * FROM {table} WHERE "
-                    f"{instant('created_at')} <= {instant('$at_time')} "
-                    f"AND (superseded_at IS NONE "
-                    f"OR {instant('superseded_at')} > {instant('$at_time')})",
+                    f"SELECT * FROM {table} WHERE {instant('created_at')} <= {instant('$at_time')}",
                     {"at_time": at_time.isoformat()},
                 )
             results.extend(_record_to_node(table, r) for r in rows)
 
-        return results
+        if at_time is None:
+            return results
+        return [node for node in results if was_active_at(node, at_time)]
 
     async def get_node_by_content(
         self,

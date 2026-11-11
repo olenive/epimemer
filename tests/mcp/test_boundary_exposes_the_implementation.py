@@ -52,6 +52,11 @@ NO_IMPLEMENTATION: dict[str, str] = {
         "visualization state (`ctx.lifespan_context`) rather than the graph, so "
         "there is no storage-facing function to compare against"
     ),
+    "epimemer_guide": (
+        "implemented in `guidance` — it reads the guide that ships in the "
+        "package rather than the graph, so there is no storage-facing function "
+        "to compare against"
+    ),
 }
 
 # Arguments the boundary supplies rather than the agent, with the reason. The

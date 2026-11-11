@@ -54,6 +54,8 @@ def _deps(viz_session=None, viz_hub_url=None) -> dict:
         "viz_hub_url": viz_hub_url,
         "retrievals": new_record_log(),
         "connection_state": new_connection_state(),
+        "version": "test",
+        "read_installed_version": lambda: None,
     }
 
 
@@ -96,7 +98,7 @@ async def test_viz_status_reports_unreachable_hub():
 
 
 async def test_viz_status_connected_with_live_hub():
-    app = create_hub_app()
+    app = create_hub_app(bind_host="127.0.0.1")
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(("127.0.0.1", 0))

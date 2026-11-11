@@ -137,8 +137,11 @@ optional in the MCP handshake and Claude Code sends none.
 - **Accepted hole**: a subagent shares its parent's conversation id and so its
   seat; tokens still keep their writes apart (§3.2).
 - **Bounds, not expiry**: the newest `JUDGE_CONFIRMATIONS_KEPT` (500)
-  confirmations per graph, ordered by instant; client-state files are pruned
-  after 30 days unwritten.
+  confirmations per graph, ordered by instant. Client-state files are never
+  deleted for their age, because a conversation left open has no hook event
+  to refresh its file and would lose its seat. The hook gives notice of files
+  180 days unused, `epimemer client-state prune` deletes them when the user
+  runs it, and a server marks its conversation's files used on every call.
 
 ---
 
@@ -300,7 +303,9 @@ excluding unrated rows, because blank cannot be told from ordinary.
 - **Capped at `REVIEW_MAX_RESULTS` (200), reporting `truncated`**, because the
   journal is unbounded. `unrated_count`, `unattributed_count` and
   `unreviewed_count` cover the whole selection; only `by_agent` excludes
-  unattributed rows.
+  unattributed rows. `unrated_count` is taken before `certainty_ceiling`
+  narrows it, because the ceiling leaves every unrated row out and the count
+  is what says how many it could not judge.
 - **`apply_review` is the only writer of a review**, because an unrecorded
   agreement makes the next reviewer repeat the work.
 - **A dissent performs no undo.** Each undo has its own tool and refusals

@@ -78,7 +78,9 @@ async def _wired() -> AsyncIterator[SimpleNamespace]:
     sock.bind(("127.0.0.1", 0))
     addr = f"127.0.0.1:{sock.getsockname()[1]}"
 
-    server = uvicorn.Server(uvicorn.Config(create_hub_app(), log_level="warning", lifespan="off"))
+    server = uvicorn.Server(
+        uvicorn.Config(create_hub_app(bind_host="127.0.0.1"), log_level="warning", lifespan="off")
+    )
     serving = asyncio.create_task(server.serve(sockets=[sock]))
     for _ in range(300):
         if server.started:
@@ -108,6 +110,8 @@ async def _wired() -> AsyncIterator[SimpleNamespace]:
             "viz_hub_url": None,
             "retrievals": log,
             "connection_state": new_connection_state(),
+            "version": "test",
+            "read_installed_version": lambda: None,
         }
 
     original = epimemer_mcp._lifespan

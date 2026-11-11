@@ -6,13 +6,12 @@ envelope and the retrieval record. The tools' bodies are in `tools.py`.
 """
 
 import asyncio
-import importlib.metadata
 import json
 import logging
 import os
 import secrets
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence, Sized
 from contextlib import asynccontextmanager, nullcontext
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -24,8 +23,9 @@ from epimemer import client_state
 from epimemer.core.seat import Seat, seat_changes
 from epimemer.core.types import Agent, JudgeRef
 from epimemer.logging.structured import ToolInvocationLog, log_tool_call, setup_logging
-from epimemer.mcp import guidance, tools
+from epimemer.mcp import guidance, staleness, tools
 from epimemer.mcp.config import (
+    ServerConfig,
     create_embedding_provider,
     create_storage,
     deferral_defaults,
@@ -42,7 +42,13 @@ from epimemer.mcp.retrieval_records import (
 )
 from epimemer.mcp.types import ResponseMeta, ToolResponse
 from epimemer.pipelines.reflection.review import SIMILARITY_NOMINATION_THRESHOLD
+from epimemer.visualization.event_bus import create_event_bus
 from epimemer.visualization.events import RetrievalRecorded
+from epimemer.visualization.exposure import on_loopback
+from epimemer.visualization.hub import ensure_hub_running, hub_sessions, probe_health
+from epimemer.visualization.hub_client import start_hub_client
+from epimemer.visualization.instrumented_storage import instrument_storage
+from epimemer.visualization.protocol import SessionInfo
 
 
 def _parse_utc(value: str) -> datetime:
@@ -130,10 +136,7 @@ def installed_version() -> str:
     "unknown" is a truthful answer to a question that costs nothing to get
     wrong.
     """
-    try:
-        return importlib.metadata.version("epimemer")
-    except importlib.metadata.PackageNotFoundError:
-        return "unknown"
+    return staleness.read_installed_version() or staleness.UNKNOWN_VERSION
 
 
 def new_connection_state() -> dict:
@@ -196,8 +199,14 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         # Which Epimemer the user is talking to, read once here and carried as a
         # value like everything else in this dict. It opens every prompt that asks
         # the user to place a judge, because a person answering that question wants
-        # to know which server put it.
+        # to know which server put it, and every tool call compares it with the
+        # version installed by then.
         version = installed_version()
+
+        # The full guide, read once here for the same reason: a package upgraded
+        # underneath this process would otherwise have it serve a guide written
+        # for code it is not running.
+        guide = guidance.guide()
 
         # Optional: publish visualization events to the standalone hub. This process
         # never binds the viz port itself, it dials out to the hub (auto-spawning one
@@ -212,12 +221,6 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         # was handed, and that is worth keeping even with nobody watching.
         retrievals = new_record_log()
         if config.viz_enabled:
-            from epimemer.visualization.event_bus import create_event_bus
-            from epimemer.visualization.hub import ensure_hub_running
-            from epimemer.visualization.hub_client import start_hub_client
-            from epimemer.visualization.instrumented_storage import instrument_storage
-            from epimemer.visualization.protocol import SessionInfo
-
             event_bus = create_event_bus()
             raw_storage = storage  # pre-instrumentation, for viz snapshot reads
             storage = instrument_storage(
@@ -280,6 +283,10 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
             "embedding_provider": embedding_provider,
             "config": config,
             "version": version,
+            # Reads the installed version from disk, on every tool call: the
+            # package can be upgraded underneath a running server.
+            "read_installed_version": staleness.read_installed_version,
+            "guide": guide,
             "event_bus": event_bus,
             "viz_session": viz_session,
             "viz_hub_url": viz_hub_url,
@@ -296,7 +303,8 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
 
 # The instructions string reaches every client on connect, so it carries the
 # rules that must hold on every call; the full guide is the `guide` prompt
-# below, pulled when the work calls for it. The version travels in the same
+# below for a person and the `guide` tool for an agent, pulled when the work
+# calls for it. The version travels in the same
 # handshake, where a client's server listing shows it: left out, FastMCP
 # reports its own library version there in Epimemer's name.
 mcp = FastMCP(
@@ -314,14 +322,30 @@ mcp = FastMCP(
     "Read it before nontrivial memory work; the per-call rules are already in "
     "the server instructions.",
 )
-def guide_prompt() -> str:
-    return guidance.guide()
+def guide_prompt(ctx: Context) -> str:
+    return ctx.lifespan_context["guide"]
 
 
-def _build_response(result: dict, meta: ResponseMeta, latency_ms: float) -> str:
-    """Build a JSON-serialized ToolResponse with timing."""
+def _stale_warning(deps: dict) -> dict | None:
+    """The `stale_server` entry for a response built now, or None.
+
+    Every response a tool hands back is built by `_build_response` or
+    `_error_response`, and both take this entry as a required argument, so a
+    response that leaves a tool by another route than `_run_with_timeout`
+    still says when the server is stale.
+    """
+    return staleness.stale_server_entry(deps["version"], deps["read_installed_version"]())
+
+
+def _build_response(
+    result: dict, meta: ResponseMeta, latency_ms: float, warning: dict | None
+) -> str:
+    """Build a JSON-serialized ToolResponse with timing.
+
+    `warning`, from `_stale_warning`, goes in the result's `warnings`.
+    """
     meta.latency_ms = latency_ms
-    response = ToolResponse(result=result, meta=meta)
+    response = ToolResponse(result=staleness.with_warning(result, warning), meta=meta)
     return response.model_dump_json(by_alias=True)
 
 
@@ -346,15 +370,26 @@ def _log(
     )
 
 
-def _error_response(error: str, latency_ms: float) -> str:
+def _error_response(error: str, latency_ms: float, warning: dict | None) -> str:
     """Build a JSON error response, carrying the time the call took.
 
     The latency is required rather than defaulted: a failure's time is as much
     a fact about the call as a success's, and a default would report 0 for
-    every caller that forgot it.
+    every caller that forgot it. `warning`, from `_stale_warning`, is required
+    for the same reason and goes in the response's `warnings`.
     """
     meta = ResponseMeta(latency_ms=latency_ms)
-    return json.dumps({"error": error, "_meta": meta.model_dump()})
+    body = staleness.with_warning({"error": error}, warning)
+    return json.dumps({**body, "_meta": meta.model_dump()})
+
+
+def _length(value: object) -> str:
+    """The length of an argument, for a call's log line, or `?` where it has none.
+
+    The log line is written before the call runs, so it must not be the place
+    a malformed argument raises: the call itself refuses it, with a response.
+    """
+    return str(len(value)) if isinstance(value, Sized) else "?"
 
 
 def _elapsed_ms(start: float) -> float:
@@ -363,9 +398,6 @@ def _elapsed_ms(start: float) -> float:
 
 
 _tool_logger = logging.getLogger("epimemer.mcp.tools")
-
-
-_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
 async def _record_response(
@@ -399,9 +431,10 @@ async def _record_response(
     # The guard is the **bind**, not the process (§3.2). A hub bound to
     # loopback is reachable only from this machine, so the mirror carries the
     # whole record and survives session death; a hub anyone can reach gets
-    # structural metadata only, and the payload stays here behind the
-    # `retrievals` RPC for as long as this process lives.
-    exposed = record if deps["config"].viz_host in _LOOPBACK_HOSTS else structural_only(record)
+    # structural metadata only, and the payload stays here. The hub cuts its
+    # mirror and the `retrievals` RPC down the same way, by its own bind,
+    # because the host named here and the one the hub binds can differ.
+    exposed = record if on_loopback(deps["config"].viz_host) else structural_only(record)
     await bus.publish(
         RetrievalRecorded(
             graph=record.graph,
@@ -427,18 +460,19 @@ async def _record_response(
 # and read-only, and a review racing a write was reading a moving target anyway.
 MOVES_THE_GRAPH = frozenset({"epimemer.use_graph", "epimemer.review"})
 
-# The tools that need no `expected_graph`, because each is *about* graphs rather
-# than in one: `list_graphs` asks which exist, `use_graph` and
-# `delete_graph` take the graph as their argument, and `viz_status` is
-# server-level. Every other tool must name the graph it means, and a tool absent
-# from both this list and the parameter is a hole — `tests/mcp/test_graph_gate.py`
-# reads this set and asserts the complement.
+# The tools that need no `expected_graph`, because none of them works in a
+# graph: `list_graphs` asks which exist, `use_graph` and `delete_graph` take the
+# graph as their argument, and `viz_status` and `guide` are server-level. Every
+# other tool must name the graph it means, and a tool absent from both this list
+# and the parameter is a hole — `tests/mcp/test_graph_gate.py` reads this set
+# and asserts the complement.
 NAMES_ITS_OWN_GRAPH = frozenset(
     {
         "epimemer.list_graphs",
         "epimemer.use_graph",
         "epimemer.delete_graph",
         "epimemer.viz_status",
+        "epimemer.guide",
     }
 )
 
@@ -507,10 +541,17 @@ async def _run_with_timeout(
     second graph appeared would change what a working call does, based on state
     the agent never touched. `NAMES_ITS_OWN_GRAPH` is the only exemption and it
     is about *shape*, not policy.
+
+    **And every response it builds says when the server is stale**: running
+    another Epimemer than the one installed now, because the package was
+    upgraded underneath it. Failures and refusals included, since a failure is
+    often how a stale server first shows.
     """
     deps = ctx.lifespan_context
     timeout = None if waits_for_user else deps["config"].tool_timeout_seconds
     start = time.monotonic()
+    _mark_client_records_used(deps["config"])
+    stale = _stale_warning(deps)
     summarise = output_summary_fn
     try:
         async with _graph_turn(deps, tool_name, waits_for_user):
@@ -536,7 +577,7 @@ async def _run_with_timeout(
                 )
         latency = _elapsed_ms(start)
         _log(tool_name, input_summary, summarise(result, meta), meta)
-        response_text = _build_response(result, meta, latency)
+        response_text = _build_response(result, meta, latency, stale)
         await _record_response(deps, tool_name, input_summary, response_text, meta)
         return response_text
     except TimeoutError:
@@ -545,14 +586,14 @@ async def _run_with_timeout(
         _tool_logger.error(error_msg)
         meta = ResponseMeta(latency_ms=latency)
         _log(tool_name, input_summary, "TIMEOUT", meta, error=error_msg)
-        return _error_response(error_msg, latency)
+        return _error_response(error_msg, latency, stale)
     except Exception as e:
         latency = _elapsed_ms(start)
         error_msg = f"{tool_name} failed: {e}"
         _tool_logger.exception(error_msg)
         meta = ResponseMeta(latency_ms=latency)
         _log(tool_name, input_summary, "ERROR", meta, error=str(e))
-        return _error_response(str(e), latency)
+        return _error_response(str(e), latency, stale)
 
 
 # --- Tools ---
@@ -621,14 +662,10 @@ async def memory_segment(
             passage. A malformed list is refused whole, every problem named,
             and nothing is written. Omit it to let the server cut, which is
             right for ordinary prose.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -691,14 +728,10 @@ async def memory_resegment(
             would belong to no passage, and one anchor alone makes the document
             one passage. A malformed list is refused whole, every problem
             named, and nothing is written.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -813,9 +846,10 @@ async def memory_store_decomposition(
               document in front of you — the tense, the sentences either side,
               whether "the election" is a particular one — and a later merge
               sees two stripped sentences with none of it.
-              **Omit it when you genuinely cannot tell.** Omitted means unjudged
-              and the fact simply never merges, which costs a tidier graph;
-              guessing costs corroboration that was never earned.
+              **Omit it when you genuinely cannot tell.** Omitted means unjudged,
+              and the fact does not merge until `rejudge` supplies a kind,
+              which costs a tidier graph; guessing costs corroboration that
+              was never earned.
             validity: when *this document* says the claim was true. A list,
               because one source can assert several separate periods ("Labour
               governed 1997–2010, and again from 2024"). It is recorded against
@@ -875,12 +909,15 @@ async def memory_store_decomposition(
             the metacontexts that do exist.
         tags: Optional document-level tag names applied to every node. Each tag
             becomes (or reuses) a Topic linked by a tagged_with_topic edge. Every node
-            also gets a sourced_from edge to the document. A tag with no space
-            in it also reuses a topic of the same name up to case and
-            separators, stored or among this call's `topics`, where no topic
-            node created from a tag answers; the response then warns with
+            also gets a sourced_from edge to the document. Where no topic
+            node created from a tag answers, a tag also reuses a topic that
+            was not created from one: a stored topic with exactly the tag's
+            content, or, where neither name has a space in it, a topic of
+            the same name up to case and separators, stored or among this
+            call's `topics`. The response then warns with
             `tag_joined_topic`, giving that topic's description, so check it
-            is what the tag means.
+            is what the tag means. A topic already merged with a tag of the
+            same name raises no warning: that merge made the check.
         tag_descriptions: {tag name: one line saying what the tag covers}.
             **Required for every tag in this call that does not exist yet, both
             document-level and per-node; the call is refused without them and
@@ -908,14 +945,10 @@ async def memory_store_decomposition(
             "the 1990s") become timepoints linked by TIMELINK, so content-time
             mode has something to show. Vague expressions stay undated rather
             than being guessed at. Set false to skip.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -1107,10 +1140,8 @@ async def memory_search(
             Off by default on cost — it is several times the price of every
             other annotation and rises with how much the graph has been
             reflected over. Turn it on when you need to weigh independence.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -1175,14 +1206,10 @@ async def memory_link(
             label already in use reuses its kind (classified once per label).
         weight: Edge weight (default 1.0).
         metadata: Optional metadata for the edge.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -1251,14 +1278,10 @@ async def memory_update(
             and a guessed `because` reads afterwards as a judgment someone made.
             Record a `record_contradiction` instead and leave the pair contested
             for whoever can resolve it.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -1317,14 +1340,10 @@ async def memory_rename_topic(
     Args:
         topic: The topic's id, or its current name.
         name: The new name.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else: naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -1377,14 +1396,10 @@ async def memory_supersede_by(
             period, just not current). No default, and no guessing: if you
             cannot tell the two apart, `record_contradiction` and leave the pair
             contested rather than inventing a reason. See `update`.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -1444,14 +1459,10 @@ async def memory_judge_importance(
         reason: Why — this is read by whoever reviews the judgment.
         related_id: Optional — the node whose arrival triggered the
             reassessment.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -1526,10 +1537,8 @@ async def memory_check_conflicts(
             the one nomination bar; `merge_facts` refuses below the same
             number, so anything nominated here is mergeable).
         k: Max candidates returned per fact.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -1566,14 +1575,10 @@ async def memory_record_contradiction(
     Args:
         a_id: One fact id.
         b_id: The other fact id.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -1616,14 +1621,10 @@ async def memory_record_variant(
     Args:
         a_id: One fact id.
         b_id: The other fact id.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -1667,8 +1668,10 @@ async def memory_merge_facts(
     is worse than a missed one and not symmetrically so: two distinct claims
     fused into one node with two independent sources read as *better supported*
     than either was, so the mistake does not lose information, it manufactures
-    agreement. When unsure, use link(edge_type="similarity") and keep both — nothing
-    downstream is harmed by two nodes saying one thing.
+    agreement. When unsure, keep both and record nothing: nothing downstream is
+    harmed by two nodes saying one thing. A link(edge_type="similarity") keeps
+    both too, but corroboration then counts the second fact's sources, so use
+    it only where you are sure they are one claim.
 
     Merges are refused, with a reason, when: any fact is not active (a
     recurring historical twin is `restore`, not a merge); the facts do not stand
@@ -1689,14 +1692,10 @@ async def memory_merge_facts(
         content: The claim as the surviving fact should state it. Write the
             clearest phrasing of the shared claim rather than picking one
             source's wording — this is new text and it is what gets embedded.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -1766,14 +1765,10 @@ async def memory_merge_inferences(
         content: The conclusion as the surviving inference should state it.
             Write it over the combined premises rather than copying either
             source — this is new text and it is what gets embedded.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -1838,14 +1833,10 @@ async def memory_reverse_merge(
     Args:
         survivor_id: The id of the fact a merge produced — the one `merge_facts`
             returned as `fact_id`.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -1894,10 +1885,8 @@ async def memory_configure_merge(
             unless the server sets another). Raise it when a refusal is wrong
             and the merge is right.
         clear: Return both to the server defaults.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -1944,10 +1933,8 @@ async def memory_configure_deferral(
         clear: Settings to return to the process default, e.g. ["first_wait"]
             or ["first_wait", "cap"]. A setting you leave out keeps whatever it
             was set to.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else, so naming it turns
-            a wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -1998,10 +1985,8 @@ async def memory_configure_warnings(
             notify_user, meaning you are expected to raise it with the user.
             Merged over what is already set rather than replacing it.
         clear: Return every setting to the process default.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -2031,16 +2016,19 @@ async def memory_reflect(
     """Analyse the memory graph and return candidates for you to act on.
 
     Reads only — nothing here changes the graph. Identifies:
-    - Similar topic pairs that could be consolidated under a parent (this also
-      covers duplicate source/tag/entity Topics). A pair of one name, both
-      written without a space and equal up to case and separators, such as a
-      tag `table-sessions` beside a topic `table_sessions`, is listed whatever
-      its similarity and carries `same_name: true`. Merge it or record a
-      verdict in `similarities`; unjudged, it comes back on every reflect
-    - Topics with high internal variance that could be split. A topic somebody
-      stood behind since its material last moved (a description confirmed or
-      written, a split declined) is not offered again until it moves. Answer
-      each one with `splits` or `splits_declined`; unanswered, it returns
+    - similar_pairs: similar topic pairs that could be consolidated under a
+      parent (this also covers duplicate source/tag/entity Topics). Answer
+      one with apply_reflection `merges`, `parents`, or a verdict in
+      `similarities`. A pair of one name, both written without a space and
+      equal up to case and separators, such as a tag `table-sessions` beside
+      a topic `table_sessions`, is listed whatever its similarity and carries
+      `same_name: true`. Merge it or record a verdict in `similarities`;
+      unjudged, it comes back on every reflect
+    - split_candidates: topics with high internal variance that could be
+      split. A topic somebody stood behind since its material last moved (a
+      description confirmed or written, a split declined) is not offered
+      again until it moves. Answer each one with `splits` or
+      `splits_declined`; unanswered, it returns
     - enrichment_candidates: topics whose description wants writing or
       re-reading. A topic somebody has already described is nominated when
       material under it was **created, archived or superseded** since that
@@ -2052,8 +2040,18 @@ async def memory_reflect(
       one with apply_reflection — `enrichments` with a new sentence, or
       `descriptions_confirmed` with the topic id where the description still
       fits. One you leave unanswered comes back on every reflect
-    - Potential contradictions between facts (same-metacontext only) — both sides
-      active, since that is what makes them rivals
+    - contradictions: potential contradictions between facts (same-metacontext
+      only), both sides active, since that is what makes them rivals. Resolve
+      one with supersede_by or record_contradiction, or record a verdict in
+      apply_reflection `similarities` where the two do not conflict
+    - inference_merge_candidates: two near-identical active inferences resting
+      on at least one premise in common, the shape a fact merge produces,
+      each with `shared_premises`, a `similarity` and any `warnings` about
+      the merge that would result. Merge them with merge_inferences where
+      they are one conclusion, or judge the pair in apply_reflection
+      similarities: "distinct" where they are two, "one_claim" where they
+      agree and are worth keeping as two readings. Unjudged, the pair comes
+      back on every reflect
     - temporal_contradictions: open disputes about the order of timepoints, on
       the same terms as the contradictions between claims. Answer each with
       resolve_temporal_contradiction; one left unanswered comes back on every
@@ -2085,8 +2083,8 @@ async def memory_reflect(
       Between inferences a `similarity` edge is listed by corroboration as
       agreement and not counted. Unjudged, the pair comes back on every reflect
     - archival_candidates: nodes worth setting aside, each with a `reason`:
-      `retired`, `evidence_stale`, `never_retrieved` or `stale_judgment`, at
-      most 20 a pass. Ask the user before archiving any with
+      `evidence_stale`, `never_retrieved` or `stale_judgment`, at most 20 a
+      pass. Ask the user before archiving any with
       apply_reflection archivals. A `never_retrieved` nominee (a node nothing
       links to and no search has returned) has three answers: `archivals`,
       `retained`, which keeps it for good, and `deferred`, which puts it off
@@ -2131,10 +2129,8 @@ async def memory_reflect(
             label consolidations.
         max_nominations: Most entries returned in any one pair list. The pair
             lists are quadratic in the graph; this bounds the response.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     # Read for the log line only; the authoritative value is what the
@@ -2221,7 +2217,8 @@ async def memory_apply_reflection(
             reach for "one_claim" only when you would have merged.
             Either way the pair stops being nominated. `because` is required.
             Pairs that could not be recorded come back in `similarities_refused`
-            with a reason — a cross-metacontext pair wants record_variant instead.
+            with a reason. Across metacontexts only "one_claim" is refused, and
+            wants record_variant instead; "distinct" is recorded.
         parents: Consolidate similar topics under a new parent (non-destructive;
             children stay active). Each: {children_ids: [str], content: str}
             content = your synthesized parent description. The parent inherits
@@ -2277,7 +2274,9 @@ async def memory_apply_reflection(
             Sources standing in different metacontexts are refused into
             `topic_merges_refused`: the survivor stands in every metacontext its
             sources stood in, so a cross-metacontext merge asserts in one world
-            what was only ever claimed in another.
+            what was only ever claimed in another. A merge of nothing but
+            topic nodes created from tags is not refused: it gathers names,
+            and a name stands in every metacontext it is used from.
         supersessions: Resolve flagged/contested nodes from reflect's
             pending_review by superseding the losing node with an existing one.
             Each: {old_id: str, by_id: str, because: str}, where `because` is
@@ -2291,7 +2290,7 @@ async def memory_apply_reflection(
             archival is a human-approved verdict, like resolving a
             contradiction. Nothing is deleted: the response carries an
             archive_data export, and `restore` puts a node back. Never archive
-            an inference on its own initiative; a flagged one means its evidence
+            an inference on your own initiative; a flagged one means its evidence
             changed, which is a reason to re-derive it. Only an active node is
             archived: any other id comes back in `archivals_skipped` with the
             reason: unknown, already archived, or not active, with its status.
@@ -2401,14 +2400,10 @@ async def memory_apply_reflection(
             endpoint that is not "start" or "end", or a proposal already
             declined come back under `boundaries_declined_refused` with a
             reason. `reopen(boundary=...)` withdraws a decline.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
 
     A **malformed** entry — one missing a required key, or not an object at all
     — refuses the whole call and writes nothing, listing every problem it found
@@ -2557,14 +2552,10 @@ async def epimemer_reopen(
             source_id, endpoint, at, timeline_id: str | None}, as the decline
             named it. Only a decline of that endpoint, at that date, on that
             clock is withdrawn.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else, so naming it turns
-            a wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -2633,7 +2624,9 @@ async def epimemer_review(
     `certainty_ceiling` is for **counting**, not browsing — ordering already
     covers browsing. *"Is anything below 0.5 still outstanding before I stop?"*
     is a gate, and it wants a number. It is inclusive, and it excludes unrated
-    decisions, since blank cannot be told from ordinary.
+    decisions, since blank cannot be told from ordinary. `unrated_count` is
+    taken before the ceiling narrows the list, so it still says how many
+    decisions the ceiling could not judge.
 
     Read the counts beside the results — three shaky rows out of four hundred
     unrated is not the same answer as three out of four. `truncated` says the
@@ -2657,10 +2650,8 @@ async def epimemer_review(
         until: ISO-8601 upper bound, exclusive.
         certainty_ceiling: Keep only decisions declared at or below this.
         max_results: Cap on decisions returned (default 200).
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -2724,20 +2715,18 @@ async def epimemer_apply_review(
       `confidence` (0.3 / 0.5 / 0.7 / 0.9). Omit for the ordinary case; omitting
       stores *unrated*, which is deliberately not a rated 0.5.
 
-    Confirming the same decision twice as the same judge is refused — a second
-    identical row would read as a second opinion, and it is the same one.
+    Repeating your own confirmation or dissent of a decision is refused over
+    the subjects it already covers: a second identical row would read as a
+    second opinion, and it is the same one. Naming other subjects of the
+    decision, or the other verdict, is accepted.
 
     Args:
         confirmations: Decisions you checked and agree with.
         dissents: Decisions you checked and think are wrong.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -2809,14 +2798,10 @@ async def epimemer_rejudge(
         confidence_basis: One line on why that value.
         certainty: How sure you are of this revision, 0.0-1.0.
         certainty_basis: One line on why that value.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -2878,14 +2863,10 @@ async def memory_reassign_metacontext(
             that would leave no metacontexts is refused outright, because a
             node without a metacontext shares a metacontext with nothing, so it
             is never compared, never merged, and returned by no scoped search.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -2948,14 +2929,10 @@ async def memory_correct_interval(
             no default and must be "stated" or "inferred". An empty list is
             allowed, and is the correction for a period that was invented.
         because: Why the recorded period was wrong. Required.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -3012,10 +2989,8 @@ async def memory_query_graph(
             either way, because you named
             it; its neighbours are filtered, and the edges returned are only
             those between nodes you were shown.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -3062,10 +3037,8 @@ async def memory_topic_tree(
             back either way; an ancestor outside the scope is left out and the
             rest are still ancestors, and a subtopic outside it takes its
             branch with it.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -3106,10 +3079,8 @@ async def memory_graph_as_of(
     Args:
         at: ISO datetime to snapshot at.
         node_types: Optional filter to "topic"/"fact"/"inference".
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -3159,28 +3130,24 @@ async def memory_query_changes(
         windows: Explicit windows, [[startISO, endISO], ...]; a missing or empty
             end means now. Takes precedence over the trailing windows above.
         node_types: Filter to "topic"/"fact"/"inference".
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else: naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
-    resolved = _resolve_windows(
-        datetime.now(UTC),
-        last_hours=last_hours,
-        last_days=last_days,
-        windows=windows,
-    )
-
     return await _run_with_timeout(
         "epimemer.query_changes",
         lambda: tools.query_changes(
-            windows=resolved,
+            windows=_resolve_windows(
+                datetime.now(UTC),
+                last_hours=last_hours,
+                last_days=last_days,
+                windows=windows,
+            ),
             storage=deps["storage"],
             node_types=node_types,
         ),
         ctx,
-        f"windows={len(resolved)}",
+        f"windows={len(windows or [])} last_hours={last_hours} last_days={last_days}",
         lambda r, m: f"changes={m.nodes_returned}",
         expected_graph=expected_graph,
     )
@@ -3230,10 +3197,8 @@ async def memory_find_nodes(
             page is a full page of what you asked for. A named metacontext that
             builds on another appears in `metacontext_bases`.
         limit: Maximum nodes to return.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -3271,10 +3236,8 @@ async def memory_list_sources(
     linked to documents rather than to nodes.
 
     Args:
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else: naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -3301,10 +3264,8 @@ async def memory_list_relations(
     longer nominates can be read back rather than re-asked.
 
     Args:
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else: naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -3341,14 +3302,10 @@ async def memory_describe_relation(
         description: What this graph means by it. Blank leaves existing prose
             alone rather than clearing it.
         kind: "relationship" or "attribution" — must match what the edges carry.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -3382,10 +3339,8 @@ async def memory_archive(
 
     Args:
         max_age_days: Minimum days since supersession/merge for archival.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -3437,14 +3392,10 @@ async def memory_restore(
         validity: What that document says about *when* the claim is true again,
             in the same form `store_decomposition` takes. Omit it when the
             document gives no dates — the common case, and better than a guess.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -3461,7 +3412,7 @@ async def memory_restore(
             judge=judge,
         ),
         ctx,
-        f"nodes={len((archive_data or {}).get('nodes', []))} reactivate={len(node_ids or [])}",
+        f"nodes={_length((archive_data or {}).get('nodes', []))} reactivate={len(node_ids or [])}",
         lambda r, m: f"restored={r['nodes_restored']}",
         expected_graph=expected_graph,
     )
@@ -3488,10 +3439,8 @@ async def memory_create_timeline(
             is not today ("the novel opens in May 1897"). Leave it unset for a
             timeline that tracks real time; that is not the same as passing
             today's date, which would freeze its present at this moment.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -3527,10 +3476,8 @@ async def memory_set_reference_time(
         timeline_id: The timeline to anchor.
         reference_time: ISO-8601 instant. **Omit to clear it**, returning the
             timeline to real time.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -3591,25 +3538,20 @@ async def memory_add_timepoint(
             the rule gives it. `query_timeline` reports it beside every
             occurrence. For an occurrence that moved, this is still the start
             the rule gave, and the point lands on the date it moved to.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
-    parsed_start = _parse_utc(start) if start else None
-    parsed_end = _parse_utc(end) if end else None
-    parsed_occurrence = _parse_utc(occurrence_start) if occurrence_start else None
     return await _run_with_timeout(
         "epimemer.add_timepoint",
         lambda: tools.add_timeline_timepoint(
             timeline_id=timeline_id,
             storage=deps["storage"],
-            start=parsed_start,
-            end=parsed_end,
+            start=_parse_utc(start) if start else None,
+            end=_parse_utc(end) if end else None,
             label=label,
             recurrence_id=recurrence_id,
-            occurrence_start=parsed_occurrence,
+            occurrence_start=_parse_utc(occurrence_start) if occurrence_start else None,
         ),
         ctx,
         f"timeline={timeline_id}",
@@ -3697,24 +3639,18 @@ async def memory_query_timeline(
             `truncated` per rule with the window it did cover.
         next_after: ISO datetime — measure "the next occurrence" from this
             moment instead of from the timeline's own present.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
-    parsed_target = _parse_utc(target) if target else None
-    parsed_start = _parse_utc(range_start) if range_start else None
-    parsed_end = _parse_utc(range_end) if range_end else None
-    parsed_next_after = _parse_utc(next_after) if next_after else None
     return await _run_with_timeout(
         "epimemer.query_timeline",
         lambda: tools.query_timeline(
             timeline_id=timeline_id,
             storage=deps["storage"],
-            target=parsed_target,
-            range_start=parsed_start,
-            range_end=parsed_end,
+            target=_parse_utc(target) if target else None,
+            range_start=_parse_utc(range_start) if range_start else None,
+            range_end=_parse_utc(range_end) if range_end else None,
             k=k,
             between=between,
             before=before,
@@ -3723,7 +3659,7 @@ async def memory_query_timeline(
             include_contested=include_contested,
             include_recurrences=include_recurrences,
             occurrence_cap=occurrence_cap,
-            next_after=parsed_next_after,
+            next_after=_parse_utc(next_after) if next_after else None,
         ),
         ctx,
         f"timeline={timeline_id}",
@@ -3773,14 +3709,10 @@ async def memory_order_timepoints(
             has not stated which came first: narrative order is not
             chronological order.
         because: One line on how you read the source, optional.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -3839,8 +3771,9 @@ async def memory_resolve_temporal_contradiction(
 
     **hold** — the sources genuinely disagree and nothing you have settles it.
     The contradiction stays open and the point stays contested, but reflect
-    stops nominating it until a new constraint or a new dated point touching it
-    arrives. That is what a hold waits for; nothing reopens it on a schedule.
+    stops nominating it until a new constraint touching one of its points
+    arrives. That is what a hold waits for: a new dated point alone does not
+    lift it, and nothing reopens it on a schedule.
 
     Nothing is deleted and nothing is edited in place. A constraint that moves
     is retired and a fresh one written, linked to it.
@@ -3860,14 +3793,10 @@ async def memory_resolve_temporal_contradiction(
         nodes_to_move: For not_the_same_event, the facts whose date moves to the
             new point. Facts move one by one, by your decision: a fact's date is
             part of what it claims. Anything you do not name stays where it is.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -3926,14 +3855,10 @@ async def memory_merge_timepoints(
         merged_id: The point that retires into it. It is kept, marked with the
             survivor it became, and takes no further part in queries.
         because: Why these are one moment. Required.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -4018,14 +3943,10 @@ async def memory_add_recurrence(
             `end_recurrence`, which keeps the history of what was thought before.
         source_id: The document or node that says this recurs. The source says;
             you read the source and decided that it said this.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -4086,14 +4007,10 @@ async def memory_end_recurrence(
         ends_at: ISO datetime of the last occurrence. Omit it to say the rule
             has no end after all, which is how an end recorded in error is
             taken back.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -4155,14 +4072,10 @@ async def memory_record_recurrence_exception(
             Required for "moved".
         source_id: The document or node that says so.
         because: One line on how you read the source, optional.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
-        judge_token: The token your `claim_agent` returned. Pass it on every
-            write and this call is credited to the judge you claimed, even where
-            another agent shares this connection and has claimed since. Leave it
-            out and the write is credited to the most recent claim.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
+        judge_token: The token your `claim_agent` returned, so this write is credited to
+            your judge.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
@@ -4219,10 +4132,8 @@ async def memory_create_timelink(
         timeline_id: The timeline holding the timepoint or the rule.
         timepoint_id: The one timepoint the fact is about.
         recurrence_id: The rule the fact holds at every occurrence of.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -4285,10 +4196,8 @@ async def memory_create_metacontext(
             (`{"instant_kind": "precise", "at": "1990-01-01"}`) or a named
             moment (`{"instant_kind": "named", "label": "the late 1980s"}`).
             The base's claims hold here only up to it. Needs `based_on`.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -4334,10 +4243,8 @@ async def memory_set_metacontext_base(
             (`{"instant_kind": "precise", "at": "1990-01-01"}`) or a named
             moment (`{"instant_kind": "named", "label": "the late 1980s"}`).
             The base's claims hold here only up to it. Needs `base_id`.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -4372,10 +4279,8 @@ async def memory_get_metacontexts(
 
     Args:
         node_id: The node to get metacontexts for.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -4415,10 +4320,8 @@ async def epimemer_graph_stats(
     user and call backup_graph if they agree.
 
     Args:
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else: naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -4459,10 +4362,8 @@ async def epimemer_configure_reflection(
     Args:
         threshold: Stores before a reflect is suggested (at least 1). Omit it
             to clear this graph's setting and follow the server default again.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -4501,10 +4402,8 @@ async def epimemer_configure_backup(
     Args:
         threshold: Stores before a backup is suggested (at least 1). Omit it
             to clear this graph's setting and follow the server default again.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -4544,10 +4443,8 @@ async def epimemer_backup_graph(
     and zeroes the backup counter.
 
     Args:
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -4623,6 +4520,20 @@ def _client_state_file(ctx: Context) -> str | None:
         client_state.client_state_dir(config.client_state_dir), config.client_session_id
     )
     return str(path) if path is not None else None
+
+
+def _mark_client_records_used(config: ServerConfig) -> None:
+    """Mark this conversation's client state files as used now.
+
+    Called on every tool call. Those files are offered for deletion once they
+    have gone long enough unused, and a hook writes one only when a
+    conversation starts, compacts, clears or switches model, so a conversation
+    that goes on using Epimemer would otherwise come to look abandoned.
+    """
+    directory = client_state.client_state_dir(config.client_state_dir)
+    records = client_state.read_client_records(directory, config.client_session_id)
+    if records is not None:
+        client_state.refresh_client_records(directory, records)
 
 
 def _current_seat(ctx: Context) -> Seat:
@@ -4881,24 +4792,27 @@ async def _judge_for_write(
     backstop for the tools that never come through here.
     """
     # A refusal from here is the whole of the call, so its latency is the time
-    # this check took, measured as the choke point measures a tool's.
+    # this check took, measured as the choke point measures a tool's, and it
+    # carries the stale-server warning the choke point would have added.
     start = time.monotonic()
     deps = ctx.lifespan_context
     mismatch = tools.wrong_graph(deps["storage"], expected_graph)
     if mismatch is not None:
         result, meta = mismatch
-        return None, _build_response(result, meta, _elapsed_ms(start))
+        return None, _build_response(result, meta, _elapsed_ms(start), _stale_warning(deps))
     if judge_token is None:
         stored = await _judge_state(ctx)
     else:
         tokens = await _judge_tokens(ctx)
         if judge_token not in tokens:
-            return None, _error_response(_UNKNOWN_JUDGE_TOKEN, _elapsed_ms(start))
+            return None, _error_response(
+                _UNKNOWN_JUDGE_TOKEN, _elapsed_ms(start), _stale_warning(deps)
+            )
         stored = tokens[judge_token]
     if stored is not None:
         refusal = _changed_seat_refusal(stored, _current_seat(ctx))
         if refusal is not None:
-            return None, _error_response(refusal, _elapsed_ms(start))
+            return None, _error_response(refusal, _elapsed_ms(start), _stale_warning(deps))
     judge = await _approved_judge(ctx, stored)
     if judge is not None:
         return judge, None
@@ -4911,6 +4825,7 @@ async def _judge_for_write(
     return None, _error_response(
         tools.judge_required_reason(tools.approved_labels(approved, await storage.list_agents())),
         _elapsed_ms(start),
+        _stale_warning(deps),
     )
 
 
@@ -5481,10 +5396,8 @@ async def memory_claim_agent(
             inventing something; a refusal names the judges this graph already
             approved.
         description: What you are, in your own words. One or two sentences.
-        expected_graph: The graph you believe you are working in. The active graph
-            is process state and does not survive a client reconnect, so a session
-            that switched earlier can come back somewhere else — naming it turns a
-            wrong-graph call from silent into refused.
+        expected_graph: Required: the graph you mean. The call is refused when another
+            graph is active.
     """
     deps = ctx.lifespan_context
 
@@ -5629,8 +5542,6 @@ async def epimemer_viz_status(ctx: Context) -> str:
 
         from urllib.parse import urlparse
 
-        from epimemer.visualization.hub import hub_sessions, probe_health
-
         parsed = urlparse(hub_url)
         host, port = parsed.hostname, parsed.port
         health = await asyncio.to_thread(probe_health, host, port)
@@ -5660,6 +5571,33 @@ async def epimemer_viz_status(ctx: Context) -> str:
         ctx,
         "",
         lambda r, m: f"reachable={r.get('hub_reachable')} connected={r.get('connected')}",
+    )
+
+
+@mcp.tool(name="guide")
+async def epimemer_guide(ctx: Context, section: str | None = None) -> str:
+    """Read the guide to using Epimemer well, one section at a time.
+
+    The guide says when to ingest, search, reflect and review, how to answer
+    what reflect nominates, and what each warning means. Call this with no
+    arguments for the overview and the list of sections, then with a section's
+    key for its text. Read the section for a kind of work before you first do
+    that work in a session. The rules that hold on every call are in the server
+    instructions.
+
+    Args:
+        section: A key from the list of sections, or "all" for the whole guide.
+    """
+
+    async def _do() -> tuple[dict, ResponseMeta]:
+        return guidance.guide_response(section, ctx.lifespan_context["guide"]), ResponseMeta()
+
+    return await _run_with_timeout(
+        "epimemer.guide",
+        _do,
+        ctx,
+        f"section={section}",
+        lambda r, m: "refused" if "refused" in r else f"section={r.get('section', 'contents')}",
     )
 
 

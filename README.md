@@ -301,9 +301,9 @@ be watched from one page.
 > **`EPIMEMER_VIZ_HOST` is a privacy setting as well as a network one.** On
 > the default loopback bind the hub keeps whole retrieval records, so they
 > survive the MCP process exiting. Point it at a non-loopback address and
-> sessions mirror **structural metadata only**, with no query text and no
-> response payloads; the payloads stay in the MCP process, reachable only
-> while it is running.
+> the hub carries **structural metadata only**, with no query text and no
+> response payloads: sessions send none, and the hub removes any it is
+> handed. The text stays in the MCP process.
 
 ## Administration
 

@@ -972,6 +972,36 @@ def with_return(
     ]
 
 
+def _assume_utc(at: datetime) -> datetime:
+    return at.replace(tzinfo=UTC) if at.tzinfo is None else at
+
+
+def was_active_at(node: EpistemicNode, at: datetime) -> bool:
+    """Whether `node` was in the active set at the instant `at`.
+
+    It was if it had been created by then and `at` falls in none of its spells
+    out of the active set. A spell runs from `retired_at` up to, but not
+    including, `restored_at`, and is still running while `restored_at` is None.
+
+    A node retired before episodes existed has no episode for it, only a status
+    other than ACTIVE and `superseded_at`. Every return to ACTIVE clears
+    `superseded_at`, so that pair means the node has been out since then. A
+    return made before episodes existed left nothing behind, so that earlier
+    spell cannot be seen. Naive datetimes are read as UTC.
+    """
+    moment = _assume_utc(at)
+    if _assume_utc(node.created_at) > moment:
+        return False
+    for episode in node.lifecycle:
+        restored_at = episode.restored_at
+        if _assume_utc(episode.retired_at) <= moment and (
+            restored_at is None or moment < _assume_utc(restored_at)
+        ):
+            return False
+    retired_since = None if node.status is NodeStatus.ACTIVE else node.superseded_at
+    return retired_since is None or moment < _assume_utc(retired_since)
+
+
 class Topic(BaseModel):
     """Paragraph-length semantic summary of a theme.
 

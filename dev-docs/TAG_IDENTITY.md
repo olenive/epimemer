@@ -45,7 +45,9 @@ Where the spelling asked for differs from the one resolved to, the
 learns this graph's spelling rather than silently getting a different tag from
 the one it named. Where a tag resolves to a topic node not created from a tag,
 the response carries a `tag_joined_topic` warning naming the tag, the topic and
-the topic's description, so the caller sees the meaning the tag joined. The
+the topic's description, so the caller sees the meaning the tag joined. No
+warning is raised where a judge has already merged a tag of that name into
+the topic, since the merge was that check. The
 tag's description is not written over one the topic has, and a topic with none
 takes it. `rename_topic` refuses a new name that another active topic already
 answers to up to spelling, since the rename would leave two nodes answering to

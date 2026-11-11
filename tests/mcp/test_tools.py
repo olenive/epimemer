@@ -3811,6 +3811,38 @@ class TestAsOf:
         )
         assert [n["id"] for n in result["nodes"]] == [f.id]
 
+    async def test_a_recurring_node_is_absent_while_it_was_retired(self, storage):
+        """Retired, brought back, retired again: only the last retirement is in
+        `superseded_at`, and the first spell must still leave a gap."""
+        node = _fact_at("the claim", datetime(2026, 6, 1, tzinfo=UTC))
+        first = _fact_at("what replaced it", datetime(2026, 6, 11, tzinfo=UTC))
+        second = _fact_at("what replaced it next", datetime(2026, 6, 15, tzinfo=UTC))
+        await storage.store_node(node)
+        await _supersede(
+            storage, node, first, status=NodeStatus.HISTORICAL, at=datetime(2026, 6, 11, tzinfo=UTC)
+        )
+        await storage.set_node_status_tx(
+            [await storage.get_node(node.id)],
+            status=NodeStatus.ACTIVE,
+            at=datetime(2026, 6, 13, tzinfo=UTC),
+        )
+        await _supersede(
+            storage,
+            await storage.get_node(node.id),
+            second,
+            status=NodeStatus.HISTORICAL,
+            at=datetime(2026, 6, 15, tzinfo=UTC),
+        )
+
+        async def live_on(day):
+            result, _ = await graph_as_of(datetime(2026, 6, day, 12, tzinfo=UTC), storage)
+            return {n["id"] for n in result["nodes"]}
+
+        assert await live_on(10) == {node.id}
+        assert await live_on(12) == {first.id}
+        assert await live_on(14) == {node.id, first.id}
+        assert await live_on(16) == {first.id, second.id}
+
 
 class TestQueryChangesTool:
     async def test_groups_by_window_with_event_tags(self, storage):
@@ -4331,7 +4363,7 @@ def test_tool_count_matches_integration_doc():
     registered = (repo_root / "epimemer" / "mcp" / "server.py").read_text().count("@mcp.tool(")
 
     integration = (repo_root / "INTEGRATION.md").read_text()
-    stated = re.search(r"listed with (\d+) tools", integration)
+    stated = re.search(r"canonical list of the (\d+) tools", integration)
     assert stated is not None, "INTEGRATION.md no longer states a tool count to check"
     assert int(stated.group(1)) == registered, (
         f"INTEGRATION.md says {stated.group(1)} tools but server.py registers {registered}"

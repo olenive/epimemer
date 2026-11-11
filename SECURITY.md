@@ -27,7 +27,9 @@ a plain file under `EPIMEMER_SQLITE_DIR`, protected by its file permissions
 alone.
 
 The visualization hub binds `127.0.0.1` by default and, on that bind, keeps
-whole retrieval records, including query text and response payloads. Pointing
-`EPIMEMER_VIZ_HOST` at a non-loopback address switches sessions to mirroring
-structural metadata only; the hub has no authentication of its own, so an
-address other users can reach is an address other users can read.
+whole retrieval records, including query text and response payloads. On a
+non-loopback address the hub carries structural metadata only: sessions send
+no query text or payloads, and the hub removes them from everything it takes
+in and everything it serves, going by the address it is itself bound to. The
+hub has no authentication of its own, so an address other users can reach is
+an address other users can read.

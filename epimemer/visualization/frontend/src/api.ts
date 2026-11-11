@@ -92,12 +92,11 @@ export interface RetrievalsResponse {
 }
 
 /**
- * This session's retrieval records, payloads included.
+ * This session's retrieval records, asked of the MCP process itself.
  *
- * Answered by the MCP process itself, which is why it carries the response
- * text even when the hub's own mirror is guarded down to structural metadata —
- * and why it fails once that process exits. The mirror is what survives that;
- * the two routes are complementary (§3.2).
+ * On a loopback bind they carry the query and response text; on any other
+ * bind the hub cuts them to structural metadata. It fails once that process
+ * exits, and the hub's mirror is what survives that (§3.2).
  */
 export const fetchRetrievals = async (session: string): Promise<RetrievalsResponse> => {
   const resp = await fetch(`/api/retrievals?session=${encodeURIComponent(session)}`);

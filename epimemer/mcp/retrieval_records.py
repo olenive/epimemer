@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from pydantic import BaseModel, Field, model_validator
 
 from epimemer.pipelines.query.types import SeedProvenance
+from epimemer.visualization.exposure import structural_record
 from epimemer.visualization.ring import RETRIEVAL_RING_CAPACITY, remember
 
 # Uncapped, a ring of these is a copy of the graph held in memory and served to
@@ -99,17 +100,11 @@ def structural_only(record: RetrievalRecord) -> RetrievalRecord:
     which tool, which graph, which ids — and drops the query text and the
     payload. Undeclared stays undeclared, because "we do not know what this
     returned" is itself the fact worth keeping.
+
+    The fields kept are `visualization.exposure.structural_record`'s, which the
+    hub applies to the same record on the wire, so the two cannot disagree.
     """
-    return RetrievalRecord(
-        record_id=record.record_id,
-        at=record.at,
-        tool=record.tool,
-        query="",
-        graph=record.graph,
-        retrieved=None if record.retrieved is None else list(record.retrieved),
-        response_text="",
-        truncated=record.truncated,
-    )
+    return RetrievalRecord.model_validate(structural_record(record.model_dump(mode="json")))
 
 
 def remember_record(

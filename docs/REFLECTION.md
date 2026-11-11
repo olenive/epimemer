@@ -60,8 +60,9 @@ re-read is recorded with `apply_reflection(retained=…)` (§6).
 `redundant` routes into `merge_facts(source_ids, content)`: one node keeping a
 `sourced_from` edge per contributing document, so provenance becomes plural
 rather than being overwritten. It refuses, with a reason: an **event** rather
-than a state; a fact ingested without a `claim_kind`; a retired twin (that is
-`recurs`, and `restore`); a pair not standing in exactly the same metacontexts
+than a state; a fact ingested without a `claim_kind`; a retired twin (a
+`historical` one is `recurs`, and `restore`); a pair not standing in exactly
+the same metacontexts
 (that is `record_variant`); a fact that has already been merged and un-merged
 as many times as the graph's merge cycle limit allows (default 2: an
 oscillation, and the refusal asks you to bring in the user rather than try
@@ -210,25 +211,28 @@ archival class (§5), and a merged premise is not, since nothing was overturned.
 ## 5. Archival: the hygiene arm
 
 Archival is the same loop with one more outcome, *triviality*. Reflect's
-`archival_candidates` proposes nodes, worst first, in four classes:
+`archival_candidates` proposes active nodes, worst first, in three classes:
 
 | Class | What it catches |
 |---|---|
-| `retired` | corrected or merged nodes retired more than `max_age_days` ago (90 by default), not judged important |
 | `evidence_stale` | active inferences whose basis changed, or whose whole evidence set has been archived |
 | `never_retrieved` | active facts and topics never returned by a search, not judged important, with nothing depending on them, and not deferred within their wait |
-| `stale_judgment` | nodes held above the importance ceiling by an upward judgment more than 180 days old that nobody has revisited |
+| `stale_judgment` | facts and topics held above the importance ceiling by an upward judgment more than 180 days old that nobody has revisited |
 
 The list holds at most twenty nominees a pass. A deferred node whose wait is
 over is placed first within `never_retrieved`, so the limit cannot keep pushing
 it behind nodes nobody has looked at yet.
 
-**`historical` nodes are never nominated.** They were retired because the
-world changed, not because they were wrong, so they remain true of their
-period and age alone is not grounds to discard them.
+**A retired node is never nominated.** It is already out of every active
+query, and archiving it would lose its status: `restore` returns an archived
+node to active, which a corrected claim must never become. The `archive`
+tool exports corrected and merged nodes retired more than `max_age_days` ago
+and changes nothing. `historical` nodes are left out of that export too:
+they were retired because the world changed, so they remain true of their
+period.
 
-`stale_judgment` exists because importance protects a node from every class
-above it. Its answer is `judgments`, in either direction: *"keep it, and stop
+`stale_judgment` exists because importance keeps a fact or topic out of
+`never_retrieved`. Its answer is `judgments`, in either direction: *"keep it, and stop
 treating it as important"*, or *"still important, and now recently
 confirmed"*. Either moves the clock, so the node leaves the stale set.
 

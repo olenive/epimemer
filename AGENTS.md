@@ -53,6 +53,6 @@ measurements.
 # Memory System (Epimemer)
 The server sends the per-call rules (`epimemer_prompts/RULES.md`) as its MCP
 instructions and serves the full guide (`epimemer_prompts/DEFAULT.md`) as the
-MCP prompt `guide`; read the guide before nontrivial memory work. Those two
-files are the single home for that material, so change them rather than
-restating rules here.
+tool `guide`, by section; read the section for the work at hand before
+nontrivial memory work. Those two files are the single home for that
+material, so change them rather than restating rules here.

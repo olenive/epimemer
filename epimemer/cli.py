@@ -31,6 +31,7 @@ does, so these commands work on all three.
 
 import argparse
 import asyncio
+import json
 import secrets
 import sys
 from collections.abc import Sequence
@@ -922,10 +923,14 @@ def _hook_state_dir(given: str | None) -> Path:
 def _record_client_state(given_dir: str | None, raw: str, given_pid: str | None = None) -> int:
     """Run as a Claude Code hook: record the model behind this conversation.
 
-    **Always exits 0 and prints nothing on stdout.** A `SessionStart` hook's
-    stdout is put into the agent's context, and a hook that fails must never
-    break the session it runs in. Where nothing was written, one line on
-    stderr says why.
+    **Always exits 0 and prints no plain text on stdout.** A `SessionStart`
+    hook's plain stdout is put into the agent's context, and a hook that fails
+    must never break the session it runs in. Where nothing was written, one
+    line on stderr says why.
+
+    The one thing it may print is a JSON object holding a `systemMessage`,
+    which Claude Code shows to the user and keeps out of the agent's context:
+    the notice that old records are waiting for `epimemer client-state prune`.
 
     `--client-pid` that is not a positive integer, such as a literal `$PPID`
     a shell did not expand, gets its own stderr line and recording goes on
@@ -935,13 +940,49 @@ def _record_client_state(given_dir: str | None, raw: str, given_pid: str | None 
     if note is not None:
         print(note, file=sys.stderr)
     try:
-        reason = client_state.record_from_hook(
-            _hook_state_dir(given_dir), raw, client_pid=client_pid
-        )
+        directory = _hook_state_dir(given_dir)
+        reason = client_state.record_from_hook(directory, raw, client_pid=client_pid)
+        notice = client_state.hook_notice(directory, raw)
     except Exception as error:
-        reason = f"epimemer client-state: nothing recorded: {error}"
+        reason, notice = f"epimemer client-state: nothing recorded: {error}", None
     if reason is not None:
         print(reason, file=sys.stderr)
+    if notice is not None:
+        print(json.dumps({"systemMessage": notice}))
+    return 0
+
+
+def _prune_client_state(given_dir: str | None, older_than: int, yes: bool) -> int:
+    """Delete conversation records unused for `older_than` days, after asking.
+
+    The only thing that deletes them. It says how many there are and how old
+    the oldest is before it asks, and no answer is a no.
+    """
+    if older_than < 1:
+        print("--older-than takes a number of days, 1 or more.", file=sys.stderr)
+        return 2
+    directory = _hook_state_dir(given_dir)
+    old = client_state.old_client_state_files(directory, older_than_days=older_than)
+    if not old:
+        print(f"No conversation records in {directory} have gone {older_than} days unused.")
+        return 0
+    try:
+        oldest = datetime.fromtimestamp(old[0].stat().st_mtime, tz=UTC).date().isoformat()
+    except OSError:
+        oldest = "unknown"
+    print(
+        f"{len(old)} conversation records in {directory} have gone {older_than} days "
+        f"unused; the oldest was last used on {oldest}."
+    )
+    print(
+        "A conversation whose record is deleted is asked to confirm its judge "
+        "again if it is picked up later."
+    )
+    if not yes and not _confirmed(f"Delete {len(old)}? [y/N] "):
+        print("Nothing deleted.")
+        return 0
+    removed = client_state.prune_client_state(directory, older_than_days=older_than)
+    print(f"Deleted {removed}.")
     return 0
 
 
@@ -1019,8 +1060,9 @@ def build_parser() -> argparse.ArgumentParser:
         "record",
         help=(
             "Read a Claude Code SessionStart or PostModelSwitch hook payload on "
-            "stdin and record the conversation's model. Prints nothing; always "
-            "exits 0."
+            "stdin and record the conversation's model. Deletes nothing and "
+            "always exits 0; its only output is a notice when old records are "
+            "waiting for 'prune'."
         ),
     )
     record.add_argument(
@@ -1037,6 +1079,25 @@ def build_parser() -> argparse.ArgumentParser:
             "Links every hook event of one Claude Code process, so /clear is followed."
         ),
     )
+    prune = client_sub.add_parser(
+        "prune",
+        help="Delete conversation records that have gone a long time unused, after asking.",
+    )
+    prune.add_argument(
+        "--dir",
+        help=(
+            "Directory to prune (default: EPIMEMER_CLIENT_STATE_DIR, else "
+            "~/.epimemer/client-state)."
+        ),
+    )
+    prune.add_argument(
+        "--older-than",
+        type=int,
+        default=client_state.CLIENT_STATE_OLD_AFTER_DAYS,
+        metavar="DAYS",
+        help="Days unused before a record is deleted (default: %(default)s).",
+    )
+    prune.add_argument("--yes", action="store_true", help="Skip the confirmation prompt.")
 
     relations = sub.add_parser("relations", help="The user-tier relationship vocabulary.")
     relations_sub = relations.add_subparsers(dest="action", required=True)
@@ -1207,6 +1268,8 @@ def main(argv: list[str] | None = None) -> int:
     # A hook, not administration: it touches no store, and it must not fail on
     # anything the checks below could refuse.
     if args.group == "client-state":
+        if args.action == "prune":
+            return _prune_client_state(args.dir, args.older_than, args.yes)
         try:
             raw = sys.stdin.read()
         except Exception:

@@ -258,6 +258,8 @@ class TestTheGateAtTheBoundary:
                 "storage": storage,
                 "config": config,
                 "connection_state": connection_state,
+                "version": "test",
+                "read_installed_version": lambda: None,
             }
 
     async def test_a_permissive_graph_lets_an_unnamed_write_through(self, storage, config):

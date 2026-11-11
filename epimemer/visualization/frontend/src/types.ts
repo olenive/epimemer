@@ -375,9 +375,9 @@ export interface RetrievedNodeWire {
  * different thing from `[]`, "declared and returned nothing". Keeping them
  * apart is what makes a forgotten declaration visible rather than silent.
  *
- * `query` and `response_text` are empty on a record the hub holds under a
- * non-loopback bind: payloads stay in the session process there, reachable
- * only over the `retrievals` RPC while that session lives.
+ * `query` and `response_text` are empty on every record a hub on a
+ * non-loopback bind hands out, from its mirror or from the `retrievals` RPC:
+ * payloads stay in the session process there.
  */
 export interface RetrievalRecordWire {
   record_id: string;

@@ -498,11 +498,18 @@ class EventCategory(str, Enum):
 
 
 class Event(BaseModel):
-    """Base event. All events carry a timestamp, category, and graph for routing."""
+    """Base event. All events carry a timestamp, category, and graph for routing.
+
+    `graph` is required. The hub delivers an event whose graph is empty to
+    every viewer of the session, whatever graph that viewer is open on, so an
+    event about one graph that left it out would reach the viewers of every
+    other. The pipeline events are the session-wide ones, by the visualiser
+    contract, and each declares its empty graph itself.
+    """
 
     timestamp: datetime = Field(default_factory=_now)
     category: EventCategory
-    graph: str = ""
+    graph: str
 
 
 # --- Graph events ---
@@ -671,10 +678,11 @@ class RetrievalRecorded(Event):
     must not import it back. The hub treats it opaquely, and only the frontend
     reads its fields.
 
-    The **payload guard lives at the producer**, not here: on a non-loopback
-    viz bind the session publishes a structural-metadata-only record, so query
-    text and response payloads never leave the process by this route
-    (`RETRIEVAL_PROVENANCE.md` §3.2).
+    The **payload guard is at both ends**, not here: on a non-loopback viz
+    host the session publishes a structural-metadata-only record, so query
+    text and response payloads never leave the process by this route, and a
+    hub on a non-loopback bind cuts every record it takes in the same way,
+    whatever the session sent (`RETRIEVAL_PROVENANCE.md` §3.2).
     """
 
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
@@ -739,7 +747,9 @@ class SegmentStored(Event):
 
 
 # --- Pipeline events ---
-# Emitted during Petri net execution to show process state.
+# Emitted during Petri net execution to show process state. A run belongs to the
+# session rather than to a graph, so each carries an empty `graph` and the hub
+# delivers it to every viewer of the session.
 
 
 class PipelineTopologyEdge(BaseModel):
@@ -753,6 +763,7 @@ class PipelineTopologyEdge(BaseModel):
 class PipelineStarted(Event):
     """A pipeline execution has begun, including full topology for rendering."""
 
+    graph: str = ""
     category: Literal[EventCategory.PIPELINE] = EventCategory.PIPELINE
     event_type: Literal["pipeline_started"] = "pipeline_started"
     pipeline_name: str
@@ -771,6 +782,7 @@ class TransitionFired(Event):
     tokens came from. A phase pipeline sends it as the phase starts.
     """
 
+    graph: str = ""
     category: Literal[EventCategory.PIPELINE] = EventCategory.PIPELINE
     event_type: Literal["transition_fired"] = "transition_fired"
     pipeline_name: str
@@ -781,6 +793,7 @@ class TransitionFired(Event):
 class TransitionCompleted(Event):
     """A transition has finished executing and produced output."""
 
+    graph: str = ""
     category: Literal[EventCategory.PIPELINE] = EventCategory.PIPELINE
     event_type: Literal["transition_completed"] = "transition_completed"
     pipeline_name: str
@@ -792,6 +805,7 @@ class TransitionCompleted(Event):
 class TokensUpdated(Event):
     """Token counts changed in one or more places (batch update)."""
 
+    graph: str = ""
     category: Literal[EventCategory.PIPELINE] = EventCategory.PIPELINE
     event_type: Literal["tokens_updated"] = "tokens_updated"
     pipeline_name: str
@@ -801,6 +815,7 @@ class TokensUpdated(Event):
 class PipelineCompleted(Event):
     """A pipeline execution has finished successfully."""
 
+    graph: str = ""
     category: Literal[EventCategory.PIPELINE] = EventCategory.PIPELINE
     event_type: Literal["pipeline_completed"] = "pipeline_completed"
     pipeline_name: str
@@ -818,6 +833,7 @@ class PipelineFailed(Event):
     raising one is excluded.
     """
 
+    graph: str = ""
     category: Literal[EventCategory.PIPELINE] = EventCategory.PIPELINE
     event_type: Literal["pipeline_failed"] = "pipeline_failed"
     pipeline_name: str

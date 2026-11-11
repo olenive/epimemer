@@ -90,6 +90,7 @@ from epimemer.core.types import (
     migration_disposition,
     recorded_relation_label,
     standing_relation_pairs,
+    was_active_at,
     with_retirement,
     with_return,
 )
@@ -1400,14 +1401,16 @@ class PostgresStorage:
         if at_time is None:
             clauses.append("status = %s")
             params.append(_value(status))
-        else:
-            # Active at that instant, whatever the status is now: born by then,
-            # and not yet retired.
-            at = _aware(at_time)
-            clauses.append("created_at <= %s AND (superseded_at IS NULL OR superseded_at > %s)")
-            params += [at, at]
+            where = f"WHERE {' AND '.join(clauses)}"
+            return await self._run(lambda c, g: _nodes(c, g, where, params))
+        # Active at that instant, whatever the status is now. The query finds
+        # what was born by then and `was_active_at` decides the rest, since the
+        # spells out of the active set live in `data`.
+        clauses.append("created_at <= %s")
+        params.append(_aware(at_time))
         where = f"WHERE {' AND '.join(clauses)}"
-        return await self._run(lambda c, g: _nodes(c, g, where, params))
+        born = await self._run(lambda c, g: _nodes(c, g, where, params))
+        return [node for node in born if was_active_at(node, at_time)]
 
     async def get_node_by_content(
         self,

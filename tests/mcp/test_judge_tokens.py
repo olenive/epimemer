@@ -64,6 +64,7 @@ def _deps(storage, embedder, config) -> dict:
         # Where the judge binding, tokens and confirmations live, one per
         # process as on stdio, so two `_deps` are two separate connections.
         "connection_state": new_connection_state(),
+        "read_installed_version": lambda: None,
     }
 
 

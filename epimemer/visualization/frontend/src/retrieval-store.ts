@@ -128,9 +128,9 @@ export const unreadCount = (
 /**
  * What the Response tab shows for a record whose payload never arrived.
  *
- * On a non-loopback bind the hub holds structural metadata only, and the
- * session that could serve the payload may be gone. Saying so plainly beats an
- * empty pane that looks like a bug (§3.2).
+ * On a non-loopback bind a record reaches the dashboard as structural
+ * metadata only, and the payload stays in the session process. Saying so
+ * plainly beats an empty pane that looks like a bug (§3.2).
  */
 export const responseText = (entry: RecordEntry): string => {
   if (entry.responseText) {
@@ -140,7 +140,7 @@ export const responseText = (entry: RecordEntry): string => {
   }
   return (
     "No response text for this record.\n\n" +
-    "The dashboard is not on a loopback bind, so payloads stayed in the " +
-    "session process; that session is no longer answering."
+    "The dashboard is not on a loopback bind, so the response stays in the " +
+    "session process and is not served here."
   );
 };

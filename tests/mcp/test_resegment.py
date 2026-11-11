@@ -201,6 +201,7 @@ async def _lifespan(server: FastMCP) -> AsyncIterator[dict]:
         "retrievals": new_record_log(),
         "connection_state": new_connection_state(),
         "version": "9.9.9",
+        "read_installed_version": lambda: None,
     }
 
 

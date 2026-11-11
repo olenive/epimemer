@@ -38,6 +38,9 @@ from epimemer.core.types import (
     moved_edge_types,
     rated_confidence,
     traversal_excluded,
+    was_active_at,
+    with_retirement,
+    with_return,
 )
 
 
@@ -181,6 +184,111 @@ class TestCountingMergeCycles:
 
     def test_a_node_that_never_left_has_no_cycles(self):
         assert completed_merge_cycles(Fact(content="c", source_id="s")) == 0
+
+
+_BORN = datetime(2026, 3, 1, tzinfo=UTC)
+_RETIRED = datetime(2026, 3, 10, tzinfo=UTC)
+_RESTORED = datetime(2026, 3, 20, tzinfo=UTC)
+_RETIRED_AGAIN = datetime(2026, 3, 30, tzinfo=UTC)
+
+
+def _retire(node: Fact, at: datetime) -> Fact:
+    """What every backend stores on a retirement."""
+    return node.model_copy(
+        update={
+            "status": NodeStatus.HISTORICAL,
+            "superseded_at": at,
+            "lifecycle": with_retirement(node.lifecycle, at=at, because=NodeStatus.HISTORICAL),
+        }
+    )
+
+
+def _return(node: Fact, at: datetime) -> Fact:
+    """What every backend stores on a return: `superseded_at` is cleared."""
+    return node.model_copy(
+        update={
+            "status": NodeStatus.ACTIVE,
+            "superseded_at": None,
+            "lifecycle": with_return(node.lifecycle, at=at),
+        }
+    )
+
+
+def _active_on(node: Fact, *days: int) -> list[bool]:
+    return [was_active_at(node, datetime(2026, 3, day, tzinfo=UTC)) for day in days]
+
+
+class TestWhetherANodeWasActiveAtAnInstant:
+    """`was_active_at` reads every spell out of the active set, not only the
+    current `(status, superseded_at)` snapshot, which holds the last one."""
+
+    def test_a_node_is_active_from_the_instant_it_was_created(self):
+        node = Fact(content="c", source_id="s", created_at=_BORN)
+
+        assert not was_active_at(node, _BORN - timedelta(microseconds=1))
+        assert was_active_at(node, _BORN)
+        assert _active_on(node, 31) == [True]
+
+    def test_a_retirement_never_reversed_lasts(self):
+        node = _retire(Fact(content="c", source_id="s", created_at=_BORN), _RETIRED)
+
+        assert was_active_at(node, _RETIRED - timedelta(microseconds=1))
+        assert not was_active_at(node, _RETIRED)
+        assert _active_on(node, 5, 15, 31) == [True, False, False]
+
+    def test_a_restored_node_was_out_between_retirement_and_return(self):
+        node = _return(
+            _retire(Fact(content="c", source_id="s", created_at=_BORN), _RETIRED), _RESTORED
+        )
+
+        assert _active_on(node, 5, 15, 25) == [True, False, True]
+        assert was_active_at(node, _RESTORED)
+
+    def test_a_second_retirement_does_not_hide_the_first_spell(self):
+        node = _retire(
+            _return(
+                _retire(Fact(content="c", source_id="s", created_at=_BORN), _RETIRED), _RESTORED
+            ),
+            _RETIRED_AGAIN,
+        )
+
+        assert node.superseded_at == _RETIRED_AGAIN
+        assert _active_on(node, 5, 15, 25, 31) == [True, False, True, False]
+
+    def test_a_retirement_from_before_episodes_existed_still_counts(self):
+        """No episode, only the snapshot pair, which a return always clears."""
+        node = Fact(
+            content="c",
+            source_id="s",
+            created_at=_BORN,
+            status=NodeStatus.SUPERSEDED,
+            superseded_at=_RETIRED,
+        )
+
+        assert node.lifecycle == []
+        assert _active_on(node, 5, 10, 31) == [True, False, False]
+
+    def test_a_return_from_before_episodes_existed_left_no_spell(self):
+        """Nothing recorded the earlier retirement, so it cannot be seen."""
+        node = _return(
+            Fact(
+                content="c",
+                source_id="s",
+                created_at=_BORN,
+                status=NodeStatus.ARCHIVED,
+                superseded_at=_RETIRED,
+            ),
+            _RESTORED,
+        )
+
+        assert node.lifecycle == []
+        assert _active_on(node, 5, 15, 25) == [True, True, True]
+
+    def test_a_naive_instant_is_read_as_utc(self):
+        node = _retire(Fact(content="c", source_id="s", created_at=_BORN), _RETIRED)
+
+        assert was_active_at(node, _BORN.replace(tzinfo=None))
+        assert not was_active_at(node, _RETIRED.replace(tzinfo=None))
 
 
 class TestAJudgmentIsAnchoredWhateverTheRetirement:

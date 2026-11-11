@@ -19,6 +19,11 @@ processes.
 
 Reading never raises into a tool: a missing, unreadable or malformed file
 reads as *model unknown*, which asks the user rather than binding silently.
+
+**Nothing is deleted for being old.** A file's modification time is how long
+it has gone unused: a hook event writes it and a server marks it used on every
+tool call. The hook gives notice of files long unused, and only
+`epimemer client-state prune`, run by the user, deletes them.
 """
 
 import json
@@ -30,9 +35,18 @@ from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
 
-# How long a session's file is kept after it was last written. A conversation
-# idle this long that resumes records itself again on `SessionStart`.
-CLIENT_STATE_KEEP_DAYS = 30
+# How long a state file goes unused before the hook mentions it. Nothing is
+# deleted for being old: a conversation left open has no hook event to refresh
+# its file, and deleting it would cost that conversation its seat. The hook
+# gives notice, and `epimemer client-state prune` deletes when the user runs it.
+CLIENT_STATE_OLD_AFTER_DAYS = 180
+
+# The least time between two notices, so one is not shown on every start.
+PRUNE_NOTICE_EVERY_DAYS = 30
+
+# Where the hook remembers when it last gave notice: an empty file whose
+# modification time is the answer. Not `.json`, so it is never read as state.
+PRUNE_NOTICE_MARKER = ".prune-notice"
 
 
 class ClientState(BaseModel):
@@ -84,17 +98,32 @@ def _read_state(path: Path | None) -> ClientState | None:
     return state.model_copy(update={"model": state.model.strip()})
 
 
-def live_client_state(directory: Path, spawn_session_id: str | None) -> ClientState | None:
-    """What the client is doing now, found through the conversation the server
-    was spawned in. None if there is nothing usable.
+class ClientRecords(BaseModel):
+    """What a server read about the conversation it serves.
+
+    `spawned` is the state of the conversation the server was started in.
+    `live` is the live record of the Claude Code process that wrote it, where
+    there is a usable one.
+    """
+
+    spawned: ClientState
+    live: ClientState | None = None
+
+
+def current_state(records: ClientRecords) -> ClientState:
+    """What the client is doing now: the live record, else the spawn conversation's."""
+    return records.live if records.live is not None else records.spawned
+
+
+def read_client_records(directory: Path, spawn_session_id: str | None) -> ClientRecords | None:
+    """The records for the conversation the server was spawned in, or None.
 
     The spawn conversation's file is read first, and must name that
     conversation. Where it names the Claude Code process that wrote it, and that
-    process's live record validates, the live record wins: after a `/clear` it
-    names the new conversation and whatever model is seated there. Otherwise
-    the spawn conversation's own file is the answer. Every failure, no id, no
-    file, a file that is not JSON, reads as None, which the caller treats as
-    unknown.
+    process's live record validates, the live record is read too: after a
+    `/clear` it names the new conversation and whatever model is seated there.
+    Every failure, no id, no file, a file that is not JSON, reads as None,
+    which the caller treats as unknown.
     """
     if not spawn_session_id:
         return None
@@ -104,8 +133,52 @@ def live_client_state(directory: Path, spawn_session_id: str | None) -> ClientSt
     if spawned.client_pid is not None:
         live = _read_state(client_pid_path(directory, spawned.client_pid))
         if live is not None and live.client_pid == spawned.client_pid:
-            return live
-    return spawned
+            return ClientRecords(spawned=spawned, live=live)
+    return ClientRecords(spawned=spawned)
+
+
+def live_client_state(directory: Path, spawn_session_id: str | None) -> ClientState | None:
+    """What the client is doing now, found through the conversation the server
+    was spawned in. None if there is nothing usable.
+
+    The live record wins where there is one; otherwise the spawn
+    conversation's own file is the answer.
+    """
+    records = read_client_records(directory, spawn_session_id)
+    return current_state(records) if records is not None else None
+
+
+def record_files(directory: Path, records: ClientRecords) -> list[Path]:
+    """The files `records` stands for.
+
+    The spawn conversation's file always. With a live record, that process's
+    file, and the file of the conversation it names where that is another
+    one: a server started after a reconnect is spawned in that conversation
+    and reads its file first.
+    """
+    spawned, live = records.spawned, records.live
+    files = [client_state_path(directory, spawned.session_id)]
+    if live is not None and live.client_pid is not None:
+        files.append(client_pid_path(directory, live.client_pid))
+        if live.session_id != spawned.session_id:
+            files.append(client_state_path(directory, live.session_id))
+    return [path for path in files if path is not None]
+
+
+def refresh_client_records(directory: Path, records: ClientRecords) -> None:
+    """Mark the files `records` stands for as used now.
+
+    A file's modification time is how long it has gone unused, and a hook
+    writes one only when a conversation starts, compacts, clears or switches
+    model. A server calls this on every tool call, so a conversation that is
+    still using Epimemer never looks abandoned. Only the time changes: nothing
+    is rewritten and a missing file is not created. Never raises.
+    """
+    for path in record_files(directory, records):
+        try:
+            os.utime(path)
+        except OSError:
+            continue
 
 
 def hook_model(payload: dict) -> str | None:
@@ -184,28 +257,101 @@ def parse_client_pid(given: str | None) -> tuple[int | None, str | None]:
     )
 
 
-def prune_client_state(directory: Path, *, keep_days: int = CLIENT_STATE_KEEP_DAYS) -> int:
-    """Delete state files not written for `keep_days`. Returns how many went.
+def old_client_state_files(
+    directory: Path, *, older_than_days: int = CLIENT_STATE_OLD_AFTER_DAYS
+) -> list[Path]:
+    """The state files not written or used for `older_than_days`, oldest first.
 
     Both kinds, the per-session files and the per-process live records, since
     they share the directory and the `.json` suffix. Judged by the file's
-    modification time, a number, never by text. A file that cannot be removed
-    is left for next time.
+    modification time, a number, never by text. Never raises: a directory or
+    a file that cannot be read contributes nothing.
     """
-    cutoff = time.time() - keep_days * 86400
-    removed = 0
+    cutoff = time.time() - older_than_days * 86400
     try:
         entries = list(directory.glob("*.json"))
     except OSError:
-        return 0
+        return []
+    aged = []
     for entry in entries:
         try:
-            if entry.stat().st_mtime < cutoff:
-                entry.unlink()
-                removed += 1
+            modified = entry.stat().st_mtime
+        except OSError:
+            continue
+        if modified < cutoff:
+            aged.append((modified, entry))
+    return [entry for _, entry in sorted(aged)]
+
+
+def prune_client_state(
+    directory: Path, *, older_than_days: int = CLIENT_STATE_OLD_AFTER_DAYS
+) -> int:
+    """Delete the state files `old_client_state_files` lists. Returns how many went.
+
+    Run only when the user asks, through `epimemer client-state prune`. A file
+    that cannot be removed is left for next time.
+    """
+    removed = 0
+    for entry in old_client_state_files(directory, older_than_days=older_than_days):
+        try:
+            entry.unlink()
+            removed += 1
         except OSError:
             continue
     return removed
+
+
+def prune_notice_text(count: int, directory: Path, days: int) -> str:
+    """What the hook tells the user about `count` old state files."""
+    records = "1 conversation record" if count == 1 else f"{count} conversation records"
+    have = "has" if count == 1 else "have"
+    return (
+        f"Epimemer: {records} in {directory} {have} not been used for {days} days. "
+        "Run `epimemer client-state prune` to delete them. Nothing is deleted until you do."
+    )
+
+
+def prune_notice(directory: Path) -> str | None:
+    """The notice of old state files, where one is due. None otherwise.
+
+    Due when there are files older than `CLIENT_STATE_OLD_AFTER_DAYS` and no
+    notice was given in the last `PRUNE_NOTICE_EVERY_DAYS`. Giving one is
+    remembered by touching the marker file, and a marker that cannot be
+    written means no notice, so a read-only directory does not produce one on
+    every start. Never raises.
+    """
+    old = old_client_state_files(directory)
+    if not old:
+        return None
+    marker = directory / PRUNE_NOTICE_MARKER
+    try:
+        last = marker.stat().st_mtime
+    except OSError:
+        last = None
+    if last is not None and last > time.time() - PRUNE_NOTICE_EVERY_DAYS * 86400:
+        return None
+    try:
+        marker.touch(mode=0o600)
+        os.utime(marker)
+    except OSError:
+        return None
+    return prune_notice_text(len(old), directory, CLIENT_STATE_OLD_AFTER_DAYS)
+
+
+def hook_notice(directory: Path, raw: str) -> str | None:
+    """What a hook run should show the user, or None.
+
+    Only a `SessionStart` shows anything: that is the one event whose message
+    to the user this was checked for. Any payload that cannot be read shows
+    nothing, since the hook must never fail a session.
+    """
+    try:
+        payload = json.loads(raw) if raw.strip() else {}
+    except ValueError:
+        return None
+    if not isinstance(payload, dict) or payload.get("hook_event_name") != "SessionStart":
+        return None
+    return prune_notice(directory)
 
 
 def record_from_hook(
@@ -249,5 +395,4 @@ def record_from_hook(
         )
     except OSError as error:
         return f"epimemer client-state: could not write to {directory}: {error}"
-    prune_client_state(directory)
     return None

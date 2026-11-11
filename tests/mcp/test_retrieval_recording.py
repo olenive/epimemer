@@ -61,6 +61,8 @@ def _lifespan_for(*, viz_host: str = "127.0.0.1"):
             "viz_hub_url": None,
             "retrievals": log,
             "connection_state": new_connection_state(),
+            "version": "test",
+            "read_installed_version": lambda: None,
         }
 
     return _test_lifespan, bus, log

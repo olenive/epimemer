@@ -66,7 +66,7 @@ nothing and reads as a clean graph.
 | `same_metacontext_variant` | `record_variant` within one metacontext | objects |
 | `same_metacontext_contradiction` | `record_contradiction` within one metacontext | escalates |
 | `description_not_written` | `store_decomposition`, for a tag this graph already describes | escalates |
-| `tag_joined_topic` | `store_decomposition`, for a tag that resolved to a topic node not created from a tag | escalates |
+| `tag_joined_topic` | `store_decomposition`, for a tag that resolved to a topic node not created from a tag and never merged with a tag of that name | escalates |
 
 `ADVISORY_STANCE` says whether a kind argues with the call (*objects*) or
 reports that the call was right and the result wants a person (*escalates*).
@@ -93,6 +93,13 @@ its description.
 The map is total rather than a set of objecting kinds: a set makes absence mean
 *escalates*, and silence quietly becoming a claim is what the metacontext requirement
 exists to prevent. A test asserts both directions.
+
+`stale_server` has the shape of a warning and stands outside this vocabulary.
+It is about the server process and not the graph: every response a tool
+returns carries it, errors and refusals included, while the installed
+package version differs from the one the server started on
+(`epimemer/mcp/staleness.py`). It has no setting, because a graph's settings
+must not silence it, and it writes no journal row.
 
 ---
 

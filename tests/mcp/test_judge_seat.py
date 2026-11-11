@@ -9,6 +9,8 @@ different seat is refused with what changed named.
 """
 
 import json
+import os
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -220,6 +222,7 @@ class TestThePickerShowsTheReason:
                 "storage": storage,
                 "version": "9.9.9",
                 "connection_state": server.new_connection_state(),
+                "read_installed_version": lambda: None,
             },
             elicit=elicit,
         )
@@ -393,6 +396,18 @@ class TestAWriteFromAChangedSeatIsRefused:
         listed = json.loads(await server.epimemer_list_graphs(ctx=ctx))
 
         assert "error" not in listed
+
+    async def test_any_call_marks_the_conversations_record_used(self, seated):
+        """A record is offered for deletion once it has gone long unused, and a
+        hook writes it only on a start, a compaction, a clear or a model
+        switch. A read is use too."""
+        ctx, directory = seated
+        long_ago = time.time() - 200 * 86400
+        os.utime(directory / "conv-1.json", (long_ago, long_ago))
+
+        await server.epimemer_list_graphs(ctx=ctx)
+
+        assert time.time() - (directory / "conv-1.json").stat().st_mtime < 60
 
 
 class TestClearIsFollowed:

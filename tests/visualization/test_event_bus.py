@@ -1,6 +1,7 @@
 """Tests for the event bus and instrumented storage."""
 
 from datetime import UTC, datetime
+from typing import get_args
 
 import pytest
 
@@ -21,10 +22,12 @@ from epimemer.visualization.events import (
     EmbeddingStored,
     Event,
     EventCategory,
+    GraphEvent,
     GraphSwitched,
     NodeStatusChanged,
     NodeStored,
     NodeView,
+    PipelineEvent,
     SegmentStored,
 )
 from epimemer.visualization.instrumented_storage import instrument_storage
@@ -83,7 +86,7 @@ async def test_publish_and_subscribe(bus):
     received: list[Event] = []
     bus.subscribe(handler=lambda e: received.append(e))
 
-    event = NodeStored(node=_make_node_view())
+    event = NodeStored(graph="g", node=_make_node_view())
     await bus.publish(event)
 
     assert len(received) == 1
@@ -98,8 +101,8 @@ async def test_filter_by_event_type(bus):
     bus.subscribe(NodeStored, handler=lambda e: nodes.append(e))
     bus.subscribe(EdgeStored, handler=lambda e: edges.append(e))
 
-    await bus.publish(NodeStored(node=_make_node_view()))
-    await bus.publish(EdgeStored(edge=_make_edge_view()))
+    await bus.publish(NodeStored(graph="g", node=_make_node_view()))
+    await bus.publish(EdgeStored(graph="g", edge=_make_edge_view()))
 
     assert len(nodes) == 1
     assert len(edges) == 1
@@ -110,7 +113,7 @@ async def test_filter_by_category(bus):
     graph_events: list[Event] = []
     bus.subscribe(category=EventCategory.GRAPH, handler=lambda e: graph_events.append(e))
 
-    await bus.publish(NodeStored(node=_make_node_view()))
+    await bus.publish(NodeStored(graph="g", node=_make_node_view()))
 
     assert len(graph_events) == 1
 
@@ -120,9 +123,9 @@ async def test_unsubscribe(bus):
     received: list[Event] = []
     unsub = bus.subscribe(handler=lambda e: received.append(e))
 
-    await bus.publish(NodeStored(node=_make_node_view(node_id="n1", content="a")))
+    await bus.publish(NodeStored(graph="g", node=_make_node_view(node_id="n1", content="a")))
     unsub()
-    await bus.publish(NodeStored(node=_make_node_view(node_id="n2", content="b")))
+    await bus.publish(NodeStored(graph="g", node=_make_node_view(node_id="n2", content="b")))
 
     assert len(received) == 1
 
@@ -139,7 +142,7 @@ async def test_handler_error_does_not_propagate(bus):
     bus.subscribe(handler=lambda e: received.append(e))
 
     # Should not raise
-    await bus.publish(NodeStored(node=_make_node_view()))
+    await bus.publish(NodeStored(graph="g", node=_make_node_view()))
 
     assert len(received) == 1
 
@@ -267,3 +270,19 @@ async def test_switch_database_emits_graph_switched(bus, storage):
     assert received[0].previous_graph == "default"
     assert received[0].new_graph == "new-graph"
     assert received[0].graph == "new-graph"
+
+
+# --- Which graph an event is about ---
+
+
+@pytest.mark.parametrize("event_type", get_args(GraphEvent), ids=lambda t: t.__name__)
+def test_every_graph_event_must_name_its_graph(event_type):
+    """The hub hands an event with an empty graph to every viewer of the
+    session, so a graph event that could leave it out would cross graphs."""
+    assert event_type.model_fields["graph"].is_required()
+
+
+@pytest.mark.parametrize("event_type", get_args(PipelineEvent), ids=lambda t: t.__name__)
+def test_every_pipeline_event_is_session_wide(event_type):
+    """The contract delivers pipeline events to every viewer of the session."""
+    assert event_type.model_fields["graph"].default == ""

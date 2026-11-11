@@ -146,7 +146,7 @@ class TestEmission:
             raise RuntimeError("consolidation exploded")
 
         monkeypatch.setattr(
-            "epimemer.pipelines.reflection.topic_consolidation.find_similar_topic_pairs",
+            "epimemer.mcp.tools.find_similar_topic_pairs",
             _boom,
         )
 

@@ -289,6 +289,21 @@ so a handshake alone proves nothing: the script calls a tool. The same check
 runs in `tests/mcp/test_server_starts.py` and, from a plain install with no
 optional extras, in the `server-starts` CI job.
 
+### Imports in code the server runs
+
+A server process outlives upgrades of the package, so it must hold every
+Epimemer module it will ever use by the time it has started. Import at the top
+of the module. An import inside a function is allowed where a cycle forces it
+and the module is loaded at startup anyway, and for the storage backend and
+embedding provider that configuration chooses. `tests/mcp/test_no_late_imports.py`
+fails on any other.
+
+Two things follow for tests. Patch a name where it is used,
+`epimemer.mcp.tools.<name>`, since the tools no longer import it afresh on each
+call. A lifespan built by hand needs `version` and `read_installed_version`,
+and `guide` if the test calls the guide; the `started_deps` fixture in
+`tests/mcp/conftest.py` runs the real lifespan.
+
 ## Petri net visualisation
 
 Any net renders through Petritype's plotting modules, which need

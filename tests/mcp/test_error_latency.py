@@ -35,6 +35,8 @@ def _ctx(timeout_seconds: float = 30.0) -> SimpleNamespace:
             "event_bus": None,
             "retrievals": new_record_log(),
             "connection_state": new_connection_state(),
+            "version": "test",
+            "read_installed_version": lambda: None,
         }
     )
 

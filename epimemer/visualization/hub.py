@@ -44,6 +44,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from epimemer.core.types import NodeType
+from epimemer.visualization.exposure import on_loopback, structural_record
 from epimemer.visualization.protocol import (
     INGEST_MAX_MESSAGE_BYTES,
     VIZ_SCHEMA_VERSION,
@@ -81,8 +82,9 @@ ADVISORY_EVENT_TYPE = "advisory_raised"
 # Retrieval records, mirrored here so the selector, focus mode and the Response
 # tab survive the session's death — the hub keeps disconnected sessions, but
 # RPC to one raises, which is exactly the "open the dashboard after noticing"
-# case (RETRIEVAL_PROVENANCE.md §3.2). What arrives is already guarded: on a
-# non-loopback bind the session sends structural metadata only.
+# case (RETRIEVAL_PROVENANCE.md §3.2). A session strips what it sends when the
+# host it names is not loopback; the hub strips again by its own bind, since the
+# two can differ, so on a non-loopback bind no record here carries text.
 RETRIEVAL_EVENT_TYPE = "retrieval_recorded"
 
 # Both rings hang off `sessions[sid]`; this says which event fills which, and
@@ -118,6 +120,24 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _structural_event(payload: dict) -> dict:
+    """A `retrieval_recorded` event with its record cut to structural metadata."""
+    record = payload.get("record")
+    return {**payload, "record": structural_record(record if isinstance(record, dict) else {})}
+
+
+def _structural_records(result: dict) -> dict:
+    """A session's `retrievals` answer with every record cut to structural metadata."""
+    records = result.get("records")
+    return {
+        "records": [
+            structural_record(record)
+            for record in (records if isinstance(records, list) else [])
+            if isinstance(record, dict)
+        ]
+    }
+
+
 def _pidfile_path() -> Path:
     return Path.home() / ".epimemer" / "viz-hub.pid"
 
@@ -127,8 +147,13 @@ def _pidfile_path() -> Path:
 # ----------------------------------------------------------------------------
 
 
-def create_hub_app() -> Starlette:
+def create_hub_app(*, bind_host: str) -> Starlette:
     """Build the hub's Starlette app.
+
+    `bind_host` is the address this hub listens on. It decides what the hub
+    keeps and hands out of a session's retrieval records, in its mirror and on
+    `/api/retrievals` (`exposure.py`), and it is required, so an app cannot be
+    built without saying where it is reachable.
 
     State lives in two dicts captured by the route closures (single event loop,
     so no locks beyond what each await naturally serializes):
@@ -152,6 +177,7 @@ def create_hub_app() -> Starlette:
     """
     sessions: dict[str, dict[str, Any]] = {}
     browsers: dict[WebSocket, dict[str, Any]] = {}
+    loopback = on_loopback(bind_host)
 
     # --- browser fan-out ---
 
@@ -309,6 +335,10 @@ def create_hub_app() -> Starlette:
 
                 if mtype == "event":
                     payload = dict(msg.get("payload", {}))
+                    # Cut here, before the ring and the fan-out, so the live
+                    # stream and the replay both carry what this bind allows.
+                    if not loopback and payload.get("event_type") == RETRIEVAL_EVENT_TYPE:
+                        payload = _structural_event(payload)
                     payload["session_id"] = sid
                     sessions[sid]["last_event_at"] = _now()
                     ring_key = _RING_KEYS.get(payload.get("event_type", ""))
@@ -470,19 +500,33 @@ def create_hub_app() -> Starlette:
         )
 
     async def api_retrievals(request: Request) -> JSONResponse:
-        """This session's retrieval records, payloads included.
+        """This session's retrieval records, asked of the session process.
 
-        Served by the session process itself, which is what makes it work when
-        the hub's own mirror is guarded down to structural metadata. It stops
-        working when the session exits — the mirror is what survives that, and
-        the two are complementary rather than redundant (§3.2).
+        On a loopback bind the records come back whole, query and response
+        text included. On any other bind every record is cut to structural
+        metadata here, before it leaves the hub (`exposure.py`): anyone who can
+        reach the hub can call this route, so the text stays in the session
+        process and the dashboard does not show it. The hub's own bind
+        decides, never a session's configuration, since a hub can be started
+        with another host than the one a session names.
+
+        It stops answering when the session exits; the hub's mirror is what
+        survives that (§3.2).
         """
         session_id = request.query_params.get("session")
         if not session_id:
             return JSONResponse({"error": "Missing 'session' query parameter"}, status_code=400)
-        return await _rpc_endpoint(session_id, "retrievals", {})
+        return await _rpc_endpoint(
+            session_id, "retrievals", {}, shape=None if loopback else _structural_records
+        )
 
-    async def _rpc_endpoint(session_id: str, method: str, params: dict) -> JSONResponse:
+    async def _rpc_endpoint(
+        session_id: str,
+        method: str,
+        params: dict,
+        shape: Callable[[dict], dict] | None = None,
+    ) -> JSONResponse:
+        """A session's answer to `method`, passed through `shape` where one is given."""
         try:
             result = await _rpc(session_id, method, params)
         except LookupError as exc:
@@ -491,7 +535,7 @@ def create_hub_app() -> Starlette:
             return JSONResponse({"error": "session RPC timed out"}, status_code=504)
         except (ConnectionError, RuntimeError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=502)
-        return JSONResponse(result)
+        return JSONResponse(result if shape is None else shape(result))
 
     async def _index(request: Request) -> FileResponse | PlainTextResponse:
         # The bundle is build output and never committed, so a checkout has
@@ -659,7 +703,7 @@ def run() -> int:
     _write_pidfile()
     logger.info("Visualization hub listening on http://%s:%d", host, port)
     config = uvicorn.Config(
-        create_hub_app(),
+        create_hub_app(bind_host=host),
         log_level="warning",
         lifespan="off",
         ws_max_size=INGEST_MAX_MESSAGE_BYTES,

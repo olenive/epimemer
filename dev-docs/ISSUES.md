@@ -185,6 +185,108 @@ connection.
 
 ---
 
+### A past snapshot loses a merge survivor once the merge is reversed
+
+⏸ **Deferred**, decision stated below.
+
+`reverse_merge` deletes the survivor, the one deletion of a single node there
+is. `graph_as_of` reads the nodes that exist now, so a snapshot taken at an
+instant between the merge and its reversal shows neither the sources, which
+were retired as merged for that spell, nor the survivor, which is gone. The
+graph held the claim then, and the snapshot says it held nothing.
+
+**Why it matters:** *what did we believe on date X* gives a wrong answer for
+any claim merged before X and un-merged after it.
+
+**Files:** `reverse_merge_tx` in each `epimemer/storage/` adapter;
+`was_active_at` in `epimemer/core/types.py`; `graph_as_of` in
+`epimemer/mcp/tools.py`.
+
+**The decision:** keep the survivor as a retired node with a lifecycle episode
+in place of deleting it, which changes the documented rule that a reversal
+destroys it, or accept the gap and say so in the `graph_as_of` description.
+
+**Guarding tests:** `tests/storage/test_storage_parity.py`, beside
+`TestTheActiveSetAtAnInstant`: merge two facts, reverse the merge, and assert
+that `query_nodes(at_time=<between the two>)` returns the survivor. It fails
+on `main` because the survivor's row no longer exists.
+
+**Verify:** `uv run python -m pytest tests/storage tests/mcp -q`, then
+`make test-integration` and `make test-postgres`.
+
+---
+
+### A node reimported from an archive shows as active through its archived spell
+
+⏸ **Deferred**, trigger stated below.
+
+`apply_reflection(archivals=...)` exports a node and only then flips it to
+archived, so the export holds the node as it was while active, with no
+lifecycle episode for the archival. `restore(archive_data=...)` writes that
+copy back when the node is missing from the graph. The node returns with no
+record of the spell it spent archived, so `graph_as_of` and `query_changes`
+report it as active throughout.
+
+**Why it matters:** a transaction-time read is wrong for the archived spell.
+It needs a node that is absent from the graph, which archival alone never
+causes, so today it takes a rebuilt graph or a bundle restored elsewhere.
+
+**Trigger:** the first time a cold-storage reimport is used on a graph whose
+history is read back. **Fix then:** have the reimport append an episode from
+the archival's journal row, or export the node after the flip.
+
+**Files:** `restore` and the archivals block of `apply_reflection` in
+`epimemer/mcp/tools.py`; `archive_nodes` in
+`epimemer/pipelines/reflection/archival.py`.
+
+**Guarding tests:** `tests/mcp/test_tools.py`, beside the restore tests:
+archive a node, remove it from storage, restore it from `archive_data`, and
+assert `graph_as_of` at an instant inside the archived spell leaves it out.
+
+**Verify:** `uv run python -m pytest tests/mcp tests/pipelines -q`.
+
+---
+
+### `reflect` reads its counter before the call takes its turn
+
+`memory_reflect` in `epimemer/mcp/server.py` calls `get_reflect_counter()`
+before it enters `_run_with_timeout`, so the read happens outside the call's
+turn over the active graph and before the wrong-graph check.
+
+**Why it matters:** a `reflect` that names the wrong graph still reads the
+active graph's counter before it is refused.
+
+**Files:** `memory_reflect` in `epimemer/mcp/server.py`; move the read inside
+the function handed to `_run_with_timeout`.
+
+**Guarding tests:** `tests/mcp/test_tools.py`: call `reflect` with an
+`expected_graph` that is not the active one, on a storage that records each
+counter read, and assert none was made.
+
+**Verify:** `uv run python -m pytest tests/mcp -q`.
+
+---
+
+### A write refused for its judge is missing from the tool log
+
+The four refusals `_judge_for_write` builds in `epimemer/mcp/server.py` (wrong
+graph, unknown token, changed seat, judge required) return before
+`_run_with_timeout`, so they skip the tool log and the retrieval record.
+
+**Why it matters:** the log is how a session that went wrong is read back, and
+these refusals are among the calls it most needs to show.
+
+**Files:** `_judge_for_write` and the 27 write tools that return its refusal,
+in `epimemer/mcp/server.py`; log the refusal where it is built, or move the
+gate inside the wrapper.
+
+**Guarding tests:** `tests/mcp/test_require_judge.py`: refuse a write and
+assert the tool log names the tool and the refusal.
+
+**Verify:** `uv run python -m pytest tests/mcp -q`.
+
+---
+
 ## Older carry-overs (open, low priority)
 
 - **No retroactive repair of old graphs.** Fixes apply to new operations;

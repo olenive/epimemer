@@ -1,8 +1,10 @@
 """Archival functions for the reflection layer.
 
-Nominates nodes for archival (`nominate_archival_candidates`: retired, evidence
-stale, never retrieved, and stale judgment), and exports nodes with their
-history edges into a serializable format suitable for cold storage.
+Nominates active nodes for archival (`nominate_archival_candidates`: evidence
+stale, never retrieved, and stale judgment). Finds old retired nodes
+(`find_archival_candidates`) and exports nodes with their history edges into a
+serializable format suitable for cold storage, which is what the `archive` tool
+does.
 """
 
 from collections.abc import Sequence
@@ -121,15 +123,13 @@ async def archive_nodes(
 # approved by a human before `apply_reflection` acts on it.
 
 
-ArchivalReason = Literal["retired", "evidence_stale", "never_retrieved", "stale_judgment"]
+ArchivalReason = Literal["evidence_stale", "never_retrieved", "stale_judgment"]
 
-# Priority order, worst first. A retired node has already been replaced; a stale
-# inference has lost its basis; an unused fact is merely unloved. A stale
-# judgment is last and is not really an archival claim at all — it asks the
-# agent to re-confirm or lower an assessment nobody has revisited, which may
-# well end in judging the node back up.
+# Priority order, worst first. A stale inference has lost its basis; an unused
+# fact is merely unloved. A stale judgment is last and is not really an archival
+# claim at all: it asks the agent to re-confirm or lower an assessment nobody
+# has revisited, which may well end in judging the node back up.
 _REASON_ORDER: tuple[ArchivalReason, ...] = (
-    "retired",
     "evidence_stale",
     "never_retrieved",
     "stale_judgment",
@@ -143,9 +143,9 @@ DEFAULT_NOMINATION_LIMIT = 20
 DEFAULT_IMPORTANCE_CEILING = 0.5
 
 # How long an upward judgment protects a node before it is worth re-confirming.
-# Longer than the 90-day retirement window on purpose: re-reviewing every judged
-# node quarterly is noise, and the point is to catch assessments that have
-# quietly expired, not to re-litigate recent ones.
+# Six months on purpose: re-reviewing every judged node quarterly is noise, and
+# the point is to catch assessments that have quietly expired, not to
+# re-litigate recent ones.
 DEFAULT_JUDGMENT_MAX_AGE_DAYS = 180
 
 
@@ -366,39 +366,41 @@ async def evidence_gone_for(
 async def nominate_archival_candidates(
     storage: StorageBackend,
     *,
-    max_age_days: int = 90,
     importance_ceiling: float = DEFAULT_IMPORTANCE_CEILING,
     judgment_max_age_days: int = DEFAULT_JUDGMENT_MAX_AGE_DAYS,
     limit: int = DEFAULT_NOMINATION_LIMIT,
     deferral_defaults: DeferralSettings | None = None,
 ) -> list[ArchivalCandidate]:
-    """Propose nodes worth archiving, worst first.
+    """Propose active nodes worth archiving, worst first.
 
-    Four classes, in the priority order §12.3 sets out:
+    Three classes, in the priority order §12.3 sets out:
 
-    1. **retired** — SUPERSEDED/MERGED past `max_age_days` and not judged
-       important. These are the existing age-based candidates, now value-aware.
-    2. **evidence_stale** — active inferences flagged by the review loop, plus
-       those whose entire evidence set has since been archived (the follow-on
-       to class 1 and 3). Their basis changed; they are the
-       expensive-to-recreate layer, so they are flagged rather than swept.
+    1. **evidence_stale**: active inferences flagged by the review loop, plus
+       those whose entire evidence set has since been archived. Their basis
+       changed; they are the expensive-to-recreate layer, so they are flagged
+       rather than swept.
        **`evidence_merged` is deliberately not read here**: a premise that
        absorbed another claim gained provenance rather than losing its basis, so
        nominating on it would have every merge propose discarding its own
        dependents. That label asks the agent for a re-read, which is recorded
        as a keep anchored to the absorbed ids; `archival_reasons` is the
        narrower set this class reads.
-    3. **never_retrieved** — active facts and topics never returned by a
+    2. **never_retrieved**: active facts and topics never returned by a
        search, not judged important, and with nothing depending on them, less
        any a standing deferral is still holding back
        (`never_retrieved_exclusion`). A deferred node whose wait is over comes
        back first within the class, carrying `deferred`, so the limit cannot
        keep pushing it out behind nodes nobody has looked at yet.
-    4. **stale_judgment** — active nodes held above the ceiling by an upward
-       judgment older than `judgment_max_age_days` that nobody has revisited.
-       Not an archival claim: importance protects a node from every class above,
-       so without this an assessment that has since expired protects it forever
-       and the cheap tier never looks at the node again.
+    3. **stale_judgment**: active facts and topics held above the ceiling by
+       an upward judgment older than `judgment_max_age_days` that nobody has
+       revisited. Not an archival claim: importance keeps a node out of
+       `never_retrieved`, so without this an assessment that has since expired
+       protects it forever and the cheap tier never looks at the node again.
+
+    Every nominee is active, because `apply_reflection` archives only an
+    active node. A node retired as corrected or merged is already out of every
+    active query, and the `archive` tool exports the old ones through
+    `find_archival_candidates`.
 
     `importance_ceiling` is inclusive of the default (0.5) on purpose: an
     un-judged node is not a node judged worth keeping, and nomination is a
@@ -416,10 +418,6 @@ async def nominate_archival_candidates(
     candidates: dict[ArchivalReason, list[ArchivalCandidate]] = {
         reason: [] for reason in _REASON_ORDER
     }
-
-    for node in await find_archival_candidates(storage, max_age_days=max_age_days):
-        if node.value.importance <= importance_ceiling:
-            candidates["retired"].append(_candidate(node, "retired"))
 
     active = list(await storage.query_nodes(status=NodeStatus.ACTIVE))
 

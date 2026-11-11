@@ -2979,6 +2979,99 @@ class TestTimestampsAtAWholeSecond:
         assert [n.id for n in found] == [node.id]
 
 
+# Whole seconds on purpose: the case a text comparison of timestamps gets wrong.
+BORN = datetime(2026, 4, 1, 9, 0, 0, tzinfo=UTC)
+RETIRED = datetime(2026, 4, 10, 9, 0, 0, tzinfo=UTC)
+RESTORED = datetime(2026, 4, 20, 9, 0, 0, tzinfo=UTC)
+RETIRED_AGAIN = datetime(2026, 4, 30, 9, 0, 0, tzinfo=UTC)
+
+
+def _april(day: int) -> datetime:
+    return datetime(2026, 4, day, 12, 0, tzinfo=UTC)
+
+
+async def _active_ids(store, at: datetime, node_type: NodeType | None = None) -> set[str]:
+    return {n.id for n in await store.query_nodes(at_time=at, node_type=node_type)}
+
+
+async def _set_status(store, node_id: str, status: NodeStatus, at: datetime) -> None:
+    node = await store.get_node(node_id)
+    await store.set_node_status_tx([node], status=status, at=at)
+
+
+class TestTheActiveSetAtAnInstant:
+    """`query_nodes(at_time=...)` reads every spell a node spent out of the
+    active set. The current `(status, superseded_at)` pair holds only the last
+    one, and a return clears it, so a node retired and brought back used to be
+    reported active through the spell it spent retired."""
+
+    async def test_a_node_created_after_the_instant_is_absent(self, store):
+        node = Fact(content="x", source_id="s1", created_at=RESTORED)
+        await store.store_node(node)
+
+        assert await _active_ids(store, _april(15)) == set()
+        assert await _active_ids(store, _april(25)) == {node.id}
+
+    async def test_a_node_retired_and_never_restored_is_absent_from_then_on(self, store):
+        node = Fact(content="x", source_id="s1", created_at=BORN)
+        await store.store_node(node)
+        await _set_status(store, node.id, NodeStatus.HISTORICAL, RETIRED)
+
+        assert await _active_ids(store, _april(5)) == {node.id}
+        assert await _active_ids(store, RETIRED) == set()
+        assert await _active_ids(store, _april(25)) == set()
+
+    async def test_a_restored_node_is_absent_while_it_was_retired(self, store):
+        node = Fact(content="x", source_id="s1", created_at=BORN)
+        await store.store_node(node)
+        await _set_status(store, node.id, NodeStatus.HISTORICAL, RETIRED)
+        await _set_status(store, node.id, NodeStatus.ACTIVE, RESTORED)
+
+        assert await _active_ids(store, _april(5)) == {node.id}
+        assert await _active_ids(store, _april(15)) == set()
+        assert await _active_ids(store, RESTORED) == {node.id}
+        assert await _active_ids(store, _april(25)) == {node.id}
+
+    async def test_a_second_retirement_does_not_hide_the_first(self, store):
+        node = Fact(content="x", source_id="s1", created_at=BORN)
+        await store.store_node(node)
+        await _set_status(store, node.id, NodeStatus.HISTORICAL, RETIRED)
+        await _set_status(store, node.id, NodeStatus.ACTIVE, RESTORED)
+        await _set_status(store, node.id, NodeStatus.ARCHIVED, RETIRED_AGAIN)
+
+        assert await _active_ids(store, _april(5)) == {node.id}
+        assert await _active_ids(store, _april(15)) == set()
+        assert await _active_ids(store, _april(25)) == {node.id}
+        assert await _active_ids(store, RETIRED_AGAIN + timedelta(hours=1)) == set()
+
+    async def test_a_retirement_from_before_episodes_existed_still_counts(self, store):
+        """No episode: only the status and `superseded_at`, as old graphs hold."""
+        node = Fact(
+            content="x",
+            source_id="s1",
+            created_at=BORN,
+            status=NodeStatus.SUPERSEDED,
+            superseded_at=RETIRED,
+        )
+        await store.store_node(node)
+
+        assert (await store.get_node(node.id)).lifecycle == []
+        assert await _active_ids(store, _april(5)) == {node.id}
+        assert await _active_ids(store, _april(15)) == set()
+
+    async def test_the_node_type_still_narrows_it(self, store):
+        fact = Fact(content="x", source_id="s1", created_at=BORN)
+        topic = Topic(content="t", source_id="s1", created_at=BORN)
+        for node in (fact, topic):
+            await store.store_node(node)
+            await _set_status(store, node.id, NodeStatus.HISTORICAL, RETIRED)
+            await _set_status(store, node.id, NodeStatus.ACTIVE, RESTORED)
+
+        assert await _active_ids(store, _april(15), NodeType.FACT) == set()
+        assert await _active_ids(store, _april(25), NodeType.FACT) == {fact.id}
+        assert await _active_ids(store, _april(25), NodeType.TOPIC) == {topic.id}
+
+
 AT = datetime(2026, 9, 12, 12, 0, tzinfo=UTC)
 JUDGE = JudgeRef(agent_id="k1", digest="d1")
 

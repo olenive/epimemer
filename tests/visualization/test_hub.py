@@ -12,18 +12,21 @@ import json
 import socket
 import urllib.error
 import urllib.request
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
 import uvicorn
 import websockets
 
-from epimemer.core.types import EmbeddingRecord, Fact, Topic
+from epimemer.core.types import EmbeddingRecord, Fact, RawDocument, Segment, Topic
 from epimemer.storage.memory import InMemoryStorage
 from epimemer.visualization import hub as hubmod
 from epimemer.visualization.event_bus import InProcessEventBus
+from epimemer.visualization.events import PipelineStarted
 from epimemer.visualization.hub import create_hub_app
 from epimemer.visualization.hub_client import start_hub_client
+from epimemer.visualization.instrumented_storage import instrument_storage
 from epimemer.visualization.protocol import (
     INGEST_MAX_MESSAGE_BYTES,
     UNVERSIONED_SCHEMA,
@@ -72,9 +75,14 @@ async def _wait(pred, timeout: float = 3.0) -> None:
     raise AssertionError("condition not met within timeout")
 
 
-@pytest.fixture
-async def hub():
-    app = create_hub_app()
+@asynccontextmanager
+async def _serving(bind_host: str):
+    """A hub told it is bound to `bind_host`, listening on a loopback port.
+
+    The app reads its bind address as a value, so a test can ask what a hub
+    bound to every interface would serve without opening one to the network.
+    """
+    app = create_hub_app(bind_host=bind_host)
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(("127.0.0.1", 0))
@@ -100,6 +108,19 @@ async def hub():
     finally:
         server.should_exit = True
         await task
+
+
+@pytest.fixture
+async def hub():
+    async with _serving("127.0.0.1") as serving:
+        yield serving
+
+
+@pytest.fixture
+async def exposed_hub():
+    """A hub bound to every interface, where anyone who can route to it reads it."""
+    async with _serving("0.0.0.0") as serving:
+        yield serving
 
 
 async def _register(ws, info: SessionInfo) -> None:
@@ -398,6 +419,50 @@ async def test_a_warning_stays_inside_the_viewed_graph(hub):
     assert [m["action_id"] for m in replayed] == ["002"]
 
 
+async def test_document_segment_and_embedding_events_stay_inside_their_graph(hub):
+    """A viewer of one graph must not receive another graph's document and
+    segment previews. Pipeline events carry no graph and reach every viewer of
+    the session, as the contract promises."""
+    raw = InMemoryStorage()
+    await raw.switch_database("beta")
+    await raw.store_document(RawDocument(id="d1", content="A beta passage."))
+    bus = InProcessEventBus()
+    storage = instrument_storage(raw, bus)
+    stop = await start_hub_client(bus, raw, _session("s-a", graph="beta"), hub.ingest)
+    try:
+        await _wait(lambda: _pred_len(hub.addr, 1))
+        async with websockets.connect(hub.ws) as alpha, websockets.connect(hub.ws) as beta:
+            await _subscribe(alpha, "s-a", graphs=["alpha"])
+            await _subscribe(beta, "s-a", graphs=["beta"])
+            await asyncio.sleep(0.1)
+
+            await storage.store_document(RawDocument(id="d2", content="Another beta passage."))
+            await storage.store_segment(
+                Segment(id="s1", source_id="d1", text="A beta passage.", span_start=0, span_end=15)
+            )
+            await storage.store_embedding(
+                EmbeddingRecord(item_id="n1", model_id="m", vector=[0.1, 0.2])
+            )
+            await bus.publish(
+                PipelineStarted(pipeline_name="store", place_names=[], transition_names=[])
+            )
+
+            seen_by_beta = await _drain(beta, 4)
+            seen_by_alpha = await _drain(alpha, 1)
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(alpha.recv(), timeout=0.3)
+    finally:
+        await stop()
+
+    assert [(m["event_type"], m["graph"]) for m in seen_by_beta] == [
+        ("document_stored", "beta"),
+        ("segment_stored", "beta"),
+        ("embedding_stored", "beta"),
+        ("pipeline_started", ""),
+    ]
+    assert [m["event_type"] for m in seen_by_alpha] == ["pipeline_started"]
+
+
 async def test_the_warning_settings_rpc_reaches_the_session(hub):
     """Read-only, and answered where the graph's overrides live (`EVENT_LOG.md` §12.4)."""
     async with websockets.connect(hub.ingest) as sess:
@@ -528,6 +593,50 @@ async def test_records_survive_session_death_in_the_hub_ring(hub):
     assert [m["record"]["record_id"] for m in replayed] == ["001"]
 
 
+async def _mirrored(hub_ns, payload: dict) -> tuple[dict, dict]:
+    """What a viewer gets of one record live, and what a later viewer gets replayed."""
+    async with websockets.connect(hub_ns.ingest) as sess:
+        await _register(sess, _session("s-a"))
+        await _wait(lambda: _pred_len(hub_ns.addr, 1))
+        async with websockets.connect(hub_ns.ws) as watching:
+            await _subscribe(watching, "s-a")
+            await asyncio.sleep(0.1)
+            await sess.send(PublishEvent(payload=payload).model_dump_json())
+            [live] = await _drain(watching, 1)
+        async with websockets.connect(hub_ns.ws) as later:
+            await _subscribe(later, "s-a")
+            [replayed] = await _drain(later, 1)
+    return live, replayed
+
+
+async def test_a_loopback_hub_mirrors_the_record_whole(hub):
+    """A session that names a loopback hub sends the whole record, and it stays whole."""
+    sent = _record("001", payload='{"result": "the private answer"}')
+
+    live, replayed = await _mirrored(hub, sent)
+
+    assert live["record"] == sent["record"]
+    assert replayed["record"] == sent["record"]
+
+
+async def test_a_hub_on_another_bind_mirrors_structural_metadata_whatever_the_session_sent(
+    exposed_hub,
+):
+    """The session decides what it sends by the host it names, and that can be a
+    loopback one while the hub listens everywhere. The hub's own bind decides
+    what it keeps and hands on, live and replayed."""
+    sent = _record("001", payload='{"result": "the private answer"}')
+
+    live, replayed = await _mirrored(exposed_hub, sent)
+
+    stripped = {**sent["record"], "query": "", "response_text": ""}
+    assert live["record"] == stripped
+    assert replayed["record"] == stripped
+    assert live["graph"] == "memory" and live["session_id"] == "s-a"
+    assert "private" not in json.dumps([live, replayed])
+    assert "deployment" not in json.dumps([live, replayed])
+
+
 async def test_records_never_mix_across_sessions(hub):
     """Per-session keying is a contract, not an accident of placement.
 
@@ -577,8 +686,7 @@ async def test_the_two_rings_are_bounded_separately(hub, monkeypatch):
 
 
 async def test_the_retrievals_rpc_reaches_the_session(hub):
-    """The payload route: served by the process that produced it, which is what
-    still works when the hub's mirror is guarded down to metadata."""
+    """The payload route: served by the process that produced it."""
     async with websockets.connect(hub.ingest) as sess:
         await _register(sess, _session("s-a"))
         await _wait(lambda: _pred_len(hub.addr, 1))
@@ -597,6 +705,65 @@ async def test_the_retrievals_rpc_reaches_the_session(hub):
 
     assert status == 200
     assert json.loads(body)["records"][0]["record_id"] == "001"
+
+
+# A record as the session serialises it, query and payload included.
+FULL_RECORD = {
+    "record_id": "000000000001",
+    "at": "2026-11-11T09:00:00Z",
+    "tool": "epimemer.search",
+    "query": "the private question",
+    "graph": "default",
+    "retrieved": [{"node_id": "n1", "provenance": "vector", "score": 0.9}],
+    "response_text": '{"result": "the private answer"}',
+    "truncated": False,
+}
+
+
+async def _retrievals_served(hub_ns, records: list) -> tuple[int, dict]:
+    """What `/api/retrievals` hands a browser when the session answers `records`."""
+    async with websockets.connect(hub_ns.ingest) as sess:
+        await _register(sess, _session("s-a"))
+        await _wait(lambda: _pred_len(hub_ns.addr, 1))
+
+        pending = asyncio.create_task(_http_get(hub_ns.addr, "/api/retrievals?session=s-a"))
+        req = json.loads(await asyncio.wait_for(sess.recv(), timeout=3))
+        assert req["method"] == "retrievals"
+        await sess.send(
+            RpcResponse(request_id=req["request_id"], result={"records": records}).model_dump_json()
+        )
+        status, body = await asyncio.wait_for(pending, timeout=3)
+    return status, json.loads(body)
+
+
+async def test_a_loopback_hub_serves_the_records_whole(hub):
+    status, body = await _retrievals_served(hub, [FULL_RECORD])
+
+    assert status == 200
+    assert body["records"] == [FULL_RECORD]
+
+
+async def test_a_hub_on_another_bind_serves_structural_metadata_only(exposed_hub):
+    """Whoever can reach the hub reads this route, so the text stays in the session."""
+    status, body = await _retrievals_served(exposed_hub, [FULL_RECORD])
+
+    assert status == 200
+    assert body["records"] == [{**FULL_RECORD, "query": "", "response_text": ""}]
+    assert "private" not in json.dumps(body)
+
+
+async def test_a_field_the_guard_does_not_know_is_left_out(exposed_hub):
+    """The structural fields are listed, so a field added later stays out until
+    somebody decides it is safe to hand out."""
+    record = {
+        **FULL_RECORD,
+        "arguments": {"query": "the private question"},
+        "retrieved": [{**FULL_RECORD["retrieved"][0], "content": "the private node"}],
+    }
+
+    _, body = await _retrievals_served(exposed_hub, [record])
+
+    assert body["records"] == [{**FULL_RECORD, "query": "", "response_text": ""}]
 
 
 # --- RPC round-trip ---

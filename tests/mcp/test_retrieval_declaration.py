@@ -23,6 +23,7 @@ from fastmcp import FastMCP
 
 from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext, NodeStatus
 from epimemer.embeddings.mock import MockEmbeddingProvider
+from epimemer.mcp import guidance
 from epimemer.mcp import server as server_mod
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.retrieval_records import new_record_log
@@ -61,6 +62,8 @@ async def _test_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         "viz_hub_url": None,
         "retrievals": new_record_log(),
         "connection_state": new_connection_state(),
+        "read_installed_version": lambda: None,
+        "guide": guidance.guide(),
     }
 
 
@@ -86,9 +89,9 @@ def captured(monkeypatch) -> list[tuple[dict, ResponseMeta]]:
     seen: list[tuple[dict, ResponseMeta]] = []
     original = server_mod._build_response
 
-    def _spy(result: dict, meta: ResponseMeta, latency_ms: float) -> str:
+    def _spy(result: dict, meta: ResponseMeta, latency_ms: float, warning: dict | None) -> str:
         seen.append((result, meta))
-        return original(result, meta, latency_ms)
+        return original(result, meta, latency_ms, warning)
 
     monkeypatch.setattr(server_mod, "_build_response", _spy)
     return seen
@@ -433,6 +436,7 @@ def _args(tool: str, seeded: dict) -> dict:
         "use_graph": {"name": "default", "confirm": True},
         "delete_graph": {"name": "not-a-graph", "confirm": True},
         "viz_status": {},
+        "guide": {},
     }[tool]
 
 
@@ -525,6 +529,7 @@ ALL_TOOLS = [
     "claim_agent",
     "delete_graph",
     "viz_status",
+    "guide",
 ]
 
 

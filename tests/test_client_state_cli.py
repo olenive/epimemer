@@ -17,8 +17,11 @@ import pytest
 
 from epimemer.cli import main
 from epimemer.client_state import (
+    PRUNE_NOTICE_MARKER,
     ClientState,
     live_client_state,
+    read_client_records,
+    refresh_client_records,
     write_client_state,
 )
 
@@ -139,19 +142,90 @@ def test_an_unwritable_directory_still_exits_zero(monkeypatch, capsys, tmp_path)
     assert "could not write" in err
 
 
-def test_files_older_than_thirty_days_are_pruned(monkeypatch, capsys, tmp_path):
-    old = tmp_path / "conv-old.json"
-    recent = tmp_path / "conv-recent.json"
-    for path in (old, recent):
-        path.write_text("{}")
-    long_ago = time.time() - 31 * 86400
-    os.utime(old, (long_ago, long_ago))
-    a_while_ago = time.time() - 29 * 86400
-    os.utime(recent, (a_while_ago, a_while_ago))
+def _aged(path, days: int) -> None:
+    then = time.time() - days * 86400
+    os.utime(path, (then, then))
 
-    _run(monkeypatch, capsys, {"session_id": "conv-1", "model": "m"}, "--dir", str(tmp_path))
 
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["conv-1.json", "conv-recent.json"]
+def _old_file(directory, name: str, days: int):
+    path = directory / name
+    path.write_text("{}")
+    _aged(path, days)
+    return path
+
+
+SESSION_START = {
+    "hook_event_name": "SessionStart",
+    "source": "startup",
+    "session_id": "conv-1",
+    "model": "m",
+}
+
+
+def test_the_hook_deletes_nothing_however_old(monkeypatch, capsys, tmp_path):
+    """A conversation left open has no hook event to refresh its file, so
+    deleting by age would cost it its seat."""
+    _old_file(tmp_path, "conv-old.json", 400)
+    _old_file(tmp_path, "client-1.json", 400)
+
+    _run(monkeypatch, capsys, SESSION_START, "--dir", str(tmp_path))
+
+    assert {"conv-old.json", "client-1.json"} <= {p.name for p in tmp_path.iterdir()}
+
+
+def test_a_session_start_gives_notice_of_old_records(monkeypatch, capsys, tmp_path):
+    _old_file(tmp_path, "conv-old.json", 181)
+    _old_file(tmp_path, "client-1.json", 181)
+    _old_file(tmp_path, "conv-recent.json", 179)
+
+    code, out, _ = _run(monkeypatch, capsys, SESSION_START, "--dir", str(tmp_path))
+
+    assert code == 0
+    shown = json.loads(out)
+    assert list(shown) == ["systemMessage"]
+    assert "2 conversation records" in shown["systemMessage"]
+    assert "epimemer client-state prune" in shown["systemMessage"]
+
+
+def test_the_notice_is_one_json_object_and_no_plain_text(monkeypatch, capsys, tmp_path):
+    """Plain stdout from a `SessionStart` hook goes into the agent's context;
+    a JSON object holding only `systemMessage` goes to the user."""
+    _old_file(tmp_path, "conv-old.json", 181)
+
+    _, out, _ = _run(monkeypatch, capsys, SESSION_START, "--dir", str(tmp_path))
+
+    assert out.strip().startswith("{") and out.strip().endswith("}")
+    assert "1 conversation record in" in json.loads(out)["systemMessage"]
+
+
+def test_the_notice_is_given_once_a_month_at_most(monkeypatch, capsys, tmp_path):
+    _old_file(tmp_path, "conv-old.json", 181)
+    args = ("--dir", str(tmp_path))
+
+    _, first, _ = _run(monkeypatch, capsys, SESSION_START, *args)
+    _, second, _ = _run(monkeypatch, capsys, SESSION_START, *args)
+    _aged(tmp_path / PRUNE_NOTICE_MARKER, 31)
+    _, third, _ = _run(monkeypatch, capsys, SESSION_START, *args)
+
+    assert first != "" and second == "" and third != ""
+
+
+def test_no_old_records_no_notice(monkeypatch, capsys, tmp_path):
+    _old_file(tmp_path, "conv-recent.json", 179)
+
+    _, out, _ = _run(monkeypatch, capsys, SESSION_START, "--dir", str(tmp_path))
+
+    assert out == ""
+    assert not (tmp_path / PRUNE_NOTICE_MARKER).exists()
+
+
+def test_a_model_switch_gives_no_notice(monkeypatch, capsys, tmp_path):
+    _old_file(tmp_path, "conv-old.json", 181)
+    payload = {"hook_event_name": "PostModelSwitch", "session_id": "conv-1", "to_model": "m"}
+
+    _, out, _ = _run(monkeypatch, capsys, payload, "--dir", str(tmp_path))
+
+    assert out == ""
 
 
 def test_reading_a_malformed_file_is_unknown_not_an_error(tmp_path):
@@ -243,13 +317,121 @@ def test_a_broken_live_record_falls_back_to_the_session_file(tmp_path):
     assert live_client_state(tmp_path, "conv-a").model == "claude-fable-5-1"
 
 
-def test_both_kinds_of_file_are_pruned(monkeypatch, capsys, tmp_path):
-    for name in ("conv-old.json", "client-1.json"):
-        path = tmp_path / name
-        path.write_text("{}")
-        long_ago = time.time() - 31 * 86400
-        os.utime(path, (long_ago, long_ago))
+def _prune(monkeypatch, capsys, *args, answer: str | None = None) -> tuple[int, str, str]:
+    """`epimemer client-state prune`, with `answer` typed at its prompt or no terminal."""
 
-    _run(monkeypatch, capsys, {"session_id": "conv-1", "model": "m"}, "--dir", str(tmp_path))
+    def typed(prompt):
+        if answer is None:
+            raise EOFError
+        return answer
 
-    assert [p.name for p in tmp_path.iterdir()] == ["conv-1.json"]
+    monkeypatch.setattr("builtins.input", typed)
+    code = main(["client-state", "prune", *args])
+    out, err = capsys.readouterr()
+    return code, out, err
+
+
+def _names(directory) -> list[str]:
+    return sorted(p.name for p in directory.iterdir())
+
+
+def test_prune_deletes_both_kinds_of_old_file_once_confirmed(monkeypatch, capsys, tmp_path):
+    _old_file(tmp_path, "conv-old.json", 181)
+    _old_file(tmp_path, "client-1.json", 181)
+    _old_file(tmp_path, "conv-recent.json", 179)
+
+    code, out, _ = _prune(monkeypatch, capsys, "--dir", str(tmp_path), answer="y")
+
+    assert code == 0
+    assert "2 conversation records" in out and "Deleted 2." in out
+    assert _names(tmp_path) == ["conv-recent.json"]
+
+
+def test_prune_takes_no_for_an_answer(monkeypatch, capsys, tmp_path):
+    _old_file(tmp_path, "conv-old.json", 181)
+
+    _, out, _ = _prune(monkeypatch, capsys, "--dir", str(tmp_path), answer="n")
+
+    assert "Nothing deleted." in out
+    assert _names(tmp_path) == ["conv-old.json"]
+
+
+def test_prune_with_no_terminal_deletes_nothing_and_says_how(monkeypatch, capsys, tmp_path):
+    _old_file(tmp_path, "conv-old.json", 181)
+
+    _, out, _ = _prune(monkeypatch, capsys, "--dir", str(tmp_path))
+
+    assert "--yes" in out
+    assert _names(tmp_path) == ["conv-old.json"]
+
+
+def test_prune_with_yes_does_not_ask(monkeypatch, capsys, tmp_path):
+    _old_file(tmp_path, "conv-old.json", 181)
+
+    _prune(monkeypatch, capsys, "--dir", str(tmp_path), "--yes")
+
+    assert _names(tmp_path) == []
+
+
+def test_prune_takes_its_own_age(monkeypatch, capsys, tmp_path):
+    _old_file(tmp_path, "conv-a.json", 20)
+    _old_file(tmp_path, "conv-b.json", 5)
+
+    _prune(monkeypatch, capsys, "--dir", str(tmp_path), "--older-than", "10", "--yes")
+
+    assert _names(tmp_path) == ["conv-b.json"]
+
+
+def test_prune_refuses_an_age_under_a_day(monkeypatch, capsys, tmp_path):
+    _old_file(tmp_path, "conv-a.json", 20)
+
+    code, _, err = _prune(monkeypatch, capsys, "--dir", str(tmp_path), "--older-than", "0", "--yes")
+
+    assert code == 2 and "1 or more" in err
+    assert _names(tmp_path) == ["conv-a.json"]
+
+
+def test_prune_with_nothing_old_says_so(monkeypatch, capsys, tmp_path):
+    _old_file(tmp_path, "conv-recent.json", 179)
+
+    code, out, _ = _prune(monkeypatch, capsys, "--dir", str(tmp_path))
+
+    assert code == 0 and "No conversation records" in out
+
+
+def _age_of(path) -> float:
+    return time.time() - path.stat().st_mtime
+
+
+def test_records_in_use_are_marked_used(tmp_path):
+    """After a `/clear` that is three files: the spawn conversation's, the
+    Claude Code process's, and the new conversation's, which a server started
+    by a reconnect reads first."""
+    write_client_state(tmp_path, _state("conv-a", "claude-fable-5-1", 77))
+    write_client_state(tmp_path, _state("conv-b", "claude-opus-5-5", 77))
+    names = ("conv-a.json", "client-77.json", "conv-b.json")
+    for name in names:
+        _aged(tmp_path / name, 200)
+
+    refresh_client_records(tmp_path, read_client_records(tmp_path, "conv-a"))
+
+    assert all(_age_of(tmp_path / name) < 60 for name in names)
+
+
+def test_marking_used_changes_no_content_and_creates_nothing(tmp_path):
+    write_client_state(tmp_path, _state("conv-a", "claude-fable-5-1", 77))
+    write_client_state(tmp_path, _state("conv-b", "claude-opus-5-5", 77))
+    records = read_client_records(tmp_path, "conv-a")
+    (tmp_path / "conv-b.json").unlink()
+
+    refresh_client_records(tmp_path, records)
+
+    assert not (tmp_path / "conv-b.json").exists()
+    assert read_client_records(tmp_path, "conv-a") == records
+
+
+def test_marking_used_never_raises(tmp_path):
+    write_client_state(tmp_path, _state("conv-a", "claude-fable-5-1", 77))
+    records = read_client_records(tmp_path, "conv-a")
+
+    refresh_client_records(tmp_path / "conv-a.json", records)

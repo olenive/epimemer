@@ -44,12 +44,12 @@ another origin, such as a wasm build on its own development server, would need
 the hub to grow CORS headers or be served from the hub's own static mount. A
 native client is unaffected.
 
-**Exposure.** The hub is meant for loopback. One guard follows the bind: on
-a non-loopback `EPIMEMER_VIZ_HOST` a session publishes retrieval records
-with the query text and response payloads removed (`structural_only` in
-`epimemer/mcp/retrieval_records.py`), and the full records stay behind
-`/api/retrievals`, which is answered by the session process. Nothing else
-changes with the bind.
+**Exposure.** The hub is meant for loopback. One rule follows the bind: on
+a non-loopback bind a retrieval record carries no query text and no response
+payload anywhere the hub serves it. A session publishes records that way
+(`structural_only` in `epimemer/mcp/retrieval_records.py`), and the hub
+applies the same cut, by the address it is itself bound to, to what it takes
+in and to what `/api/retrievals` returns. Nothing else changes with the bind.
 
 ## 3. The schema version
 
@@ -97,7 +97,7 @@ return those three.
 | `GET /api/snapshot` | `session`, `graph` | session | The snapshot (§5). Any graph the session's backend holds, not only its active one. |
 | `GET /api/embeddings` | `session`, `graph`, `node_type` (optional) | session | The embeddings (§6). |
 | `GET /api/warnings` | `session` | session | What the active graph does about warnings, in the shape the MCP tool `configure_warnings` returns, naming the graph. |
-| `GET /api/retrievals` | `session` | session | `{"records": [...]}`: the session's own 20 most recent retrieval records (below) across every graph, oldest first, payloads included whatever the bind. |
+| `GET /api/retrievals` | `session` | session | `{"records": [...]}`: the session's own 20 most recent retrieval records (below) across every graph, oldest first. On a non-loopback bind each is cut as §2 says. |
 | `WS /ws` | | hub | The client event stream (§7). |
 | `WS /ingest` | | hub | The session side (§8). A client does not use it. |
 
@@ -119,8 +119,8 @@ route above and the `retrieval_recorded` event (§7.4) carry the same shape:
 | `response_text` | string | The text the tool returned, at most 20,000 characters |
 
 `query` and `response_text` are for display, and their wording is each
-tool's own. On a non-loopback bind (§2) the `retrieval_recorded` event carries
-both as empty strings and every other field unchanged.
+tool's own. On a non-loopback bind (§2) the `retrieval_recorded` event and
+`/api/retrievals` carry both as empty strings and every other field unchanged.
 
 ## 5. The snapshot
 
@@ -438,7 +438,7 @@ event carries:
 | `event_type` | string | Discriminator, below |
 | `category` | `"graph"` or `"pipeline"` | |
 | `timestamp` | timestamp | When the producer created it |
-| `graph` | string | The graph it is about; empty on the document, segment, embedding and pipeline events |
+| `graph` | string | The graph it is about; empty on the pipeline events |
 | `session_id` | string | Added by the hub |
 | `seq` | integer | Added by the hub, §7.2 |
 

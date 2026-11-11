@@ -42,6 +42,7 @@ from epimemer.core.types import (
     node_judge_ids,
     recorded_relation_label,
     standing_relation_pairs,
+    was_active_at,
     with_retirement,
     with_return,
 )
@@ -477,12 +478,8 @@ class InMemoryStorage:
             if at_time is None:
                 if node.status != status:
                     continue
-            else:
-                # Temporal query: include nodes that were active at the given time
-                if node.created_at > at_time:
-                    continue
-                if node.superseded_at is not None and node.superseded_at <= at_time:
-                    continue
+            elif not was_active_at(node, at_time):
+                continue
 
             results.append(node)
         return _copy_all(results)

@@ -166,6 +166,8 @@ async def _lifespan_with(storage: InMemoryStorage) -> AsyncIterator[dict]:
         "viz_hub_url": None,
         "retrievals": new_record_log(),
         "connection_state": new_connection_state(),
+        "version": "test",
+        "read_installed_version": lambda: None,
     }
 
 

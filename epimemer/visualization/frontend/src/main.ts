@@ -462,7 +462,8 @@ const switchViewedGraph = async (graph: string): Promise<void> => {
 };
 
 /**
- * Fold in the payloads the hub's mirror may not hold.
+ * Fold in the records the hub's mirror may not hold, such as one made while
+ * the hub was down, with their payloads on a loopback bind.
  *
  * Best-effort by design: the RPC fails once the session exits, and the mirror
  * is exactly what covers that case. A failure here means "no payloads", not

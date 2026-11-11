@@ -788,10 +788,9 @@ async def test_gather_pending_review_collects_flagged_only():
 
 @pytest.fixture
 async def storage_for_nomination():
-    """One node of each nomination class, plus three that must be spared.
+    """One evidence_stale and one never_retrieved nominee, plus three to spare.
 
     Nominate:
-      - fact-retired: SUPERSEDED long ago, low importance
       - inference-stale: evidence superseded out from under it
       - fact-trivial: active, never reinforced, low importance, unsupported
     Spare:
@@ -808,15 +807,6 @@ async def storage_for_nomination():
         # no longer something the fixture has to construct out of timestamps.
         return ValueSignal(importance=importance)
 
-    retired = Fact(
-        id="fact-retired",
-        content="retired and unimportant",
-        source_id="seg-1",
-        status=NodeStatus.SUPERSEDED,
-        superseded_at=now - timedelta(days=120),
-        created_at=born,
-        value=untouched(0.2),
-    )
     superseded_evidence = Fact(
         id="fact-evidence",
         content="evidence that was superseded",
@@ -869,7 +859,6 @@ async def storage_for_nomination():
     )
 
     for node in (
-        retired,
         superseded_evidence,
         stale,
         trivial,
@@ -909,27 +898,16 @@ async def storage_for_nomination():
 
 async def test_archival_nomination_ordering(storage_for_nomination):
     """Nominees come back worst-first, and the three spared classes are absent."""
-    candidates = await nominate_archival_candidates(storage_for_nomination, max_age_days=90)
+    candidates = await nominate_archival_candidates(storage_for_nomination)
 
-    assert [c.node_id for c in candidates] == [
-        "fact-retired",
-        "inference-stale",
-        "fact-trivial",
-    ]
-    assert [c.reason for c in candidates] == [
-        "retired",
-        "evidence_stale",
-        "never_retrieved",
-    ]
+    assert [c.node_id for c in candidates] == ["inference-stale", "fact-trivial"]
+    assert [c.reason for c in candidates] == ["evidence_stale", "never_retrieved"]
 
 
 async def test_archival_nomination_spares_used_and_supported_nodes(
     storage_for_nomination,
 ):
-    nominated = {
-        c.node_id
-        for c in await nominate_archival_candidates(storage_for_nomination, max_age_days=90)
-    }
+    nominated = {c.node_id for c in await nominate_archival_candidates(storage_for_nomination)}
     assert "fact-reinforced" not in nominated
     assert "fact-supported" not in nominated
     assert "fact-important" not in nominated
@@ -937,10 +915,41 @@ async def test_archival_nomination_spares_used_and_supported_nodes(
 
 async def test_archival_nomination_respects_the_limit(storage_for_nomination):
     """The cheap pass is bounded: cost tracks the junk, not the graph."""
-    candidates = await nominate_archival_candidates(
-        storage_for_nomination, max_age_days=90, limit=2
+    candidates = await nominate_archival_candidates(storage_for_nomination, limit=1)
+    assert [c.node_id for c in candidates] == ["inference-stale"]
+
+
+async def test_a_node_retired_long_ago_is_not_nominated():
+    """`apply_reflection` archives only an active node, so a retired nominee
+    would have no answer and come back on every reflect. The `archive` tool
+    still finds these nodes, which is the check that they are old enough."""
+    storage = InMemoryStorage()
+    long_ago = datetime.now(UTC) - timedelta(days=400)
+    corrected = Fact(
+        id="fact-corrected",
+        content="corrected long ago",
+        source_id="seg-1",
+        status=NodeStatus.CORRECTED,
+        superseded_at=long_ago,
+        created_at=long_ago - timedelta(days=30),
+        value=ValueSignal(importance=0.2),
     )
-    assert [c.node_id for c in candidates] == ["fact-retired", "inference-stale"]
+    merged = Topic(
+        id="topic-merged",
+        content="merged long ago",
+        source_id="seg-1",
+        status=NodeStatus.MERGED,
+        superseded_at=long_ago,
+        created_at=long_ago - timedelta(days=30),
+        value=ValueSignal(importance=0.2),
+    )
+    for node in (corrected, merged):
+        await storage.store_node(node)
+
+    exported = {node.id for node in await find_archival_candidates(storage, max_age_days=90)}
+    assert exported == {corrected.id, merged.id}
+
+    assert await nominate_archival_candidates(storage) == []
 
 
 async def test_a_node_no_search_has_returned_is_nominated():
@@ -955,7 +964,7 @@ async def test_a_node_no_search_has_returned_is_nominated():
     await storage.store_node(fresh)
     assert fresh.value.retrieved_at is None
 
-    candidates = await nominate_archival_candidates(storage, max_age_days=90)
+    candidates = await nominate_archival_candidates(storage)
 
     assert [c.node_id for c in candidates] == [fresh.id]
 
@@ -1035,7 +1044,7 @@ async def test_a_retrieved_node_is_spared_however_recently_it_was_created():
     )
     await storage.store_node(used)
 
-    candidates = await nominate_archival_candidates(storage, max_age_days=90)
+    candidates = await nominate_archival_candidates(storage)
 
     assert candidates == []
 

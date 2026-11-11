@@ -79,6 +79,7 @@ def ctx(storage):
         "retrievals": new_record_log(),
         "version": "9.9.9",
         "connection_state": new_connection_state(),
+        "read_installed_version": lambda: None,
     }
 
     async def elicit(message, response_type=None):

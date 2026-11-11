@@ -392,12 +392,11 @@ class TestBackupRetention:
         graph = storage.current_database
         _dated(tmp_path, graph, "2026-01-01", "2026-02-01", "2026-03-01")
 
-        from epimemer.pipelines import transfer
-
         def _refuse(*args, **kwargs):
             raise OSError("the destination went away")
 
-        monkeypatch.setattr(transfer, "write_bundle", _refuse)
+        # Where `backup_graph` looks it up, which is the tools module.
+        monkeypatch.setattr("epimemer.mcp.tools.write_bundle", _refuse)
 
         with pytest.raises(OSError):
             await backup_graph(
@@ -443,6 +442,8 @@ async def _session(storage, config: ServerConfig) -> AsyncIterator[FastMCP]:
         "viz_hub_url": None,
         "retrievals": new_record_log(),
         "connection_state": new_connection_state(),
+        "version": "test",
+        "read_installed_version": lambda: None,
     }
 
     @asynccontextmanager
