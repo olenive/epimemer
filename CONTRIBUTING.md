@@ -57,21 +57,15 @@ make test-postgres PG_PORT=5434
 A skipped parameter is reported as a pass, so check that the run says
 `passed` with nothing skipped.
 
-### Frontend
+### The visualiser
 
-The visualization frontend under `epimemer/visualization/frontend/` is
-TypeScript, built with Vite and tested with vitest. `make test` stays
-Python-only so Node is not a prerequisite for backend work.
-
-```bash
-make test-frontend      # npm run typecheck && npm test
-make build-frontend     # npm ci && npm run build
-```
-
-The build writes `epimemer/visualization/static/`, which is **not committed**:
-the release workflow builds it into the wheel, and a checkout serves the hub's
-API without the page until you build it. Rebuild after any change under
-`frontend/src`.
+The page the hub serves is built in the
+[epimemer-bevy](https://github.com/olenive/epimemer-bevy) repository, and
+this one holds none of its code. `uv run epimemer viz fetch` downloads the
+release this checkout pins, and `EPIMEMER_VIZ_BUNDLE_DIR` points the hub at a
+build of your own. What the two repositories agree on is
+`dev-docs/VIZ_CONTRACT.md`; `dev-docs/VISUALISATION.md` says how to move the
+pin.
 
 ### Before asking for a review
 

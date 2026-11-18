@@ -640,10 +640,9 @@ class TestViewConversion:
     def test_an_unrated_node_reaches_the_frontend_as_null(self):
         """The view relays absence rather than substituting the default.
 
-        Reading `None` as 0.5 here would put a number on the panel's tooltip
-        that no agent ever supplied — a false statement about the graph, made
-        to save the frontend a `??`. The panel renders a dash instead, the same
-        way it already renders "never" for an unretrieved node.
+        Reading `None` as 0.5 here would put a number on the node that no agent
+        ever supplied, a false statement about the graph. The frontend receives
+        `null` and decides how an unrated node looks.
         """
         node = Topic(content="A topic", source_id="s1")
         assert node.value.confidence is None

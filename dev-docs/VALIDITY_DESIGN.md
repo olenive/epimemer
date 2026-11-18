@@ -83,7 +83,7 @@ An endpoint is a **point** (`precise` instant or `named` label),
 - **No consumer branches on the endpoint kind**, so adding a kind touches one
   module. A test in `tests/core/test_temporal.py` holds the Python readers of
   `instant_kind` to `core/temporal.py` and the ingest guidance in
-  `mcp/server.py`; the dashboard also reads it, to give each kind its mark.
+  `mcp/server.py`; a visualiser also reads it, to give each kind its mark.
   The imprecise-instant type is named generally because `published_at` uses
   it too (§2.7).
 - **A self-contradictory interval is refused at construction**, on definite

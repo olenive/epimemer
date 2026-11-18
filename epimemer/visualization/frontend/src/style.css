@@ -1,7 +1,0 @@
-/* Must precede the Tailwind layers: a CSS @import has to come first, and the
-   utilities below resolve the custom properties it declares. */
-@import "./tokens.css";
-
-@tailwind base;
-@tailwind components;
-@tailwind utilities;

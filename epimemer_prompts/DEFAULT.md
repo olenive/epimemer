@@ -46,7 +46,7 @@ say to the user.
 <!-- terminology-guard: off -->
 **"Frame" and "hub" are not words this system uses.** A frame is a
 metacontext; a hub is a topic node or a source node. The only hub here is the
-visualisation hub, the process the dashboard connects to.
+visualisation hub, the process the visualiser connects to.
 <!-- terminology-guard: on -->
 
 ### When to ingest (segment, then store_decomposition) {#ingest}

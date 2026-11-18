@@ -187,7 +187,7 @@ class BoundaryProposalView(BaseModel):
 
     Worked out fresh for every snapshot and never stored: a stored answer would
     be a photograph of a derivation that goes stale the moment either claim
-    changes (`TIMELINE_VISUALISATION.md` §13.4).
+    changes (`TIMELINES.md` §5.4).
 
     Flat, and matched to a strip by `(node_id, source_id, timeline_id)` and then
     by endpoint, because that quadruple is what addresses one period: a claim

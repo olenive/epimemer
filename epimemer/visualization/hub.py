@@ -28,9 +28,10 @@ import socket
 import sys
 import time
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 from uuid import uuid4
 
@@ -38,12 +39,19 @@ import uvicorn
 from pydantic import ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, PlainTextResponse
-from starlette.routing import Mount, Route, WebSocketRoute
+from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, Response
+from starlette.routing import Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from epimemer.core.types import NodeType
+from epimemer.visualization.bundle import (
+    BUNDLE_DIR_ENV,
+    INDEX_FILE,
+    bundle_candidates,
+    bundle_dir_override,
+    served_bundle,
+)
 from epimemer.visualization.exposure import on_loopback, structural_record
 from epimemer.visualization.protocol import (
     INGEST_MAX_MESSAGE_BYTES,
@@ -62,7 +70,18 @@ from epimemer.visualization.ring import (
 
 logger = logging.getLogger(__name__)
 
-STATIC_DIR = Path(__file__).parent / "static"
+# The two files a browser checks the type of before it will run them. Fixed
+# here rather than read from the platform's MIME tables, which on some systems
+# name `.js` as text/plain or do not know `.wasm` at all.
+PAGE_CONTENT_TYPES = MappingProxyType(
+    {".js": "text/javascript; charset=utf-8", ".wasm": "application/wasm"}
+)
+
+NO_PAGE_TEXT = (
+    "The Epimemer visualization page is not here yet.\n\n"
+    "This hub is serving its API and websockets, but it has no page to show.\n"
+    "Run `epimemer viz fetch` to download the visualiser, then reload.\n"
+)
 
 HUB_SERVICE = "epimemer-viz-hub"  # marker in /api/health, so a probe knows
 DISCONNECT_GRACE_SECONDS = 300  # keep a dropped session listed (greyed) this long
@@ -142,18 +161,60 @@ def _pidfile_path() -> Path:
     return Path.home() / ".epimemer" / "viz-hub.pid"
 
 
+def _no_page_text(override: Path | None) -> str:
+    """What `/` says when no bundle holds a page, naming the override if it was the reason."""
+    if override is None:
+        return NO_PAGE_TEXT
+    return NO_PAGE_TEXT + f"\n{BUNDLE_DIR_ENV} is set to {override}, which holds no {INDEX_FILE}.\n"
+
+
+def _requested_file(route_path: str) -> str:
+    """The file a request names inside a bundle, `.` for the root.
+
+    Normalised the way `StaticFiles.get_path` does it. A path that climbs out
+    of the bundle survives this as `..` parts, and the lookup refuses it.
+    """
+    return os.path.normpath(os.path.join(*route_path.split("/")))
+
+
+def _with_page_headers(response: Response, requested: str) -> Response:
+    """The strict content types, and `no-cache` on the page itself.
+
+    `no-cache` makes a browser ask again on every load, so a reload after a
+    fetch shows the new bundle rather than the page it remembered.
+    """
+    content_type = PAGE_CONTENT_TYPES.get(os.path.splitext(requested)[1].lower())
+    if content_type is not None and isinstance(response, FileResponse):
+        response.media_type = content_type
+        response.headers["content-type"] = content_type
+    if requested == INDEX_FILE:
+        response.headers["cache-control"] = "no-cache"
+    return response
+
+
 # ----------------------------------------------------------------------------
 # The app: relay + registry, built functionally over closures.
 # ----------------------------------------------------------------------------
 
 
-def create_hub_app(*, bind_host: str) -> Starlette:
+def create_hub_app(
+    *,
+    bind_host: str,
+    bundle_dirs: Sequence[Path],
+    bundle_override: Path | None = None,
+) -> Starlette:
     """Build the hub's Starlette app.
 
     `bind_host` is the address this hub listens on. It decides what the hub
     keeps and hands out of a session's retrieval records, in its mirror and on
     `/api/retrievals` (`exposure.py`), and it is required, so an app cannot be
     built without saying where it is reachable.
+
+    `bundle_dirs` are the directories the page may come from, in the order
+    they are tried (`bundle.bundle_candidates`). `bundle_override` is the
+    directory `EPIMEMER_VIZ_BUNDLE_DIR` named, if any, so a missing page can
+    say why. The page is looked for on every request, so a bundle fetched
+    while the hub runs is served from the next request on.
 
     State lives in two dicts captured by the route closures (single event loop,
     so no locks beyond what each await naturally serializes):
@@ -178,6 +239,7 @@ def create_hub_app(*, bind_host: str) -> Starlette:
     sessions: dict[str, dict[str, Any]] = {}
     browsers: dict[WebSocket, dict[str, Any]] = {}
     loopback = on_loopback(bind_host)
+    candidates = tuple(bundle_dirs)
 
     # --- browser fan-out ---
 
@@ -232,8 +294,8 @@ def create_hub_app(*, bind_host: str) -> Starlette:
 
         The same subscription test the live path uses, so a replayed entry can
         never reach a browser a live one would not have — an entry from graph A
-        must not highlight into graph B (VISUALISATION.md, Rules every panel
-        follows). Per-session by construction: the ring hangs off the session,
+        must not highlight into graph B (VISUALISATION.md A.2). Per-session by
+        construction: the ring hangs off the session,
         so records from two sessions cannot mix however they interleave in time.
         """
         sess = sessions.get(st["session"] or "")
@@ -537,24 +599,28 @@ def create_hub_app(*, bind_host: str) -> Starlette:
             return JSONResponse({"error": str(exc)}, status_code=502)
         return JSONResponse(result if shape is None else shape(result))
 
-    async def _index(request: Request) -> FileResponse | PlainTextResponse:
-        # The bundle is build output and never committed, so a checkout has
-        # none until it is built. The API and both sockets work without it;
-        # the page is the only thing missing, and this says how to get it.
-        index = STATIC_DIR / "index.html"
-        if not index.exists():
-            return PlainTextResponse(
-                "The epimemer visualization page is not built.\n\n"
-                "This hub is serving its API and websockets, but the browser\n"
-                "bundle is absent. Build it with `make build-frontend` (or\n"
-                "`npm ci && npm run build` in epimemer/visualization/frontend)\n"
-                "and reload. A released wheel carries the bundle already.\n",
-                status_code=503,
-            )
-        return FileResponse(index)
+    async def _page(request: Request) -> Response:
+        """A file of the page, from the first bundle that holds an `index.html`.
 
+        The API and both sockets work without a bundle; the page is the only
+        thing missing then, and `/` says how to get it. `StaticFiles` does the
+        lookup: it refuses a path or a symlink that leads outside the bundle,
+        and answers a conditional request with 304.
+        """
+        requested = _requested_file(request.path_params["path"])
+        bundle = await asyncio.to_thread(served_bundle, candidates)
+        if bundle is None:
+            if requested == ".":
+                return PlainTextResponse(_no_page_text(bundle_override), status_code=503)
+            return PlainTextResponse("Not Found", status_code=404)
+        if requested == ".":
+            requested = INDEX_FILE
+        static = StaticFiles(directory=bundle, check_dir=False)
+        return _with_page_headers(await static.get_response(requested, request.scope), requested)
+
+    # The page's catch-all comes last, so it only sees what no API or socket
+    # route claimed.
     routes = [
-        Route("/", _index),
         Route("/api/health", api_health),
         Route("/api/sessions", api_sessions),
         Route("/api/graphs", api_graphs),
@@ -564,9 +630,8 @@ def create_hub_app(*, bind_host: str) -> Starlette:
         Route("/api/retrievals", api_retrievals),
         WebSocketRoute("/ws", handle_browser),
         WebSocketRoute("/ingest", handle_ingest),
+        Route("/{path:path}", _page),
     ]
-    if STATIC_DIR.exists():
-        routes.append(Mount("/", app=StaticFiles(directory=STATIC_DIR), name="static"))
 
     return Starlette(routes=routes)
 
@@ -702,8 +767,15 @@ def run() -> int:
 
     _write_pidfile()
     logger.info("Visualization hub listening on http://%s:%d", host, port)
+    home = Path.home()
+    bundle_dirs = bundle_candidates(os.environ, home)
+    logger.info("Serving the page from %s", ", ".join(map(str, bundle_dirs)))
     config = uvicorn.Config(
-        create_hub_app(bind_host=host),
+        create_hub_app(
+            bind_host=host,
+            bundle_dirs=bundle_dirs,
+            bundle_override=bundle_dir_override(os.environ, home),
+        ),
         log_level="warning",
         lifespan="off",
         ws_max_size=INGEST_MAX_MESSAGE_BYTES,

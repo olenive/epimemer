@@ -36,13 +36,13 @@ every page here.
 <!-- terminology-guard: off -->
 **"Frame" and "hub" are not used.** A frame is a metacontext; a hub is a topic
 node or a source node. The one exception is the visualisation **hub**, the
-websocket relay the dashboard connects to, which is a process rather than a
+websocket relay the visualiser connects to, which is a process rather than a
 node.
 <!-- terminology-guard: on -->
 
 ## Where everything else lives
 
-[README.md](../README.md) covers install, configuration and the dashboard;
+[README.md](../README.md) covers install, configuration and the visualiser;
 [INTEGRATION.md](../INTEGRATION.md) MCP setup and the canonical tool table;
 `dev-docs/` the design of each subsystem, for someone changing it (see
 [CONTRIBUTING.md](../CONTRIBUTING.md#where-the-design-lives)). These pages

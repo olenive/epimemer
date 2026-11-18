@@ -342,10 +342,10 @@ as `search` does.
 Every tool call that succeeds writes a **retrieval record** into a bounded
 ring in the server process: the node ids the response carried, with their
 provenance and score, and the response text. The id list and the text are
-both capped, and the record says when a cap cut them. The dashboard reads
+both capped, and the record says when a cap cut them. The visualiser reads
 these: pick one and it dims everything that retrieval did *not* return. A
-record from a tool that declared no ids is listed as *not declared*, and
-picking one dims nothing; a declared retrieval that returned nothing dims all.
+record from a tool that declared no ids changes nothing when picked; a
+declared retrieval that returned nothing dims all.
 
 `retrieved` is the set of node ids **present in the response**, for every
 tool, rather than what the tool looked at: `reflect` scans the whole active

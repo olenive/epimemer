@@ -8,11 +8,13 @@ message the test drives onto the ingest socket).
 """
 
 import asyncio
+import http.client
 import json
 import socket
 import urllib.error
 import urllib.request
 from contextlib import asynccontextmanager
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -22,6 +24,12 @@ import websockets
 from epimemer.core.types import EmbeddingRecord, Fact, RawDocument, Segment, Topic
 from epimemer.storage.memory import InMemoryStorage
 from epimemer.visualization import hub as hubmod
+from epimemer.visualization.bundle import (
+    BUNDLE_DIR_ENV,
+    bundle_candidates,
+    bundle_dir,
+    bundle_dir_override,
+)
 from epimemer.visualization.event_bus import InProcessEventBus
 from epimemer.visualization.events import PipelineStarted
 from epimemer.visualization.hub import create_hub_app
@@ -75,14 +83,53 @@ async def _wait(pred, timeout: float = 3.0) -> None:
     raise AssertionError("condition not met within timeout")
 
 
+async def _http_raw(
+    addr: str, path: str, headers: dict[str, str] | None = None
+) -> tuple[int, dict[str, str], bytes]:
+    """A GET sent with its path exactly as written, run off-loop.
+
+    `http.client` leaves `..` segments and percent escapes alone, so the hub
+    sees the request a hostile client would send rather than one a polite
+    client had tidied up first.
+    """
+
+    def _do() -> tuple[int, dict[str, str], bytes]:
+        host, port = addr.split(":")
+        conn = http.client.HTTPConnection(host, int(port), timeout=10)
+        try:
+            conn.request("GET", path, headers=headers or {})
+            response = conn.getresponse()
+            return (
+                response.status,
+                {name.lower(): value for name, value in response.getheaders()},
+                response.read(),
+            )
+        finally:
+            conn.close()
+
+    return await asyncio.to_thread(_do)
+
+
+def _write_bundle(directory: Path, files: dict[str, bytes]) -> Path:
+    for name, content in files.items():
+        (directory / name).parent.mkdir(parents=True, exist_ok=True)
+        (directory / name).write_bytes(content)
+    return directory
+
+
 @asynccontextmanager
-async def _serving(bind_host: str):
+async def _serving(
+    bind_host: str, *, bundle_dirs: tuple[Path, ...] = (), bundle_override: Path | None = None
+):
     """A hub told it is bound to `bind_host`, listening on a loopback port.
 
     The app reads its bind address as a value, so a test can ask what a hub
     bound to every interface would serve without opening one to the network.
+    It serves its page from `bundle_dirs`, none unless a test gives some.
     """
-    app = create_hub_app(bind_host=bind_host)
+    app = create_hub_app(
+        bind_host=bind_host, bundle_dirs=bundle_dirs, bundle_override=bundle_override
+    )
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(("127.0.0.1", 0))
@@ -494,7 +541,7 @@ async def test_the_warning_settings_route_needs_a_session(hub):
 
 
 async def test_backfill_stays_inside_the_viewed_graph(hub):
-    """`VISUALISATION.md`, *Rules every panel follows*: an entry from graph A
+    """`VISUALISATION.md` A.2: an entry from graph A
     must never highlight into graph B."""
     async with websockets.connect(hub.ingest) as sess:
         await _register(sess, _session("s-a"))
@@ -967,17 +1014,200 @@ def test_run_gives_uvicorn_the_protocols_ceiling(monkeypatch, tmp_path):
     assert config.ws_max_size == INGEST_MAX_MESSAGE_BYTES
 
 
-# --- the bundle is build output ---
+def test_run_hands_the_app_the_bundle_candidates(monkeypatch, tmp_path):
+    """Worked out once, from the environment and the home directory, and passed
+    in as values: the app itself reads neither."""
+    built = []
+
+    class _Server:
+        def __init__(self, config):
+            pass
+
+        async def serve(self, sockets):
+            return None
+
+    def _capture(**kwargs):
+        built.append(kwargs)
+        return object()
+
+    own = tmp_path / "my-build"
+    bound = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    bound.bind(("127.0.0.1", 0))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv(BUNDLE_DIR_ENV, str(own))
+    monkeypatch.setattr(hubmod, "_try_bind", lambda host, port: bound)
+    monkeypatch.setattr(hubmod, "_pidfile_path", lambda: tmp_path / "viz-hub.pid")
+    monkeypatch.setattr(hubmod, "create_hub_app", _capture)
+    monkeypatch.setattr(hubmod.uvicorn, "Server", _Server)
+    try:
+        assert hubmod.run() == 0
+        monkeypatch.delenv(BUNDLE_DIR_ENV)
+        assert hubmod.run() == 0
+    finally:
+        bound.close()
+
+    overridden, default = built
+    assert overridden["bundle_dirs"] == [own]
+    assert overridden["bundle_override"] == own
+    assert default["bundle_dirs"] == [bundle_dir(tmp_path)]
+    assert default["bundle_override"] is None
 
 
-async def test_a_missing_bundle_says_how_to_build_it(hub, monkeypatch, tmp_path):
-    """A checkout has no bundle until it is built. The API keeps serving; the
-    page says what to run rather than failing with a missing file."""
-    monkeypatch.setattr(hubmod, "STATIC_DIR", tmp_path / "not-built")
+# --- the page ---
 
-    status, body = await _http_get(hub.addr, "/")
+PAGE = {
+    "index.html": b"<!doctype html><title>visualiser</title>",
+    "epimemer-bevy-abc123.js": b"export default function init() {}",
+    "epimemer-bevy-abc123_bg.wasm": b"\x00asm\x01\x00\x00\x00",
+    "assets/fonts/FiraSans-Bold.ttf": b"font bytes",
+}
+
+
+async def test_a_missing_bundle_says_how_to_fetch_it(tmp_path):
+    """With no page anywhere the API keeps serving, and `/` names the command
+    that downloads one rather than failing with a missing file."""
+    async with _serving("127.0.0.1", bundle_dirs=(tmp_path / "not-fetched",)) as hub:
+        status, body = await _http_get(hub.addr, "/")
+        assert status == 503
+        assert "`epimemer viz fetch`" in body
+        assert BUNDLE_DIR_ENV not in body
+        assert not [word for word in ("npm", "frontend", "build") if word in body.lower()]
+
+        assert (await _http_get(hub.addr, "/index.html"))[0] == 404
+        assert (await _http_get(hub.addr, "/epimemer-bevy-abc123.js"))[0] == 404
+
+        health_status, health = await _http_get(hub.addr, "/api/health")
+        assert health_status == 200
+        assert json.loads(health)["service"] == hubmod.HUB_SERVICE
+
+
+async def test_an_override_with_no_page_is_named_and_nothing_else_is_served(tmp_path):
+    """Someone pointing the hub at their own build is told that build has no
+    page, rather than being shown the fetched one in its place."""
+    own = tmp_path / "my-build"
+    own.mkdir()
+    _write_bundle(bundle_dir(tmp_path), PAGE)
+    environ = {BUNDLE_DIR_ENV: str(own)}
+
+    async with _serving(
+        "127.0.0.1",
+        bundle_dirs=tuple(bundle_candidates(environ, tmp_path)),
+        bundle_override=bundle_dir_override(environ, tmp_path),
+    ) as hub:
+        status, body = await _http_get(hub.addr, "/")
+
     assert status == 503
-    assert "make build-frontend" in body
+    assert "`epimemer viz fetch`" in body
+    assert f"{BUNDLE_DIR_ENV} is set to {own}, which holds no index.html." in body
 
-    health_status, _ = await _http_get(hub.addr, "/api/health")
-    assert health_status == 200
+
+async def test_the_first_bundle_holding_a_page_is_served(tmp_path):
+    empty = tmp_path / "fetched"
+    empty.mkdir()
+    first = _write_bundle(tmp_path / "first", {**PAGE, "index.html": b"first page"})
+    second = _write_bundle(tmp_path / "second", {**PAGE, "index.html": b"second page"})
+
+    async with _serving("127.0.0.1", bundle_dirs=(empty, first, second)) as hub:
+        status, _, body = await _http_raw(hub.addr, "/")
+        assert (status, body) == (200, b"first page")
+        status, _, body = await _http_raw(hub.addr, "/assets/fonts/FiraSans-Bold.ttf")
+        assert (status, body) == (200, b"font bytes")
+
+
+async def test_a_bundle_fetched_while_the_hub_runs_is_served_without_a_restart(tmp_path):
+    """The page is looked for on every request, not when the app is built, so
+    `epimemer viz fetch` takes effect on the next reload."""
+    fetched = tmp_path / "fetched"
+
+    async with _serving("127.0.0.1", bundle_dirs=(fetched,)) as hub:
+        assert (await _http_get(hub.addr, "/"))[0] == 503
+
+        _write_bundle(fetched, PAGE)
+
+        status, _, body = await _http_raw(hub.addr, "/")
+        assert (status, body) == (200, PAGE["index.html"])
+        status, _, body = await _http_raw(hub.addr, "/epimemer-bevy-abc123_bg.wasm")
+        assert (status, body) == (200, PAGE["epimemer-bevy-abc123_bg.wasm"])
+
+
+async def test_wasm_and_js_arrive_with_the_types_a_browser_insists_on(tmp_path, monkeypatch):
+    """A browser will not compile WebAssembly served as anything but
+    `application/wasm`, nor run a module script that is not JavaScript. The
+    platform's MIME tables are made to answer wrongly here to show they are
+    not what decides."""
+    monkeypatch.setattr("starlette.responses.guess_type", lambda path: ("text/plain", None))
+    bundle = _write_bundle(tmp_path / "bundle", PAGE)
+
+    async with _serving("127.0.0.1", bundle_dirs=(bundle,)) as hub:
+        _, wasm, _ = await _http_raw(hub.addr, "/epimemer-bevy-abc123_bg.wasm")
+        _, js, _ = await _http_raw(hub.addr, "/epimemer-bevy-abc123.js")
+
+    assert wasm["content-type"] == "application/wasm"
+    assert js["content-type"].split(";")[0] == "text/javascript"
+
+
+async def test_the_page_is_never_cached_without_asking_again(tmp_path):
+    """A reload after a fetch must show the new bundle, so the page carries
+    `no-cache`; the files it names are left to ordinary caching."""
+    bundle = _write_bundle(tmp_path / "bundle", PAGE)
+
+    async with _serving("127.0.0.1", bundle_dirs=(bundle,)) as hub:
+        _, root, _ = await _http_raw(hub.addr, "/")
+        _, index, _ = await _http_raw(hub.addr, "/index.html")
+        _, js, _ = await _http_raw(hub.addr, "/epimemer-bevy-abc123.js")
+        status, revalidated, _ = await _http_raw(
+            hub.addr, "/", headers={"If-None-Match": index["etag"]}
+        )
+
+    assert root["cache-control"] == "no-cache"
+    assert index["cache-control"] == "no-cache"
+    assert "cache-control" not in js
+    assert status == 304
+    assert revalidated["cache-control"] == "no-cache"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/../secret.txt",
+        "/assets/../../secret.txt",
+        "/%2e%2e/secret.txt",
+        "/%2E%2E%2Fsecret.txt",
+        "/assets/%2e%2e/%2e%2e/secret.txt",
+        "/..%5csecret.txt",
+        "//secret.txt",
+    ],
+)
+async def test_a_path_out_of_the_bundle_is_refused(tmp_path, path):
+    (tmp_path / "secret.txt").write_text("the secret")
+    bundle = _write_bundle(tmp_path / "bundle", PAGE)
+
+    async with _serving("127.0.0.1", bundle_dirs=(bundle,)) as hub:
+        status, _, body = await _http_raw(hub.addr, path)
+
+    assert status == 404
+    assert b"the secret" not in body
+
+
+async def test_a_symlink_out_of_the_bundle_is_refused(tmp_path):
+    (tmp_path / "secret.txt").write_text("the secret")
+    bundle = _write_bundle(tmp_path / "bundle", PAGE)
+    (bundle / "leak.txt").symlink_to(tmp_path / "secret.txt")
+
+    async with _serving("127.0.0.1", bundle_dirs=(bundle,)) as hub:
+        status, _, body = await _http_raw(hub.addr, "/leak.txt")
+
+    assert status == 404
+    assert b"the secret" not in body
+
+
+async def test_the_api_is_not_shadowed_by_the_page(tmp_path):
+    """The page's catch-all comes after every API route, so a bundle that
+    happens to hold an `api/health` file cannot answer in the API's place."""
+    bundle = _write_bundle(tmp_path / "bundle", {**PAGE, "api/health": b"not the api"})
+
+    async with _serving("127.0.0.1", bundle_dirs=(bundle,)) as hub:
+        status, body = await _http_get(hub.addr, "/api/health")
+
+    assert status == 200
+    assert json.loads(body)["service"] == hubmod.HUB_SERVICE

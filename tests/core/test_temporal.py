@@ -595,8 +595,7 @@ class TestTheEndpointKindIsReadInOnePlace:
         readers = sorted(
             path.relative_to(PACKAGE).as_posix()
             for path in PACKAGE.rglob("*.py")
-            if "node_modules" not in path.parts
-            and "instant_kind" in path.read_text(encoding="utf-8")
+            if "instant_kind" in path.read_text(encoding="utf-8")
         )
 
         assert readers == ["core/temporal.py", "mcp/server.py"], (

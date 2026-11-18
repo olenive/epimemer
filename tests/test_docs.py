@@ -134,9 +134,9 @@ HUB_FILES = frozenset(
         "dev-docs/EVENT_LOG.md",
         "dev-docs/ISSUES.md",
         "dev-docs/RETRIEVAL_PROVENANCE.md",
-        "dev-docs/TIMELINE_VISUALISATION.md",
         "dev-docs/VISUALISATION.md",
         "dev-docs/VIZ_CONTRACT.md",
+        "epimemer/cli.py",
         "epimemer/mcp/retrieval_records.py",
         "epimemer/mcp/server.py",
         "epimemer/storage/protocol.py",
@@ -167,10 +167,14 @@ def _folded(text: str) -> str:
 def _scanned_for_terminology() -> list[Path]:
     """Every page and module the vocabulary has to hold across."""
     found = [README]
-    for pattern in ("docs/*.md", "dev-docs/*.md", "epimemer_prompts/*.md"):
+    for pattern in (
+        "docs/*.md",
+        "dev-docs/*.md",
+        "epimemer_prompts/*.md",
+        "epimemer/**/*.py",
+        "tests/**/*.py",
+    ):
         found += sorted(ROOT.glob(pattern))
-    for pattern in ("epimemer/**/*.py", "tests/**/*.py"):
-        found += sorted(p for p in ROOT.glob(pattern) if "node_modules" not in p.parts)
     return found
 
 

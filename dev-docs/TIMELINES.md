@@ -182,8 +182,116 @@ dates, rather than a second addressing mode on several tools. A fact linked to
 the rule itself holds at every occurrence; its `TIMELINK` carries the rule id,
 and every reader of `TIMELINK` metadata skips it.
 
-### 3.6 `reference_time` and the meaning of "next"
+### 3.6 `reference_time`: a timeline's own "now"
 
-"Next" is after the timeline's reference time, resolved as
-`TIMELINE_VISUALISATION.md` §6.4 describes, once per call and passed down, so a
-long call never sees two values of "now".
+`Timeline.reference_time: datetime | None`, round-tripped on every backend
+inside the record.
+
+**`None` means "follow the wall clock"**, resolved by whoever reads it, at the
+time of reading, because storing the current instant at creation would freeze
+a real-world timeline's present at the moment it was first saved.
+
+**It lives in the graph, not in a client**, because a fictional timeline's
+present is a fact about that world ("the novel opens in May 1897") that an
+agent should be able to record and every client should see. Setting it is a
+tool of its own, `set_reference_time`, because a fiction's anchor is usually
+learned after ingesting enough of the source, and is often read wrong first.
+
+"Next" is after the timeline's reference time, resolved once per call and
+passed down, so a long call never sees two values of "now".
+
+---
+
+## 4. Extraction proposing timepoints
+
+During decomposition, temporal expressions in node content become
+`Timepoint`s: a resolved `start`/`end` where the expression is concrete,
+`label` only where it is not. "During the Renaissance" stays vague rather than
+being guessed into 1500-01-01. Each proposing node gets a `TIMELINK` to the
+timepoint. The detector (`pipelines/timeline/temporal.py`) and the proposer
+(`pipelines/timeline/functions.py`) are pure functions; neither touches storage.
+
+### 4.1 Timelines travel in the write batch
+
+`write_batch_tx` takes `timelines` beside `nodes`, `edges` and `embeddings`,
+because a timeline written outside the batch could leave `TIMELINK` edges
+pointing at a timeline that was never stored after a mid-document failure, and
+the read path resolves a dangling `TIMELINK` to an empty row rather than an
+error, so that failure would be silent.
+
+Timelines are the one **upsert** in an otherwise insert-only batch, since
+appending a timepoint replaces the whole record; on rollback the in-memory
+backend restores the previous row explicitly, and SQLite, SurrealDB and
+Postgres get that from their transactions.
+
+### 4.2 Two rules
+
+**Detection reads node content, not segment text**, because a timepoint needs
+a node to hang on, and a date found in segment text leaves "which of this
+segment's nodes is this about?" to a guess.
+
+**One shared timeline per graph, not one per document**, because a timeline
+per document would spread one chronology across many near-empty timelines,
+and a reader follows one timeline at a time; every node keeps its
+`sourced_from` edge, so provenance is not lost. `store_decomposition`'s
+`timeline_id` routes a document onto a curated timeline, which must already
+exist, because creating one silently would put the document somewhere the
+caller cannot find.
+
+### 4.3 What the detector will not do
+
+A missed expression costs a timepoint; an invented one is indistinguishable
+from evidence once stored. So the detector resolves only what the text states
+(a day, a month, a year, a decade, a century, all intervals of different
+widths), and everything else that reads as temporal comes back as a label with
+no dates. It leaves out relative expressions ("three years later"), which need
+a document-level anchor; `of` before a year, because "the winter of 1897" has
+the shape of "a group of 1500 people"; and clock times. A bare four-digit
+number is a year only after a preposition ("in 1897") or inside a date
+pattern, or `3000 troops` becomes a date, and the preposition needs a word
+boundary in front of it, or "versi*on* 2024" reads as "on 2024".
+
+---
+
+## 5. What a visualiser is sent
+
+The shapes are `VIZ_CONTRACT.md` §5; these are the reasons behind them.
+
+### 5.1 Read path
+
+A snapshot reads timelines through `viz_list_timelines(database)` on every
+backend, because it must read any graph of a session without switching the
+connection, and `query_timelines()` reads the active graph. `viz_*` methods
+are never registered as MCP tools or imported under `epimemer/mcp/`.
+Timepoints ship embedded in their timeline, as they are stored.
+
+### 5.2 Events
+
+One event, `timeline_stored`, carrying the whole timeline. Every timeline write
+is an upsert of the whole record, so telling creation from extension would
+need a read before every write; sending the current state is cheaper and
+cannot drift from storage. The receiver replaces its copy rather than merging.
+
+### 5.3 Metacontexts in the snapshot
+
+`has_metacontext` edges carry only ids, so the snapshot carries the
+metacontexts themselves and a client can show names rather than UUIDs.
+
+### 5.4 Derived values are sent, never worked out twice
+
+A client never re-derives a server rule: what the server works out, the
+snapshot carries.
+
+- **Bounds for a vague point.** The snapshot carries the `earliest` and
+  `latest` of §3.3, computed by the function that answers `query_timeline`.
+- **Occurrences.** The snapshot enumerates a rule's occurrences over the span
+  of the timeline's dated points, or from its stated present where it has
+  none. It never falls back to the wall clock, because enumerating from today
+  would put occurrences where the graph never spoke.
+- **A proposed boundary is derived, never stored.** Reflect works proposals
+  out from a `temporally_followed_by` edge plus a located date on the other
+  claim, and writes nothing; a stored "proposed" field would go stale the
+  moment either claim changes. So the snapshot carries `boundary_proposals`,
+  worked out by the same pure core `reflect` calls, from the same reads.
+  Accepting one goes through `apply_reflection(boundaries=…)`, and a declined
+  proposal is left out.

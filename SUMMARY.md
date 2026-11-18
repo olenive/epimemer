@@ -339,7 +339,7 @@ The system must not be a black box: a newcomer should be able to look at a
 processing stage and see what is happening, what state data is in, and how it
 flows. So the stages that move data through steps are executable, typed Petri
 nets, via [Petritype](https://github.com/olenive/petritype), and the
-dashboard's pipeline strip draws each net and lights it as it fires.
+visualiser draws each net and lights it as it fires.
 
 Four nets exist: the two segmentation strategies, edge creation at ingest, and
 hybrid retrieval, whose two arms fork from one request and join at fusion.
@@ -353,12 +353,12 @@ storage schema and token types.
 
 ## Observability
 
-A live dashboard, described in [README.md](README.md#visualization). Two of
-its choices are architectural:
+A live visualiser, described in [README.md](README.md#visualization). Two
+choices behind it are architectural:
 
 - **A standalone hub, not a server per MCP process.** Sessions dial out and
-  register; the browser picks one. So several agents can be watched from one
+  register; the visualiser picks one. So several agents can be watched from one
   page, and no MCP process has to own a port.
-- **The panel showing what a call returned is labelled "Response", not
-  "Context"**: what lands in the model's context is the client's rendering of
+- **The text a call returned is called its "response", not its
+  "context"**: what lands in the model's context is the client's rendering of
   what was returned, which the system cannot see.

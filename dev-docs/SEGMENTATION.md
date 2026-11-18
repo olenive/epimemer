@@ -179,7 +179,7 @@ reviewing agent groups on, each kind with a stance that decides whether a
 `proceeded_despite_warning` journal row is written, and a `notify_user` flag
 that means raise it with a person. A doubt is none of that. It argues with
 nothing the agent did, it wants no person, and it is not a verdict. Putting
-it under `warnings` would either dilute the dashboard with rows about
+it under `warnings` would either dilute a visualiser's log with rows about
 paragraph breaks or force a stance on a thing that has none. Its own key,
 its own small vocabulary.
 

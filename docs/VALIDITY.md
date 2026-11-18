@@ -172,9 +172,8 @@ In short:
 - Results carry `validity`, per source, uncollapsed.
 - `valid_as_of` answers in **two buckets**, `valid` and `unknown`, and
   excludes nothing.
-- The dashboard's timeline panel draws each source's periods in a lane of its
-  own; the marks are `dev-docs/TIMELINE_VISUALISATION.md` §13, with a visual
-  reference at `dev-docs/mockups/valid-time-grammar.html`.
+- The visualiser draws a claim over the period its sources give it when its
+  time axis is set to claim time.
 
 ---
 
@@ -241,7 +240,7 @@ A proposal you disagree with is declined through
 a required `reason`. The period stays open, and one `boundary_declined`
 journal row records the claim, the source, the endpoint, the date and the
 clock. That stops exactly that proposal being offered again, by `reflect` and
-on the timeline panel; a proposal for another date or the other endpoint is a
+to a visualiser; a proposal for another date or the other endpoint is a
 different question and is still offered. The decline is a journal row rather
 than an edge, so the two claims can still be nominated as a similar or
 contradictory pair. `reopen(boundary={…})` withdraws a decline, and the

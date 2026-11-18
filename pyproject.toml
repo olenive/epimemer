@@ -1,6 +1,6 @@
 [project]
 name = "epimemer"
-version = "0.4.6"
+version = "0.5.0"
 description = "Epistemic memory for AI agents over MCP: a typed graph of claims with provenance, metacontexts, validity in time, and a review loop"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -20,9 +20,8 @@ dependencies = [
     "petritype>=0.3.1",
     "numpy>=2.0",
     "pydantic>=2.12.5",
-    # Both SDK lines work: 2.x is supported through the 0.4 releases and
-    # dropped at 0.5.
-    "surrealdb>=2.0.0,<4",
+    # The in-process engine comes separately, as the `embedded` extra below.
+    "surrealdb>=3.0.0,<4",
     # Floor is the release that fixed the OAuth-proxy and OpenAPI-provider
     # advisories, not the version we test against, which the lock file pins.
     "fastmcp>=3.2.0",
@@ -73,7 +72,7 @@ postgres = [
     "psycopg[binary]>=3.2",
 ]
 # The in-process SurrealDB engine behind `mem://`, `file://` and
-# `surrealkv://` URLs. The 2.x SDK bundled it; the 3.x SDK ships it separately.
+# `surrealkv://` URLs, which the SDK ships as a package of its own.
 embedded = [
     "surrealdb[embedded]>=3.0.0,<4",
 ]
@@ -103,12 +102,7 @@ build-backend = "setuptools.build_meta"
 where = ["."]
 include = ["epimemer*"]
 
-# The visualization bundle is build output, produced by `npm run build` under
-# epimemer/visualization/frontend and never committed. The release workflow
-# builds it before `uv build`, so the wheel carries it; a wheel built from a
-# bare checkout serves the hub's API without the page.
 [tool.setuptools.package-data]
-"epimemer.visualization" = ["static/*", "static/assets/*"]
 # The agent guidance ships with the package: INTEGRATION.md tells a reader
 # to open it, and 0.1.0 shipped without it. The directory is already found
 # by packages.find; without this line it contributes no files.

@@ -322,7 +322,8 @@ graph = paragraph_split_segmentation_net(RawDocument(content="Hello.\n\nWorld.")
 diagram = SimpleGraphvizVisualization.graph(RustworkxGraph.from_executable_graph(graph))
 ```
 
-The running server draws the same nets live (`VISUALISATION.md`). A
+The running server publishes the same nets live for a visualiser to draw
+(`VISUALISATION.md`, Part C). A
 transition body must not hold the event loop: it delays every event queued
 behind it, which is why the sentence-transformers provider encodes in a worker
 thread.
@@ -462,8 +463,8 @@ async with storage.graph_guard.using():  # a tool call, see _run_with_timeout
 ```
 
 Users do not exclude each other (the common case is an uncontended lock and
-an integer), and movers are preferred, so a busy session cannot starve the
-dashboard.
+an integer), and movers are preferred, so a busy session cannot starve a
+visualiser's reads.
 
 ### And every call says which graph it means
 

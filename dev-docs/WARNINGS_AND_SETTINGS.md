@@ -183,12 +183,12 @@ design.
 
 ---
 
-## 5. On the dashboard
+## 5. In a visualiser
 
-Every warning a call computed reaches the dashboard, muted or not, with
-`surfaced` saying whether the agent's response carried it: the dashboard is
+Every warning a call computed reaches a visualiser, muted or not, with
+`surfaced` saying whether the agent's response carried it: a visualiser is
 where a person looks at what the agent was *not* told. `EVENT_LOG.md` §12 holds
-that design and the read-only settings panel beside it.
+that design and the read-only route for the settings.
 
 ---
 

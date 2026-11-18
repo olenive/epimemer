@@ -1,4 +1,5 @@
-# Two ecosystems, because those are the two Dependabot can see here.
+# One ecosystem, GitHub Actions, because it is the only one Dependabot can see
+# here.
 #
 # **Python is deliberately absent.** Dependabot's `pip` ecosystem covers pip,
 # pipenv, pip-compile and poetry, and the dependency graph reads
@@ -35,19 +36,3 @@ updates:
     cooldown:
       default-days: 7
       semver-major-days: 21
-
-  - package-ecosystem: npm
-    directory: /epimemer/visualization/frontend
-    schedule:
-      interval: monthly
-    groups:
-      frontend-minor-and-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-      frontend-major:
-        patterns: ["*"]
-        update-types: ["major"]
-    open-pull-requests-limit: 2
-    cooldown:
-      default-days: 14
-      semver-major-days: 30

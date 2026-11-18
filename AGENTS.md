@@ -45,11 +45,6 @@ measurements.
 - Keep commit messages very succinct.
 - Do not add "Co-Authored-By" or similar to commit messages!
 
-# Frontend Coding Style
-1. Prefer a functional programming style.
-2. Prefer Typescript over plain Javascript.
-3. Use Tailwind CSS.
-
 # Memory System (Epimemer)
 The server sends the per-call rules (`epimemer_prompts/RULES.md`) as its MCP
 instructions and serves the full guide (`epimemer_prompts/DEFAULT.md`) as the

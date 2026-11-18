@@ -16,13 +16,11 @@ import math
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
-from importlib.metadata import version
 from typing import Any, Literal
 from urllib.parse import urlsplit, urlunsplit
 
 from surrealdb import AsyncSurreal
 from surrealdb.errors import NotFoundError, ServerError, UnsupportedEngineError
-from websockets.exceptions import ConnectionClosed, WebSocketException
 
 from epimemer.core.seat import JudgeConfirmation
 from epimemer.core.temporal import merged_validity
@@ -77,16 +75,10 @@ from epimemer.storage.timestamps import iso_micros
 # Schemes the SDK maps to `AsyncEmbeddedSurrealConnection`, which is not a
 # connection to anything: the engine, and therefore the whole graph, lives inside
 # the object. Rebuilding one hands back an empty database dressed up as a
-# recovery, so the reconnect path must never touch them. (Such a connection also
-# has no socket to lose, so this guard is belt-and-braces — but the failure it
-# prevents is silent data loss.)
+# recovery, so the reconnect path must never touch them. Such a connection has
+# no socket to lose, and the adapter listens for a lost socket only on a
+# websocket, so nothing it reports can start a rebuild.
 _EMBEDDED_SCHEMES = ("mem://", "memory", "file://", "surrealkv://")
-
-# The installed SDK's major version, read once. Both lines are supported, and
-# they differ in two places this adapter touches: the 3.x `query()` returns a
-# builder where 2.x returned the first statement's result, and the 3.x
-# connection takes options that 2.x has no parameters for.
-SDK_MAJOR = int(version("surrealdb").split(".")[0])
 
 logger = logging.getLogger(__name__)
 
@@ -102,37 +94,29 @@ def is_embedded_url(url: str) -> bool:
     return url.startswith(_EMBEDDED_SCHEMES)
 
 
-def _connection_options() -> dict[str, Any]:
-    """What the 3.x connection is told so that it behaves as the 2.x one did.
-
-    The 2.x SDK takes none of these and needs none: its behaviour is the target.
-    """
-    if SDK_MAJOR < 3:
-        return {}
-    return {
-        # `_reconnect` rebuilds a lost connection itself: it signs in again,
-        # selects the graph and checks its schema. The SDK's own reconnect would
-        # replay a sign-in token that may have expired by then.
-        "reconnect": False,
-        # The 2.x SDK waits for a websocket reply for as long as it takes. The
-        # 3.x default of 30 seconds would fail a reflect or a backup over a
-        # large graph part way through.
-        "timeout": None,
-        # Every result here is read whole, and a buffered reply is the one shape
-        # every server version gives.
-        "streaming": False,
-    }
-
-
 def _new_connection(url: str) -> AsyncSurreal:
     """An unopened SDK connection to `url`.
 
-    The 3.x SDK keeps the in-process engine in a separate package, so an
-    embedded URL without it is refused here, naming the Epimemer extra that
-    brings it rather than the SDK's own package.
+    The SDK keeps the in-process engine in a separate package, so an embedded
+    URL without it is refused here, naming the Epimemer extra that brings it
+    rather than the SDK's own package.
     """
     try:
-        return AsyncSurreal(url, **_connection_options())
+        return AsyncSurreal(
+            url,
+            # `_reconnect` rebuilds a lost connection itself: it signs in
+            # again, selects the graph and checks its schema. The SDK's own
+            # reconnect would replay a sign-in token that may have expired by
+            # then.
+            reconnect=False,
+            # A reply is waited for as long as it takes. The SDK's default of
+            # 30 seconds would fail a reflect or a backup over a large graph
+            # part way through.
+            timeout=None,
+            # Every result here is read whole, and a buffered reply is the one
+            # shape every server version gives.
+            streaming=False,
+        )
     except UnsupportedEngineError as missing:
         if not is_embedded_url(url):
             raise
@@ -146,12 +130,9 @@ def _new_connection(url: str) -> AsyncSurreal:
 async def _first_result(conn: AsyncSurreal, query: str, params: dict | None = None) -> Any:
     """The first statement's result, which is what every caller here reads.
 
-    The 2.x `query()` returns it directly. The 3.x `query()` returns a builder
-    whose `first()` gives the same value, and which raises when any statement
-    fails, where 2.x raised only for the first.
+    `query()` returns a builder, and `first()` raises when any statement fails,
+    not only the first.
     """
-    if SDK_MAJOR < 3:
-        return await conn.query(query, params)
     return await conn.query(query, params).first()
 
 
@@ -407,23 +388,18 @@ _ANALYZER_DDL = (
     "TOKENIZERS class FILTERS lowercase, ascii, snowball(english);"
 )
 
-# The engines this adapter connects to do not agree on how a full-text index
-# is declared. The standalone 3.0.5 server renamed the keyword and dropped the
-# parameter list, and the 4.0 engine the 3.x SDK embeds parses the same form;
-# the engine the 2.x SDK embeds, which is what `mem://` is under that SDK, is
-# an older core that only parses the 2.x form. Each *rejects the other's
-# syntax outright*, so there is no spelling that satisfies every engine and no
-# version to write against.
+# The standalone 3.0.5 server and the 4.0 engine the SDK embeds declare a
+# full-text index the same way, and the analyzer DDL and the match operator are
+# the same on both too. The IDF is not, which `text_search` absorbs
+# (`dev-docs/LEXICAL_SEARCH.md` §11).
 #
-# The analyzer DDL and the match operator are the same everywhere. The IDF is
-# not, which `text_search` absorbs (`dev-docs/LEXICAL_SEARCH.md` §11).
-_FTS_INDEX_MODERN = (
+# Defining the index backfills the rows already in the table, so an existing
+# graph needs no migration step. It also means the first connect after an
+# index is added is slower than every connect before it, once, in a place with
+# no progress reporting. Measured in `dev-docs/BENCHMARKS.md`.
+_FTS_INDEX_DDL = (
     "DEFINE INDEX IF NOT EXISTS idx_{table}_fts ON {table} "
     "FIELDS {field} FULLTEXT ANALYZER epimemer_text BM25;"
-)
-_FTS_INDEX_LEGACY = (
-    "DEFINE INDEX IF NOT EXISTS idx_{table}_fts ON {table} "
-    "FIELDS {field} SEARCH ANALYZER epimemer_text BM25(1.2,0.75);"
 )
 
 # Which field of which table is searchable. Nodes answer "what do I believe?"
@@ -470,9 +446,8 @@ _CONTAINMENT_OVERFETCH = 100
 # The first SurrealDB measured to compute BM25's IDF as ln(1 + x), where x is
 # (N - n + 0.5) / (n + 0.5) for a term in n of a table's N rows. That is
 # positive for every term however common, where the 3.0.5 server clamps the
-# classic ln(x) at zero and the 2.x SDK's embedded engine leaves it negative.
-# 4.0.0 is the engine the 3.x SDK embeds; releases between 3.0.5 and 4.0.0 are
-# unmeasured and treated as 3.0.5.
+# classic ln(x) at zero. 4.0.0 is the engine the SDK embeds; releases between
+# 3.0.5 and 4.0.0 are unmeasured and treated as 3.0.5.
 _POSITIVE_IDF_SINCE = (4, 0, 0)
 
 
@@ -502,32 +477,6 @@ def _clamped_idf_ratio(rows: int, matched: int) -> float:
     """
     x = (rows - matched + 0.5) / (matched + 0.5)
     return math.log(x) / math.log1p(x) if x > 1 else 0.0
-
-
-async def _define_fts_indexes(query) -> None:
-    """Define the full-text indexes in whichever dialect this engine speaks.
-
-    The first target pays for the negotiation; the rest reuse what worked. If
-    both dialects fail the error is raised with the other one chained to it, so
-    a third SurrealDB that speaks neither is diagnosable rather than mysterious.
-
-    Defining the index **backfills existing rows** — verified on both engines —
-    so an existing graph needs no migration step. It also means the first
-    connect after this ships is slower than every connect before it, once, in a
-    place with no progress reporting. Measured in `dev-docs/BENCHMARKS.md`.
-    """
-    template = _FTS_INDEX_MODERN
-    for table, field in _FTS_TARGETS:
-        try:
-            await query(template.format(table=table, field=field))
-        except Exception as unsupported:
-            if template is _FTS_INDEX_LEGACY:
-                raise
-            template = _FTS_INDEX_LEGACY
-            try:
-                await query(template.format(table=table, field=field))
-            except Exception as also_unsupported:
-                raise also_unsupported from unsupported
 
 
 def _upsert(table: str, *, data: str = "data", uid: str = "uid") -> str:
@@ -853,11 +802,10 @@ async def _stored_schema_version(query: Callable[..., Awaitable[Any]]) -> int:
     """The version marker of the graph the connection is pointed at, 0 if it has none.
 
     A read and nothing else: on a database that has never been opened the
-    record and its table are both absent, and asking creates neither. The
-    engines answer that absence differently: the 2.x SDK's embedded one returns
-    nothing, a served SurrealDB and the 4.0 engine the 3.x SDK embeds raise
-    that the table does not exist. Both mean a graph nobody has written, which
-    is version 0.
+    record and its table are both absent, and asking creates neither. A served
+    SurrealDB and the 4.0 engine the SDK embeds raise that the table does not
+    exist, and answer with nothing when the table is defined but the marker is
+    not yet stamped. Both mean a graph nobody has written, which is version 0.
     """
     try:
         stored = await query(_SCHEMA_VERSION_GET)
@@ -1450,14 +1398,11 @@ _NODE_NAMES_JUDGE = (
 def _episode_rows(episodes: Sequence[LifecycleEpisode]) -> list[dict]:
     """A lifecycle history as SurrealDB stores it (ISO strings, no null keys).
 
-    The whole list is written each time rather than appended to in the database.
-    Every engine this backend runs against would take an `array::append`, but
-    the one the 2.x SDK embeds lacks the object functions that closing an
-    episode needs, and a history that is assembled two different ways is a
-    history that can differ two different ways. Planning it here also matches
-    how `merge_nodes_tx` already plans its edge migration, for the same reason:
-    the adapter is single-connection and documented as unsafe for concurrent
-    callers, so nothing interleaves between the read and the write.
+    The whole list is written each time rather than appended to in the
+    database, which matches how `merge_nodes_tx` plans its edge migration, and
+    for the same reason: the adapter is single-connection and documented as
+    unsafe for concurrent callers, so nothing interleaves between the read and
+    the write.
     """
     return [drop_none_values(ep.model_dump(mode="json")) for ep in episodes]
 
@@ -1532,7 +1477,7 @@ class SurrealDBStorage:
         """A connection signed in and pointed at the selected graph.
 
         Built aside and handed over only once it is ready. A failed attempt is
-        closed, never kept: both SDKs open a socket on the next request without
+        closed, never kept: the SDK opens a socket on the next request without
         signing it in or selecting a database, so a half-built connection would
         run every later call as nobody, against nothing.
         """
@@ -1540,7 +1485,7 @@ class SurrealDBStorage:
         embedded = is_embedded_url(self._url)
         try:
             if embedded:
-                # Not given its URL again: the 3.x engine would open a second
+                # Not given its URL again: the embedded engine would open a second
                 # datastore on the same files, and the first one's lock refuses it.
                 await db.connect()
             else:
@@ -1553,7 +1498,7 @@ class SurrealDBStorage:
             raise
         # A websocket is the one transport with a connection to lose: each HTTP
         # request stands alone, and an embedded engine has no socket.
-        if SDK_MAJOR >= 3 and self._url.startswith(("ws://", "wss://")):
+        if self._url.startswith(("ws://", "wss://")):
 
             def dropped() -> None:
                 self._dropped = db
@@ -1563,45 +1508,32 @@ class SurrealDBStorage:
 
     # --- Surviving a dropped connection ---
     #
-    # Neither SDK recovers a dropped connection in a way this adapter can use,
-    # and they fail differently. The 2.x SDK does not admit to being
-    # disconnected: `AsyncWsSurrealConnection.connect()` returns early whenever
-    # `self.socket` is truthy, and nothing clears `socket` when the connection
-    # drops, so the object looks connected while every send raises. The 3.x
-    # SDK, with its own reconnect off, reports the drop as a `disconnected`
-    # event and then opens a bare socket on the next request. Left alone, either
-    # one breaks every call for the life of the process after a server restart,
-    # a network blip or a laptop sleep. So the adapter rebuilds the connection
-    # itself: after a send that raised on 2.x, and before the next call once
-    # the connection has reported the drop on 3.x.
+    # The SDK's own reconnect is off (`_new_connection` says why), so when the
+    # socket goes, after a server restart, a network blip or a laptop sleep, the
+    # connection reports the drop as a `disconnected` event and then opens a
+    # bare socket on the next request, signed in as nobody and pointed at no
+    # database. Left alone, that breaks every call for the life of the process.
+    # So the adapter rebuilds the connection itself, before the next call, once
+    # the connection has reported the drop.
     #
-    # Retrying the operation is safe *here*, which is a property of this schema
-    # rather than a general truth: every write is an `UPSERT ... WHERE uid` or an
-    # `INSERT INTO` under a UNIQUE `uid` index (silently ignored on collision),
-    # and multi-statement writes are transactional, so a connection lost in
-    # flight aborts them server-side. A retry is a no-op or an idempotent repeat.
-    #
-    # Not covered: the operation already in flight when the socket died. The 2.x
-    # SDK cancels its pending futures, so that caller sees `CancelledError`,
-    # which cannot be told apart from a real cancellation. The 3.x SDK fails
-    # them with `ConnectionUnavailableError`, and the request may already have
-    # run. That one call fails; the next one reconnects.
+    # Not covered: the operation already in flight when the socket died. The
+    # SDK fails it with `ConnectionUnavailableError`, and the request may
+    # already have run. That one call fails; the next one reconnects.
 
     async def _reconnect(self, stale: AsyncSurreal) -> None:
         """Rebuild a connection whose socket has gone.
 
-        Serialized, because everything in flight fails together and each caller
-        lands here: whoever takes the lock first rebuilds, and the rest find
-        `_db` already replaced and go straight to their retry. The stale
-        connection is marked as dropped first, so a call that starts during the
-        rebuild waits for it rather than sending on a closed connection. A
-        rebuild that fails, because the server is not back yet, leaves the
-        connection marked, so the next call tries again.
+        Serialized, because every call made after the drop lands here: whoever
+        takes the lock first rebuilds, and the rest find `_db` already replaced
+        and go straight on. A call that starts during the rebuild finds the
+        stale connection still marked as dropped, so it waits for the rebuild
+        rather than sending on a closed connection. A rebuild that fails,
+        because the server is not back yet, leaves the connection marked, so
+        the next call tries again.
         """
         async with self._reconnect_lock:
             if self._db is not stale:
                 return
-            self._dropped = stale
             with contextlib.suppress(Exception):
                 await stale.close()
             self._reconnecting = asyncio.current_task()
@@ -1615,19 +1547,15 @@ class SurrealDBStorage:
 
     async def _call(self, operation: Callable[[AsyncSurreal], Awaitable[Any]]) -> Any:
         conn = self.db
-        # A failure inside the rebuild is a failed connection, and the caller
-        # of `_reconnect` should hear about it rather than deadlock.
+        # Schema migration inside the rebuild's own `connect()` calls through
+        # here. A drop reported then is a failed connection, and the caller of
+        # `_reconnect` should hear about it rather than wait on the lock this
+        # task already holds.
         rebuilding = self._reconnecting is asyncio.current_task()
         if conn is self._dropped and not rebuilding:
             await self._reconnect(conn)
             conn = self.db
-        try:
-            return await operation(conn)
-        except ConnectionClosed, WebSocketException:
-            if is_embedded_url(self._url) or rebuilding:
-                raise
-            await self._reconnect(conn)
-            return await operation(self.db)
+        return await operation(conn)
 
     async def _query(self, query: str, params: dict | None = None) -> Any:
         return await self._call(lambda conn: _first_result(conn, query, params))
@@ -1699,10 +1627,10 @@ class SurrealDBStorage:
 
     # --- Viz reads (cross-graph, by borrowing the connection) ---
     #
-    # A graph nobody has written has no tables. The 2.x SDK's embedded engine
-    # answers a read on a missing table with no rows; a served SurrealDB and the
-    # 4.0 engine the 3.x SDK embeds raise `NotFoundError`. A viz read reports
-    # such a graph as empty either way, through `_absent_as_empty`.
+    # A graph nobody has written has no tables, and a served SurrealDB and the
+    # 4.0 engine the SDK embeds answer a read on a missing table with
+    # `NotFoundError`. A viz read reports such a graph as empty, through
+    # `_absent_as_empty`.
     #
     # There is no cross-database query in SurrealQL and no second connection to
     # be had (a second embedded URL is a second store), so reading another
@@ -1960,7 +1888,8 @@ class SurrealDBStorage:
         # Full-text search over node content and segment text. Last, because
         # every table it indexes has to exist first.
         await query(_ANALYZER_DDL)
-        await _define_fts_indexes(query)
+        for table, field in _FTS_TARGETS:
+            await query(_FTS_INDEX_DDL.format(table=table, field=field))
 
         # `_selected` rather than `_database`: it names the graph the connection
         # is actually pointed at, which is what these statements will hit.
@@ -2336,11 +2265,10 @@ class SurrealDBStorage:
             causes = [f for f in failures if _SKIPPED_IN_FAILED_TRANSACTION not in f]
             raise RuntimeError(f"Transaction failed: {(causes or failures)[0]}")
         # A served SurrealDB and the 4.0 engine report BEGIN and COMMIT as
-        # statements of their own; the 2.x SDK's embedded engine reports only
-        # the statements between them.
-        if len(results) == len(statements) + 2:
-            results = results[1:-1]
-        return [result.get("result") if isinstance(result, dict) else result for result in results]
+        # statements of their own, around the results of the ones between them.
+        return [
+            result.get("result") if isinstance(result, dict) else result for result in results[1:-1]
+        ]
 
     async def _run_timeline_transaction(
         self, statements: list[str], params: dict, timelines: Sequence[Timeline]
@@ -3198,13 +3126,14 @@ class SurrealDBStorage:
 
         # Match references are 1-based and each term gets its own. The contract
         # says a term in half the corpus or more contributes nothing, and the
-        # three engines need three treatments to make that true (§11). The
-        # 3.0.5 server clamps its IDF at zero. The 2.x SDK's embedded engine
-        # returns the negative value, so each score is floored at zero before
-        # the sum, or an uninformative term would drag a document's total
-        # *below* the truncation and delete a real hit. The 4.0 engine scores
-        # every term positive, so each score is scaled to the clamped IDF from
-        # the term's own counts, one round trip more.
+        # two engines need two treatments to make that true (§11). The 3.0.5
+        # server clamps its IDF at zero. Each score is floored at zero before
+        # the sum all the same, because the servers between 3.0.5 and 4.0 are
+        # unmeasured: on one that returned a negative IDF, an uninformative
+        # term would drag a document's total below the truncation and delete a
+        # real hit. The 4.0 engine scores every term positive, so each score is
+        # scaled to the clamped IDF from the term's own counts, one round trip
+        # more.
         refs = range(1, len(terms) + 1)
         matches = " OR ".join(f"{field} @{ref}@ $term_{ref}" for ref in refs)
         params |= {f"term_{ref}": terms[ref - 1] for ref in refs}

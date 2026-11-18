@@ -252,6 +252,7 @@ All configuration is via `EPIMEMER_` environment variables:
 | `EPIMEMER_VIZ_HOST` | `127.0.0.1` | Visualization hub host |
 | `EPIMEMER_VIZ_PORT` | `8765` | Visualization hub port |
 | `EPIMEMER_VIZ_AUTOSPAWN` | `true` | Spawn a hub automatically if none is running |
+| `EPIMEMER_VIZ_BUNDLE_DIR` | (unset) | A directory whose `index.html` the hub shows as its page, in place of the fetched visualiser. For a visualiser you built yourself |
 | `EPIMEMER_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `EPIMEMER_LOG_FILE` | (stderr) | Path to log file (see below) |
 
@@ -271,32 +272,35 @@ Claude Code prefixes each as `mcp__epimemer__<name>`.
 
 ## Visualization
 
-A browser dashboard showing the knowledge graph, pipeline execution and
-timelines, live. It is a **standalone hub** that many MCP sessions publish
-to, rather than a server embedded in each MCP process, so several agents can
-be watched from one page.
+A page in your browser that draws the knowledge graph as it is built: one 3D
+scene in which the graph stands on a map of its topics and extends along a
+time axis, with a log of what the agent changed and was warned about, the
+pipelines lit as they run, and a filter to what one tool call returned. The
+page is the [epimemer-bevy](https://github.com/olenive/epimemer-bevy)
+visualiser, and its README describes the views and the controls. Epimemer
+runs the **hub** the page reads from: a standalone process that many MCP
+sessions publish to, rather than a server embedded in each MCP process, so
+several agents can be watched from one page.
 
+- **Get the page**: `epimemer viz fetch` downloads the visualiser into
+  `~/.epimemer/viz`, checking it against a sha256 that ships with Epimemer.
+  The download happens only when you run the command, and a running hub
+  shows the page from the next load. Each Epimemer release pins the
+  visualiser it was checked against, so run it again after an upgrade.
+- **Open it**: http://127.0.0.1:8765. With nothing fetched, the address says
+  to run the command above.
 - **The hub owns the port** (`EPIMEMER_VIZ_HOST:EPIMEMER_VIZ_PORT`, default
   `127.0.0.1:8765`). Each MCP process dials out to it and registers as a
-  *session*; the browser picks a session from the header selector.
+  *session*. The page opens on the most recently active session and its
+  active graph, and switches to another from its bar.
 - **Auto-spawn**: the first MCP process with `EPIMEMER_VIZ_ENABLED=true`
   spawns a detached hub if none is running (disable with
   `EPIMEMER_VIZ_AUTOSPAWN=false`).
 - **CLI**: `epimemer-viz [--status|--stop]` for explicit control.
 - **`viz_status` tool**: ask through the session you are driving. It returns
   the hub URL, whether the hub can see this session, and the `session_id` to
-  pick in the selector. This answers "I opened the visualizer but can't find
+  look for in the page. This answers "I opened the visualizer but can't find
   my graph".
-- **Activity log**: one entry per transaction, filterable by verb, node,
-  text and time; click an entry to highlight the nodes it acted on.
-- **Warnings in the log**: every warning a tool computed is a `warned` row
-  beside its act, muted ones included, dimmed and labelled *not shown to the agent*.
-- **Warning settings**: the **warnings** button shows what this graph does
-  about each kind; `configure_warnings` is the tool that changes one.
-- **Retrieval focus**: pick a recent tool call and everything it did *not*
-  return is dimmed; the drawer's **Response** tab shows what Epimemer returned.
-- **Timeline**: one timeline at a time, in *record time* or *content time*,
-  with undated points in a tray and recurrence occurrences computed for the window.
 
 > **`EPIMEMER_VIZ_HOST` is a privacy setting as well as a network one.** On
 > the default loopback bind the hub keeps whole retrieval records, so they
@@ -389,8 +393,7 @@ asks you, and on a yes calls `backup_graph`, which writes to
 
 ## Contributing
 
-Development setup, the test suites, the frontend build and where the design
-notes live are in
+Development setup, the test suites and where the design notes live are in
 [CONTRIBUTING.md](https://github.com/olenive/epimemer/blob/main/CONTRIBUTING.md).
 Bugs and proposals go to the
 [issue tracker](https://github.com/olenive/epimemer/issues).

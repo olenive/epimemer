@@ -77,26 +77,6 @@ jobs:
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync ruff format --check .
 
-  frontend:
-    name: Visualization frontend
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: epimemer/visualization/frontend
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: epimemer/visualization/frontend/.nvmrc
-          cache: npm
-          cache-dependency-path: epimemer/visualization/frontend/package-lock.json
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm test
-      # The bundle is never committed, so this is the only place it is proven
-      # to build before the release workflow needs it.
-      - run: npm run build
-
   integration:
     name: SurrealDB integration
     runs-on: ubuntu-latest
@@ -110,26 +90,6 @@ jobs:
       # The same target a developer runs: a throwaway server for the ws://
       # suite, and the durability suite starts and restarts its own.
       - run: make test-integration
-
-  # The unit suite and the SurrealDB integration target again, on the 2.x SDK
-  # the 0.4 releases still support. The lock pins 3.x, so the job downgrades
-  # after the locked sync. The 2.x wheel bundles its own embedded engine.
-  sdk-2:
-    name: SurrealDB SDK 2.x
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.3
-        with:
-          enable-cache: true
-          python-version: "3.14"
-      - run: uv sync --locked --extra dev
-      - run: uv pip install --python .venv/bin/python 'surrealdb==2.0.0'
-      - run: uv run --no-sync python -m pytest tests/ -q
-      # `UV_NO_SYNC` stops the Makefile's `uv run` from putting 3.x back.
-      - run: make test-integration
-        env:
-          UV_NO_SYNC: "1"
 
   postgres:
     name: Postgres backend

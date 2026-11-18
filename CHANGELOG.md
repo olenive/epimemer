@@ -4,6 +4,35 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] — 2026-11-18
+
+### Added
+
+- `epimemer viz fetch` downloads the Rust visualiser, the browser bundle that
+  epimemer-bevy publishes, into `~/.epimemer/viz`. The download is checked
+  against a sha256 that ships with Epimemer before anything is unpacked.
+  `--release` with `--sha256` fetches a release other than the pinned one.
+- The hub serves the fetched visualiser as its page, from the next page load
+  and with no restart. `EPIMEMER_VIZ_BUNDLE_DIR` points the hub at a directory
+  of your own, such as a local build.
+
+### Changed
+
+- A hub with no page to show answers `503` naming `epimemer viz fetch`.
+
+### Removed
+
+- The TypeScript dashboard. The wheel no longer carries a page, and the hub
+  serves the Rust visualiser alone: run `epimemer viz fetch` once after
+  upgrading. Building or testing Epimemer needs no Node. The visualiser has
+  the graph on a time axis, the log, the pipelines and the retrieval filter;
+  the dashboard's timeline panel, its colour settings and its view of the
+  warning settings have no counterpart there.
+- Support for the 2.x `surrealdb` Python SDK, which the 0.4 releases kept
+  working. Epimemer needs `surrealdb` 3.x, with the `embedded` extra for a
+  `mem://`, `file://` or `surrealkv://` URL. A SurrealDB server older than
+  3.0 is not supported.
+
 ## [0.4.6] — 2026-11-11
 
 ### Added

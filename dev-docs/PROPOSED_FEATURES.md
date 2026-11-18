@@ -40,9 +40,9 @@ shape decided:
   wraps the grant; and the database user recorded on a judge binding, since
   two people sharing one picker will pick the same judge and review would
   merge their sessions.
-- A write from the dashboard waits on the same question. Every change is
-  journalled against a session and a judge, and a browser has neither, which
-  is why the dashboard's warning-settings panel is read-only.
+- A write from a visualiser waits on the same question. Every change is
+  journalled against a session and a judge, and a visualiser has neither,
+  which is why a visualiser can only read.
 - Nothing finer than a whole graph, and nothing about reaching the database
   across machines, which is the database's own configuration.
 
@@ -79,7 +79,7 @@ and stays Gregorian.
 
 **Cost.** Medium. The coordinate type touches every timeline query function,
 the timeline record every storage backend stores whole, extraction, and the
-dashboard axis. No backend query compares a coordinate today; one that did
+visualiser's time axis. No backend query compares a coordinate today; one that did
 would meet the trap the design rules name, numbers compared as text sorting
 wrongly. `TIMELINES.md` keeps this cheap by forbidding anything that assumes a
 date where a number would do.
@@ -128,7 +128,7 @@ file at the end, worth having and not worth prioritising over designed work.
 
 **What.** One command that starts from an empty, throwaway graph, loads a small
 corpus through the tool functions an agent calls, and narrates in the terminal
-while the dashboard shows the graph being built, searched, corrected and
+while the visualiser shows the graph being built, searched, corrected and
 reflected over. It is the introduction for a new user and the thing to put on a
 screen in a presentation.
 
@@ -195,8 +195,6 @@ first.
 
 ## Tracked elsewhere, listed so the backlog is complete
 
-- **Colour customisation, phase C4**: export/import, preset themes, and making
-  the semantic hues settable. `VISUALISATION.md` Part C.
 - **A dedicated read connection for viz snapshots**: deferred until the server
   gains concurrent clients.
 - **A vector index**: every backend ranks vectors by brute force, and

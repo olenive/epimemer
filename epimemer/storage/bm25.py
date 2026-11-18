@@ -149,9 +149,8 @@ def _inverse_document_frequency(n_documents: int, n_matching: int) -> float:
     which is the score floor this system would otherwise have had to invent and
     tune (`LEXICAL_SEARCH.md` §2.5).
 
-    SurrealDB 3.0.5 clamps here too. The embedded engine the tests run against
-    returns the negative value instead, which is why the truncation callers
-    apply is `score > 0` rather than `score != 0`: it agrees with both.
+    SurrealDB 3.0.5 clamps here too. The 4.0 engine the SDK embeds scores every
+    term above zero, and the SurrealDB adapter scales its scores to this clamp.
     """
     return max(0.0, math.log((n_documents - n_matching + 0.5) / (n_matching + 0.5)))
 

@@ -26,8 +26,8 @@ in the module **fails**, with the exception the probe got, rather than
 skipping: a skip is what pytest reports as success, and a suite that skips
 itself when the server is up but the client is broken is a suite that never
 fails. The one time that happened, a served SurrealDB answered a read on an
-undefined table with an error the embedded engine never raises, and the only
-sign was two unrelated tests failing in the suite beside this one.
+undefined table with an error the unit suite had never seen, and the only sign
+was two unrelated tests failing in the suite beside this one.
 
 A server that accepts connections without answering (another Docker/Colima
 profile holding the port, or a wedged container) fails the same way, with the
@@ -614,14 +614,12 @@ async def test_validity_intervals_round_trip_over_a_real_connection(surreal):
 
 
 async def test_fts_index_is_defined_for_every_searchable_table(surreal):
-    """Schema guard, and the one that says which SurrealDB we are talking to.
+    """Schema guard on the server itself.
 
-    The standalone server and the engine the 2.x SDK embeds are different
-    cores that reject each other's `DEFINE INDEX` syntax outright (`FULLTEXT`
-    vs `SEARCH`), so `_setup_schema` negotiates. The unit suite only ever
-    exercises an embedded engine; without this, shipping the wrong dialect
-    would leave every lexical search on a real deployment returning nothing,
-    silently, while the whole suite stayed green.
+    The unit suite only ever exercises the embedded engine, which is a
+    different core from the standalone server. Without this, a server that
+    held no full-text index would leave every lexical search on a real
+    deployment returning nothing, silently, while the whole suite stayed green.
     """
     store = await surreal()
 
@@ -748,7 +746,7 @@ async def test_a_term_in_half_the_table_contributes_nothing_over_a_real_connecti
     """R1 on the engine whose IDF clamp it was written against.
 
     A served SurrealDB that scored a common term above zero would let it into
-    fusion; the embedded engines cannot show which kind of server this is.
+    fusion; the embedded engine cannot show which kind of server this is.
     """
     store = await surreal()
     for text in (

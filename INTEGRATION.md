@@ -28,12 +28,13 @@ Or add it directly to `~/.claude.json`:
 ```
 
 From a checkout, `uv run --directory /path/to/epimemer epimemer serve` is the
-equivalent command, and `make build-frontend` builds the dashboard page, which
-a checkout does not include.
+equivalent command.
 
-The dashboard is on by default (`EPIMEMER_VIZ_ENABLED`): open
-http://127.0.0.1:8765 in your browser to watch the graph, the pipelines, a
-timeline and a log of every decision and warning as they happen.
+The server publishes what it does to a visualisation hub by default
+(`EPIMEMER_VIZ_ENABLED`). Run `epimemer viz fetch` once to download the
+visualiser, then open http://127.0.0.1:8765 in your browser to watch the
+graph on its time axis, the pipelines, and a log of every decision and
+warning as they happen.
 
 ### Configuration
 

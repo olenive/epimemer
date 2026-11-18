@@ -1,8 +1,6 @@
 # Epimemer test targets.
 #
 #   make test              default suite — embedded, no external services
-#   make test-frontend     visualization frontend: vitest + tsc type-check
-#   make build-frontend    write the visualization bundle (never committed)
 #   make bench             scaling measurements (see dev-docs/BENCHMARKS.md)
 #   make test-integration  opt-in SurrealDB suites mem:// cannot cover: a real
 #                          ws:// connection with cross-connection concurrency,
@@ -14,10 +12,6 @@
 #                          backend's own tests, against a throwaway
 #                          postgres:17-alpine. Needs Docker; always tears it
 #                          down. Stops if the port is taken.
-#
-# `make test` stays Python-only: Node is a frontend prerequisite, not a backend
-# one, and a missing npm would make the Python suite look broken. Run both
-# before touching visualization/.
 #
 # Both SurrealDB suites skip under a bare `pytest` — the ws:// one unless
 # EPIMEMER_SURREAL_WS_URL is set, the durability one unless
@@ -41,23 +35,12 @@ PG_CONTAINER ?= epimemer-postgres-it
 PG_PORT ?= 5433
 PG_PASSWORD ?= epimemer
 PG_DSN ?= postgresql://postgres:$(PG_PASSWORD)@127.0.0.1:$(PG_PORT)/postgres
-FRONTEND_DIR ?= epimemer/visualization/frontend
 BENCH_N ?= 100,1000
 
-.PHONY: test test-frontend build-frontend test-integration test-postgres bench
+.PHONY: test test-integration test-postgres bench
 
 test:
 	uv run python -m pytest tests/ -q
-
-# tsc covers the DOM/Cytoscape modules the unit tests leave alone, so the two
-# together cover the whole frontend.
-test-frontend:
-	cd $(FRONTEND_DIR) && npm run typecheck && npm test
-
-# Writes epimemer/visualization/static. The hub serves its API without the
-# bundle and says so at `/`; this is what puts the page there.
-build-frontend:
-	cd $(FRONTEND_DIR) && npm ci && npm run build
 
 # Measurements, not assertions: run on demand, never in CI. Set
 # EPIMEMER_BENCH_URL to add a real SurrealDB backend alongside mem://.

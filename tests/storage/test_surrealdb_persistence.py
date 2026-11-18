@@ -3,8 +3,8 @@
 Two properties, one setup. **The data** must survive — the trap that once
 shipped as a setup script printing "persistent graph" while running ``start ...``
 with no storage path, so every restart wiped the graph. **The client** must
-survive too: the SDK neither reconnects nor admits to being
-disconnected, so before the adapter learned to rebuild its connection, a
+survive too: the SDK's own reconnect is off, so the adapter rebuilds the
+connection itself once the SDK reports the drop. Before it learned to, a
 restarted server wedged every caller for the life of the process.
 
 Unlike ``test_surrealdb_integration.py`` (which connects to an *already running*

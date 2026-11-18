@@ -10,12 +10,13 @@ cannot run, and `EPIMEMER_APPROVED_AGENTS`, which the server reads at start.
 state something about a graph's past that nothing in the graph can derive, and
 an agent asserting it about its own writes would be marking its own homework.
 
-`graphs` is the one group that is here for reach rather than for a rule. An
+`graphs` is here for reach rather than for a rule. An
 agent can back a graph up: `backup_graph` writes to the destination the server
 was configured with, and takes no path of its own, so it can act on a prompt
 without choosing where a graph goes. Naming a path, importing a bundle, and
 verifying one are the parts a person does, and they have to work when the server
-is not running.
+is not running. `viz fetch` is here for reach too: it downloads the browser
+visualiser into the user's home, and touches no graph.
 
 **It does not work against every backend, and that is checked rather than
 hoped.** Approvals live in per-graph settings *inside the storage backend*, and
@@ -32,9 +33,10 @@ does, so these commands work on all three.
 import argparse
 import asyncio
 import json
+import os
 import secrets
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -986,6 +988,72 @@ def _prune_client_state(given_dir: str | None, older_than: int, yes: bool) -> in
     return 0
 
 
+def _fetch_visualiser(
+    release: str | None,
+    sha256: str | None,
+    force: bool,
+    *,
+    home: Path,
+    environ: Mapping[str, str],
+    opener,
+) -> int:
+    """Download the browser visualiser into `home`, and say where it went.
+
+    With no release named it fetches the pinned one, whose checksum ships with
+    this package. Any other release is checked against the checksum the user
+    supplies, so naming one without the other is a usage error. A running hub
+    serves the new bundle from its next request, unless `environ` points it at
+    a directory of the user's own, which this then says.
+    """
+    from epimemer.visualization import bundle
+
+    def overridden() -> str:
+        override = bundle.bundle_dir_override(environ, home)
+        if override is None:
+            return ""
+        return (
+            f"\n{bundle.BUNDLE_DIR_ENV} is set to {override}, so a hub started "
+            f"with it serves that directory and not this bundle."
+        )
+
+    if release is None and sha256 is None:
+        chosen = bundle.PINNED_RELEASE
+    elif release is not None and sha256 is not None:
+        try:
+            chosen = bundle.requested_release(release, sha256)
+        except bundle.BundleError as refused:
+            print(str(refused), file=sys.stderr)
+            return 2
+    else:
+        print(
+            "--release and --sha256 go together. A release other than the pinned "
+            f"one ({bundle.PINNED_RELEASE.version}) is checked against the checksum "
+            "you supply, which is in that release's .sha256 file.",
+            file=sys.stderr,
+        )
+        return 2
+
+    target = bundle.bundle_dir(home)
+    if not force and bundle.already_installed(chosen, home):
+        print(
+            f"Visualiser {chosen.version} is already fetched, in {target}. "
+            f"Pass --force to download it again." + overridden()
+        )
+        return 0
+
+    print(f"Downloading visualiser {chosen.version} from {bundle.release_url(chosen)}", flush=True)
+    try:
+        fetched = bundle.fetch_bundle(chosen, home, opener=opener)
+    except (bundle.BundleError, OSError) as failed:
+        print(f"Could not fetch visualiser {chosen.version}: {failed}", file=sys.stderr)
+        return 1
+    print(
+        f"Fetched visualiser {fetched.version} into {target}. Reload the "
+        f"visualization page to see it." + overridden()
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="epimemer", description="Epimemer administration.")
     parser.add_argument("--version", action="version", version=f"%(prog)s {_installed_version()}")
@@ -1098,6 +1166,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Days unused before a record is deleted (default: %(default)s).",
     )
     prune.add_argument("--yes", action="store_true", help="Skip the confirmation prompt.")
+
+    viz = sub.add_parser("viz", help="The browser visualiser the hub shows.")
+    viz_sub = viz.add_subparsers(dest="action", required=True)
+    fetch = viz_sub.add_parser(
+        "fetch",
+        help=(
+            "Download the visualiser into ~/.epimemer/viz, checked against its "
+            "sha256. A running hub serves it from the next request."
+        ),
+    )
+    fetch.add_argument(
+        "--release",
+        metavar="VERSION",
+        help="A release other than the pinned one, such as 0.2.0. Needs --sha256.",
+    )
+    fetch.add_argument(
+        "--sha256",
+        metavar="HEX",
+        help="The checksum of that release's tarball, from its .sha256 file.",
+    )
+    fetch.add_argument(
+        "--force",
+        action="store_true",
+        help="Download again even when this release is already fetched.",
+    )
 
     relations = sub.add_parser("relations", help="The user-tier relationship vocabulary.")
     relations_sub = relations.add_subparsers(dest="action", required=True)
@@ -1275,6 +1368,20 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             raw = ""
         return _record_client_state(args.dir, raw, args.client_pid)
+
+    # A download into the user's home: it opens no store and needs no server
+    # configuration, so a configuration the server would refuse cannot stop it.
+    if args.group == "viz":
+        from epimemer.visualization.bundle import open_https
+
+        return _fetch_visualiser(
+            args.release,
+            args.sha256,
+            args.force,
+            home=Path.home(),
+            environ=os.environ,
+            opener=open_https,
+        )
 
     config = load_config()
 

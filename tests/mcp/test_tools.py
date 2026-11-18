@@ -4517,20 +4517,17 @@ class TestLexicalSearch:
     async def test_an_exact_containing_hit_survives_zero_scored_tokens(
         self, storage, embedding_provider
     ):
-        """R8's rescue of the divergence in §11.2, at the surface that shows it.
+        """R8 at the surface an agent sees, on the corpus BM25 says least about.
 
         A ticket list is the corpus where BM25 has least to say: `jira` is in
         every document, so the common half of the identifier is at or below the
-        IDF floor, and what the engines do there differs: the server clamps to
-        zero, the 2.x SDK's embedded engine returns the negative value and drags
-        the whole term below the truncation with it. The declared term then
-        finds nothing on one engine and the right fact on the other, from the
-        same graph.
+        IDF floor, and only the rare half scores.
 
-        Containment does not care. The document holds the literal string the
-        caller declared; that is the evidence, and the score is not consulted.
-        The engine divergence stays where it is (pinned in the storage tests)
-        and stops being visible to an agent that declares its identifiers.
+        Containment does not depend on that. The document holds the literal
+        string the caller declared; that is the evidence, and the score is not
+        consulted, so how each engine scores the common half (pinned in the
+        storage tests) is not visible to an agent that declares its
+        identifiers.
         """
         facts = await self._store(storage, embedding_provider, self.TICKETS)
 

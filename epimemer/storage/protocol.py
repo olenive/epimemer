@@ -1275,16 +1275,13 @@ class StorageBackend(Protocol):
         its terms from the query and has no exactness to verify.
 
         **Scores are strictly positive** — unless `verify_containment` rescued
-        a hit, whose score is reported as measured and may be zero or, on an
-        engine that does not clamp its IDF, negative. Otherwise a match whose
-        BM25 score is `0.0` — the IDF floor, which a term more common than half
-        the corpus falls to — is not a result. Every backend enforces this; it is
-        part of the contract, not an optimisation. The floor zeroes the *score*,
-        not the *match*, and
-        a zero-scored row surviving into rank fusion would arrive at an
-        arbitrary tie rank and fuse almost as strongly as the best real hit
-        (§10, R1). One backend scores below the floor negatively rather than
-        clamping, so the rule is `> 0` and not `!= 0`.
+        a hit, whose score is reported as measured and may be zero. Otherwise a
+        match whose BM25 score is `0.0` — the IDF floor, which a term more
+        common than half the corpus falls to — is not a result. Every backend
+        enforces this; it is part of the contract, not an optimisation. The
+        floor zeroes the *score*, not the *match*, and a zero-scored row
+        surviving into rank fusion would arrive at an arbitrary tie rank and
+        fuse almost as strongly as the best real hit (§10, R1).
 
         **One call scores one corpus partition.** With `corpus="nodes"`,
         `node_type` is required: node tables carry their own BM25 statistics, so

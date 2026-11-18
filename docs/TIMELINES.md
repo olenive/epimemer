@@ -254,30 +254,16 @@ said or what a judge decided go through the same gate as any other write.
 
 ---
 
-## 7. What the dashboard draws
+## 7. In the visualiser
 
-The visualisation panel shows a timeline's dated points on a vertical axis, past
-at the top. Beside the axis it draws when each claim was true, one lane per
-source, as [VALIDITY.md](VALIDITY.md) §6 describes. For the timeline itself:
+The visualiser draws claims on a time axis from what this page describes. A
+graph's snapshot carries each timeline with its timepoints, the bounds worked
+out for an undated point that a source placed between dated ones (§3), the
+points whose order is disputed (§4) and each rule's occurrences (§5). How they
+are drawn is in the
+[epimemer-bevy README](https://github.com/olenive/epimemer-bevy#readme).
 
-**A point the order places.** An undated point that a source put after one
-dated point and before another is a hatched band spanning those two, with its
-label written on it word for word. With only one bound known the band runs a
-short way past it and fades out: "after the fire, we do not know when".
-
-**A point whose order is disputed.** A contested point keeps whatever place it
-had, its date or the tray, and gains a red zigzag beside it, which marks the
-sequence as disputed rather than the date. Resting on the mark names the
-contradiction.
-
-**What a rule says happens over and over.** A recurrence rule's occurrences are
-small beads on a dotted spine in a lane beside the axis, one lane per rule. An
-occurrence somebody turned into a real timepoint is drawn as an ordinary point
-instead. A moved occurrence sits on the date it moved to.
-
-The panel enumerates occurrences over the span of the timeline's dated points.
-A timeline with no dated points uses its own stated present, and one with
-neither draws no beads rather than enumerating from today.
-
-**What stays in the tray.** Points nothing constrains, contested points with no
-date, and points belonging to another timeline's clock.
+**Occurrences.** A rule's occurrences are worked out over the span of the
+timeline's dated points. A timeline with no dated points uses its own stated
+present, and one with neither gets none, since counting from today would put
+occurrences where the graph never spoke.

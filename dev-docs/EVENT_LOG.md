@@ -1,11 +1,10 @@
 # Event log: a readable record of what the agent did
 
-The dashboard's log rail (`log-panel.ts`, `log-store.ts`): a list of what the
-agent changed and of the warnings its tools raised, filterable, with entries
-that highlight their nodes in the graph on click. It reads the
-`graph_action_recorded` and `advisory_raised` events, whose wire shape, replay
-and sequence number are `VIZ_CONTRACT.md` §7. The rules it shares with the
-other panels are `VISUALISATION.md`, *Rules every panel follows*.
+A list of what the agent changed and of the warnings its tools raised, which
+a visualiser shows as a log whose entries point at their nodes. It is carried
+by the `graph_action_recorded` and `advisory_raised` events, whose wire
+shape, replay and sequence number are `VIZ_CONTRACT.md` §7. This page is the
+design of the record; how a log is drawn is the visualiser's own.
 
 ---
 
@@ -48,23 +47,23 @@ subscriber on the bus, mock embeddings):
 
 A mature graph has more edges per node than a fresh ingest, because reflection
 adds them later, so a ring bound or batching threshold should trace to these
-numbers rather than to `graph_stats` on an old graph. The pipeline strip shows
-aggregate tiles for the same reason (`VISUALISATION.md` B.0).
+numbers rather than to `graph_stats` on an old graph. A visualiser draws a
+pipeline's run as one aggregate for the same reason.
 
 ### 3.1 The readable unit is the transaction
 
 `supersede_node_tx`, `merge_nodes_tx` and `write_batch_tx` are each one act
 that publishes four or more events. The entry a person wants to read,
 *"corrected 123 → 124 (3 edges)"*, corresponds to the transaction, and
-grouping fine-grained events in the frontend would need a correlation id that
+grouping fine-grained events in a client would need a correlation id that
 does not exist and would guess wrong under concurrency. So one coarse event,
 `graph_action_recorded`, is published for each act at the transaction boundary
 by the storage wrapper (`instrumented_storage.py`), which already sits there and
 holds every id involved; `graph_actions.py` decides what it says. The
-fine-grained events keep flowing for the graph panel; the log reads only the
-coarse stream.
+fine-grained events keep flowing for the drawing of the graph; the log reads
+only the coarse stream.
 
-`summary` is rendered on the emitting side, because a log line the frontend
+`summary` is rendered on the emitting side, because a log line a client
 assembles from parts would be a second place where the system's vocabulary
 gets decided, and it would drift from the tool responses that use the same
 words.
@@ -75,8 +74,8 @@ words.
 
 ### 4.1 Sequencing: `seq` cannot carry this
 
-`seq` is per browser connection and resets on reconnect (`VIZ_CONTRACT.md`
-§7.2), so two browsers see different numbers for the same event: it is a drop
+`seq` is per client connection and resets on reconnect (`VIZ_CONTRACT.md`
+§7.2), so two clients see different numbers for the same event: it is a drop
 detector, not a position. A log needs a position to dedup across a reconnect
 and keep a stable order, hence `action_id`, assigned by the session that emits
 the act from one numbering that its acts and warnings share, and zero-padded
@@ -86,7 +85,7 @@ so the lexical order a JSON consumer gets for free is the numeric one.
 
 Every event passes through the one place in the hub that stamps `session_id`
 before fan-out, and the hub already keeps a dict per session. The ring hangs
-off it and keeps the acts and the warnings that join them (§12). A browser
+off it and keeps the acts and the warnings that join them (§12). A client
 receives the backfill on subscribe, with no RPC round-trip and without waking a
 session process, filtered by the same test as the live stream. Retrieval
 records use the same ring module, `ring.py` (`RETRIEVAL_PROVENANCE.md` §3.2).
@@ -96,7 +95,7 @@ than the firehose §3 refused, and 512 entries is a long working session. A
 knob here would be one more number nobody has measured, and the ring is
 bounded either way.
 
-**What it survives:** browser reloads, the common case (you open the dashboard
+**What it survives:** a reload of the visualiser, the common case (you open it
 *after* noticing the agent did something), and an MCP exit, because the hub
 keeps a disconnected session listed for 300 seconds. It does not survive a hub
 restart, and a restarted MCP server is a new session with its own ring and its
@@ -104,28 +103,17 @@ own numbering. Only §6's durable path outlives that.
 
 ---
 
-## 5. Filtering
+## 5. Filtering is the client's
 
-Structured filters, not search:
-
-- **verb**: chips, multi-select, built from the verbs the log holds
-- **node id**: text box, exact
-- **time range**: the log's own two date inputs, sharing the timeline's
-  `TimeRange` rule (an empty input leaves that end open) but not its controls.
-  The timeline's inputs are also written by shift-drag zoom on the axis, so
-  sharing the controls would let scrubbing the timeline filter the log: a
-  filter nobody set, whose cause is in another panel.
-- **free text**: plain substring over `summary`
-
-**This is a frontend feature, and must not be routed through `text_search`.**
-The ring is a few hundred entries in memory and filtering is
-`Array.prototype.filter`: no protocol method, no storage schema, no
-cross-backend parity problem. Ranked search would not help: log vocabulary is a
-dozen verbs repeated thousands of times, and SurrealDB's BM25 clamps IDF to
-zero above 50% document frequency, so every verb match would tie at `0.0`; an
-id wants exact match, which is a lookup. Log entries hold ids rather than
-content, so a question about content ("what happened to the fact about
-deployment rollbacks?") belongs to a graph search, not to the log.
+**Filtering the log must not be routed through `text_search`.** The ring is a
+few hundred entries in the client's memory, so a filter by verb, node id,
+time or substring is a loop over them: no protocol method, no storage
+schema, no cross-backend parity problem. Ranked search would not help: log
+vocabulary is a dozen verbs repeated thousands of times, and SurrealDB's BM25
+clamps IDF to zero above 50% document frequency, so every verb match would
+tie at `0.0`; an id wants exact match, which is a lookup. Log entries hold
+ids rather than content, so a question about content ("what happened to the
+fact about deployment rollbacks?") belongs to a graph search, not to the log.
 
 ---
 
@@ -133,7 +121,7 @@ deployment rollbacks?") belongs to a graph search, not to the log.
 
 `query_changes` answers "what was born or retired in `[start, end)`" for all
 time, persisted, on every backend, with per-node lifecycle events: the durable
-audit trail. The dashboard shows the live log only.
+audit trail. A visualiser shows the live log only.
 
 | | Source | Lifetime | Filtering |
 |---|---|---|---|
@@ -162,15 +150,11 @@ period" is a recurrence rule with no lifecycle at all.
 
 ---
 
-## 7. Click to highlight
+## 7. An entry names its nodes
 
-Clicking an entry highlights the nodes it acted on, and a highlight that finds
-nothing says so in the rail (`VISUALISATION.md`, *Rules every panel follows*).
-
-Selection is bidirectional: clicking a node in the graph sets the log's
-node-id filter and does not reveal the rail, since opening a panel on every
-node click is the drawer-stealing behaviour the same rules forbid. The filter
-is there when you open the log.
+An act and a warning each carry the ids of the nodes they were about, so a
+client can show those nodes when an entry is chosen, and can list the entries
+that touched a node the reader has chosen.
 
 ---
 
@@ -230,21 +214,13 @@ viewer holding the live edge would go on drawing one nobody follows.
 
 ---
 
-## 10. Placement and category
-
-**The panel is a rail, not a drawer tab.** The drawer holds the Node and
-Response tabs (`RETRIEVAL_PROVENANCE.md` §5.1), and a third tab would put three
-unrelated drivers in one pane. The rail is a fixed-width sibling of the split
-container, hidden until the header's **Log** button asks for it, so the graph
-keeps its width by default. It sits *beside* the split container rather than
-inside it, because anything inside resizes the timeline on every hover;
-`layout.test.ts` guards that the container holds only its two halves and the
-divider.
+## 10. Category
 
 **`graph_action_recorded` is category `GRAPH`**, because it summarises graph
 mutations. Nothing filters by category: the hub filters by session and graphs,
-and the frontend dispatches by `event_type`, ignoring types with no handler, so
-an older client drops the coarse stream at the cost of wire bytes only.
+and a client dispatches by `event_type`, ignoring types it has no handler
+for, so an older client drops the coarse stream at the cost of wire bytes
+only.
 
 ---
 
@@ -273,8 +249,8 @@ would state something false about what the agent did. The legacy map entry in
 `graph_actions.py` goes in the same change that removes
 `NodeStatus.SUPERSEDED`; the fall-through stays.
 
-The two defaults in the system point opposite ways on purpose. The frontend
-fades a status it does not know; this fall-through refuses to claim one.
+The two defaults in the system point opposite ways on purpose. A drawing may
+fade a status it does not know; this fall-through refuses to claim one.
 Fading a live node is cosmetic; a log line asserting a retirement that did not
 happen is a false statement about the agent. Because the verb names a state
 rather than an act, the line reads "status undetermined: N nodes".
@@ -302,13 +278,13 @@ A warning is computed inside a tool call, before or after the write, from what
 the call was about; the kinds, the per-graph policy and the mute are
 `WARNINGS_AND_SETTINGS.md`. The tool returns the warning to the agent,
 journals a "proceeded despite warning" row when the warning objects to the
-call, and publishes it to the dashboard, which shows it beside the act it
+call, and publishes it for a visualiser to show beside the act it
 accompanied. The Python class is `Advisory`; on the wire and here, a warning is
 what the agent receives under `warnings`.
 
 ### 12.1 A new event, not a field on the act
 
-The dashboard hears about a warning through its own event, `advisory_raised`,
+A visualiser hears about a warning through its own event, `advisory_raised`,
 published by the tool layer where the warnings are computed
 (`publish_advisories` in `epimemer/mcp/tools.py`), as `retrieval_recorded` is.
 It cannot ride on the act: acts are published by the storage wrapper, which
@@ -319,7 +295,7 @@ single act to put it on; and `reflect` raises warnings with no act at all.
 
 The event carries every warning the tool computed, muted or not, with two
 booleans: `surfaced` (was it in the agent's response) and `notify_user` (was
-the agent told to raise it with the user). The dashboard is where a person
+the agent told to raise it with the user). A visualiser is where a person
 looks at what the agent was not told, so hiding muted warnings there would
 defeat the point; the journal records regardless of the mute too. One rule,
 `is_surfaced` in `core/advisories.py`, decides `surfaced` for the response and
@@ -327,16 +303,12 @@ the event alike. `reflect`'s warnings on merge candidates publish on the same
 terms: `surfaced: false` for one the mute stripped from the candidate, and
 `notify_user` only where a surfaced warning resolves to `flag`.
 
-### 12.3 A row in the live log, not a separate panel
+### 12.3 A row in the live log, not a list of its own
 
 A warning is a line in the story of a session. It joins the log with the verb
-`warned`, which the verb filter handles with no special case, and the
-substring, node id and time filters apply as they do to an act. The row reads
-"*tool* warned: *message*; the agent proceeded" (or "flagged to the user"),
-with the message word for word. It is marked in the `pending` hue; a warning
-the agent was not shown draws dimmer, with "not shown to the agent" in its
-tooltip; a click highlights its subjects. There is no unread badge, since the
-dashboard has no notion of "read".
+`warned`, so whatever filters a client has for acts apply to it with no
+special case. The event carries the message word for word, the tool, and
+whether the agent proceeded or was told to raise it with the user.
 
 **One sequence, one ring.** A call publishes one event per warning, after the
 acts of the same call, with an `action_id` from the numbering the acts use, so
@@ -348,15 +320,13 @@ warning after every act.
 
 ### 12.4 Settings are shown, not changed
 
-The header's **warnings** button opens a small read-only panel titled with the
-graph's name: the mute in words, then one row per kind with the action in force
-and whether it is inherited from the process default or set on this graph. The
-panel asks the session for exactly the response `configure_warnings` gives, in
-which a kind absent from `overridden.by_kind` is inherited, and re-reads on
-`graph_switched`, as the reflect badge does.
+`GET /api/warnings` answers with exactly the response `configure_warnings`
+gives, in which a kind absent from `overridden.by_kind` is inherited from the
+process default. A client that shows the settings re-reads them on
+`graph_switched`.
 
-Nothing on the dashboard writes a setting, because a write from the browser
+The hub has no route that writes a setting, because a write from a visualiser
 would be the first write into a graph with no author: every change is
-journalled against a session and a judge, and a browser has neither. That is
-the identity question parked under "Sharing a graph between users" in
-`PROPOSED_FEATURES.md`, and this panel must not settle it by accident.
+journalled against a session and a judge, and a visualiser has neither. That
+is the identity question parked under "Sharing a graph between users" in
+`PROPOSED_FEATURES.md`, and a settings view must not settle it by accident.

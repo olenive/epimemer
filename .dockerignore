@@ -6,11 +6,9 @@ __pycache__
 .git
 .claude
 *.egg-info
-node_modules
 TRASH
 tests
 notebooks
 scripts
 docs
 dev-docs
-epimemer/visualization/frontend

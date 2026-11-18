@@ -98,7 +98,7 @@ async def test_viz_status_reports_unreachable_hub():
 
 
 async def test_viz_status_connected_with_live_hub():
-    app = create_hub_app(bind_host="127.0.0.1")
+    app = create_hub_app(bind_host="127.0.0.1", bundle_dirs=())
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(("127.0.0.1", 0))

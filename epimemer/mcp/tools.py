@@ -1236,10 +1236,10 @@ _TIMELINE_WRITE_ATTEMPTS = 3
 async def _extraction_timeline(storage: StorageBackend, timeline_id: str | None) -> Timeline:
     """The timeline extraction should propose onto.
 
-    One shared timeline per graph rather than one per document. The panel shows
-    a single timeline at a time (`dev-docs/TIMELINE_VISUALISATION.md` §12.2), so
-    a timeline per document turns every ingest into another near-empty entry in
-    the selector and buries the marks. Provenance is not lost by sharing:
+    One shared timeline per graph rather than one per document. A reader
+    follows one timeline at a time (`dev-docs/TIMELINES.md` §4.2), so a
+    timeline per document turns every ingest into another near-empty timeline
+    and spreads one chronology across them. Provenance is not lost by sharing:
     every node carries a `sourced_from` edge to its document.
 
     A named timeline must already exist. Creating one silently would put the

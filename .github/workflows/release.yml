@@ -28,29 +28,26 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: epimemer/visualization/frontend/.nvmrc
-          cache: npm
-          cache-dependency-path: epimemer/visualization/frontend/package-lock.json
-      - name: Build the visualization bundle
-        working-directory: epimemer/visualization/frontend
-        run: |
-          npm ci
-          npm run build
-
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: "3.14"
       - run: uv build
       - run: uvx twine check dist/*
 
-      - name: The wheel carries every package and the bundle
+      - name: The wheel carries every package
         run: |
           unzip -l dist/*.whl | grep -q 'epimemer/mcp/server.py'
           unzip -l dist/*.whl | grep -q 'epimemer/storage/sqlite_adapter.py'
           unzip -l dist/*.whl | grep -q 'epimemer/storage/postgres_adapter.py'
-          unzip -l dist/*.whl | grep -q 'epimemer/visualization/static/index.html'
+
+      # The hub serves only the visualiser `epimemer viz fetch` downloads, so a
+      # page packaged here would be dead weight. grep prints any entry it finds.
+      - name: The wheel carries no visualiser page
+        run: |
+          if unzip -l dist/*.whl | grep -E 'epimemer/visualization/(static|frontend)/'; then
+            echo "The wheel carries epimemer/visualization/static or frontend, which nothing serves."
+            exit 1
+          fi
 
       - name: Install into a clean environment, without the extra
         run: |

@@ -79,7 +79,11 @@ async def _wired() -> AsyncIterator[SimpleNamespace]:
     addr = f"127.0.0.1:{sock.getsockname()[1]}"
 
     server = uvicorn.Server(
-        uvicorn.Config(create_hub_app(bind_host="127.0.0.1"), log_level="warning", lifespan="off")
+        uvicorn.Config(
+            create_hub_app(bind_host="127.0.0.1", bundle_dirs=()),
+            log_level="warning",
+            lifespan="off",
+        )
     )
     serving = asyncio.create_task(server.serve(sockets=[sock]))
     for _ in range(300):

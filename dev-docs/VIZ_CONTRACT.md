@@ -1,11 +1,11 @@
 # The visualisation contract
 
-What a client of the visualisation hub may rely on: the TypeScript dashboard,
-and the Bevy visualiser in the `epimemer-bevy` repository
+What a client of the visualisation hub may rely on. The client the hub
+serves is the Bevy visualiser in the `epimemer-bevy` repository
 (github.com/olenive/epimemer-bevy). The Pydantic models in
 `epimemer/visualization/` are the source of truth (§9). The reasons behind the
-hub, the pipeline strip and the colour customisation are `VISUALISATION.md`;
-the event log's are `EVENT_LOG.md`.
+hub and how it gets its page are `VISUALISATION.md`; the event log's are
+`EVENT_LOG.md`.
 
 ## 1. The parts
 
@@ -21,7 +21,7 @@ Three processes take part.
   machine.
 - **A client** connects to the hub, lists the sessions, picks one, fetches
   that session's snapshot over HTTP and follows its events over a WebSocket.
-  The dashboard is one client; this document is for the next one.
+  The Bevy visualiser is one client; this document is for any other.
 
 A client never speaks to a session directly. Every read it makes is an HTTP
 request to the hub, which forwards it to the session as a remote procedure
@@ -32,14 +32,14 @@ call over the session's own socket (§4) and returns the session's answer.
 | Item | Value |
 |---|---|
 | Default bind | `127.0.0.1:8765` |
-| Environment | `EPIMEMER_VIZ_HOST`, `EPIMEMER_VIZ_PORT` (read by the hub and by the MCP server's `ServerConfig`, which also has `EPIMEMER_VIZ_ENABLED` and `EPIMEMER_VIZ_AUTOSPAWN`) |
+| Environment | `EPIMEMER_VIZ_HOST`, `EPIMEMER_VIZ_PORT` (read by the hub and by the MCP server's `ServerConfig`, which also has `EPIMEMER_VIZ_ENABLED` and `EPIMEMER_VIZ_AUTOSPAWN`); `EPIMEMER_VIZ_BUNDLE_DIR` (read by the hub alone) |
 | Start | `epimemer-viz` (or `python -m epimemer.visualization.hub`); an MCP server with autospawn on starts one itself when none answers |
 | Status | `epimemer-viz --status`: the hub's pid and version, then one line per session |
 | Stop | `epimemer-viz --stop`, through the pidfile at `~/.epimemer/viz-hub.pid` |
 | Liveness | `GET /api/health` answers with `"service": "epimemer-viz-hub"`, which is how a probe tells a hub from anything else on the port |
 
-**CORS.** The hub sets no cross-origin headers; the dashboard needs none
-because the hub serves it from the same origin. A browser client served from
+**CORS.** The hub sets no cross-origin headers; the page it serves needs none
+because it comes from the same origin. A browser client served from
 another origin, such as a wasm build on its own development server, would need
 the hub to grow CORS headers or be served from the hub's own static mount. A
 native client is unaffected.
@@ -90,7 +90,8 @@ return those three.
 
 | Route | Parameters | Answered by | Response |
 |---|---|---|---|
-| `GET /` | | hub | The dashboard page, or `503` with plain text saying how to build it when the bundle is absent. Static assets are mounted beside it. |
+| `GET /` | | hub | The page: `index.html` from the directory `EPIMEMER_VIZ_BUNDLE_DIR` names when it is set, otherwise from the fetched visualiser (`~/.epimemer/viz/current`). `503` with plain text naming `epimemer viz fetch` when the directory holds none. Which directory serves is decided on every request. |
+| `GET /<file>` | | hub | A file of the same bundle, for any path no other route claims, or `404`. `.wasm` is sent as `application/wasm` and `.js` as `text/javascript`. |
 | `GET /api/health` | | hub | `{"ok": true, "service": "epimemer-viz-hub", "pid", "version", "sessions", "schema_version"}`. `version` is the installed Epimemer package version, `sessions` the number of sessions listed, connected or not. |
 | `GET /api/sessions` | | hub | A list, one object per session: the `SessionInfo` fields `session_id`, `pid`, `backend`, `active_graph`, `started_at`, plus `connected` (bool), `last_event_at` (ISO timestamp or null) and `schema_version`. A disconnected session stays listed for 300 seconds. |
 | `GET /api/graphs` | `session` | session | `{"graphs": [names], "active_graph", "backend", "reflect": {"count", "threshold", "suggested"}}`. `reflect` describes the active graph only. |
@@ -409,8 +410,8 @@ Every message the hub sends on `/ws` is one JSON object with a `seq`
 integer added. `seq` is **per connection**: it starts at 1 with the first
 message on this socket and increases by one per message of any kind, system
 messages and replay included. It says nothing about position in any
-session's stream and resets when the client reconnects. On a gap the
-dashboard highlights its Refresh button; a client should refetch the snapshot.
+session's stream and resets when the client reconnects. On a gap a client
+should refetch the snapshot.
 
 ### 7.3 System messages
 
@@ -464,8 +465,8 @@ sequence per session, counted from one and zero-padded to twelve digits so
 string order is numeric order. A client may deduplicate across both by it.
 
 The pipeline events, which describe the Petri nets the session runs
-(segment, store, reflect and the rest) and are what the dashboard's
-pipeline strip draws:
+(segment, store, reflect and the rest) and are what a visualiser draws its
+pipelines from:
 
 | `event_type` | Fields beyond the common ones |
 |---|---|

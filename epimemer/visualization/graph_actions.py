@@ -36,10 +36,8 @@ def verb_for_status(status: NodeStatus) -> ActionVerb:
 
     Falls through to `UNDETERMINED` for a status this module has never heard
     of, because a status is added by someone who has no cause to look here.
-    The frontend's `statusOpacity` defaults the other way — an unlisted status
-    *fades* — and that asymmetry is deliberate: fading a live node is a
-    cosmetic error, while a log line saying a node was retired when it was not
-    is a false statement about what the agent did.
+    Guessing a verb would be worse: a log line saying a node was retired when
+    it was not is a false statement about what the agent did.
     """
     return _STATUS_VERBS.get(status, ActionVerb.UNDETERMINED)
 
