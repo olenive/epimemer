@@ -32,7 +32,7 @@ restart, have their own **opt-in** suites, which skip themselves under a bare
 - `tests/storage/test_surrealdb_integration.py`: real `ws://` connection and
   cross-connection transaction atomicity, against an already-running server.
   Runs when `EPIMEMER_SURREAL_WS_URL` is set.
-- `tests/storage/test_surrealdb_persistence.py`: rocksdb-backed data
+- `tests/storage/test_surrealdb_persistence.py`: on-disk data
   surviving a full server restart. Controls its own throwaway container; runs
   when `EPIMEMER_SURREAL_PERSIST_TEST=1`.
 

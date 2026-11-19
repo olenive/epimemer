@@ -217,7 +217,7 @@ def test_every_documented_surrealdb_start_names_an_on_disk_path():
 
     assert commands, "expected the README to document starting SurrealDB"
     for tail in commands:
-        assert "rocksdb:" in tail, (
+        assert "surrealkv:" in tail, (
             "a documented SurrealDB start has no storage path, so it runs "
             f"in-memory and loses the graph on restart: ...{tail.strip()!r}"
         )

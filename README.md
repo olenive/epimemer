@@ -96,7 +96,7 @@ nothing to run, or a Postgres database for a graph several people share.
 and not.** `surreal start` takes an optional `[PATH]` whose default is
 `memory`, so a SurrealDB server started without one keeps the entire graph in
 RAM and loses it on restart, with no error and no warning. Both commands below
-pass an explicit `rocksdb:` path.
+pass an explicit `surrealkv:` path.
 
 ```bash
 # Docker: on disk, in a named volume that outlives the container.
@@ -104,11 +104,11 @@ pass an explicit `rocksdb:` path.
 docker run -d --name surrealdb -p 127.0.0.1:8000:8000 \
   --restart unless-stopped -u 0:0 \
   -v surreal-data:/data \
-  surrealdb/surrealdb:latest \
-  start --user root --pass root rocksdb:/data/epimemer.db
+  surrealdb/surrealdb:v4.0.1 \
+  start --user root --pass root surrealkv:/data/epimemer.db
 
 # Or a native install: on disk, relative to the working directory
-surreal start --user root --pass root rocksdb:epimemer.db
+surreal start --user root --pass root surrealkv:epimemer.db
 ```
 
 Then register the Epimemer server with the backend named:

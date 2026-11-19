@@ -1,9 +1,10 @@
 services:
   surrealdb:
-    image: surrealdb/surrealdb:latest
+    # A version, not `latest`, for the reason the Makefile gives.
+    image: surrealdb/surrealdb:v4.0.1
     # 0:0 because the image's non-root user cannot write the volume mount.
     user: "0:0"
-    command: start --user root --pass root --bind 0.0.0.0:8000 rocksdb:/data/epimemer.db
+    command: start --user root --pass root --bind 0.0.0.0:8000 surrealkv:/data/epimemer.db
     ports:
       - "127.0.0.1:8000:8000"
     volumes:

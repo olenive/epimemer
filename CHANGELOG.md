@@ -4,6 +4,29 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- The README and `docker-compose.yml` name SurrealDB v4.0.1 rather than
+  `latest`, with a `surrealkv:` storage path in place of the deprecated
+  `rocksdb:`. **A 3.x datastore started on 4.0 is converted to SurrealKV, and
+  there is no way back:** export it first. SurrealDB advises a deployment with
+  data in it to move to the latest 3.3 now and to 4.x once 4.1 ships its
+  migration tooling; see its
+  [3.x to 4.0 guide](https://surrealdb.com/docs/operate/upgrading/3x-to-4x).
+
+### Security
+
+- Minimum versions now exclude releases with published advisories: pydantic
+  2.14.2, websockets 17.4, and in their extras torch 2.15.0
+  (`sentence-transformers`), grpcio 1.83.2 (`gcs`) and psycopg 3.3.9
+  (`postgres`). grpcio's own CA store trusted the compromised emSign
+  intermediates, and the certifi floor does not reach it.
+- The dependency audit also reads each dependency's GitHub repository
+  advisories, which reach OSV only once GitHub reviews them. It needs a
+  `GITHUB_TOKEN`, or `--skip-github` to check OSV alone.
+
 ## [0.5.0] — 2026-11-18
 
 ### Added

@@ -11,7 +11,7 @@ Unlike ``test_surrealdb_integration.py`` (which connects to an *already running*
 server), durability can only be proven by controlling the server lifecycle:
 write, **restart the server**, then read back from a fresh connection. So this
 test starts, restarts, and removes its own throwaway SurrealDB container backed
-by ``rocksdb`` on a named volume.
+by ``surrealkv`` on a named volume.
 
 It is SKIPPED unless explicitly opted in, so a docker-equipped dev box running a
 bare ``pytest`` never spins up a container:
@@ -68,11 +68,11 @@ async def _wait_ready(url: str, timeout: float = 45.0) -> None:
 
 
 def _docker_run(name: str, volume: str, port: int) -> list[str]:
-    """A throwaway rocksdb-backed server on its own port and named volume.
+    """A throwaway on-disk server on its own port and named volume.
 
     -u 0:0 so the server (non-root by default) can write the named volume, whose
     /data is root-owned on this runtime — the same workaround the setup script
-    uses. rocksdb: is the on-disk backend.
+    uses. surrealkv: is the on-disk backend.
     """
     return [
         "docker",
@@ -92,11 +92,11 @@ def _docker_run(name: str, volume: str, port: int) -> list[str]:
         "root",
         "--pass",
         "root",
-        "rocksdb:/data/epimemer.db",
+        "surrealkv:/data/epimemer.db",
     ]
 
 
-async def test_rocksdb_data_survives_server_restart():
+async def test_on_disk_data_survives_server_restart():
     name = f"epimemer-persist-{uuid.uuid4().hex[:8]}"
     volume = f"{name}-data"
     port = _free_port()
