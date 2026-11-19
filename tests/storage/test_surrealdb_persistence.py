@@ -37,7 +37,7 @@ import pytest
 from epimemer.core.types import Fact
 from epimemer.storage.surrealdb_adapter import SurrealDBStorage
 
-IMAGE = os.environ.get("EPIMEMER_SURREAL_IMAGE", "surrealdb/surrealdb:latest")
+IMAGE = os.environ.get("EPIMEMER_SURREAL_IMAGE", "surrealdb/surrealdb:v4.0.1")
 ENABLED = bool(os.environ.get("EPIMEMER_SURREAL_PERSIST_TEST"))
 DOCKER = shutil.which("docker")
 

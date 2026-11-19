@@ -14,7 +14,7 @@ To drive it by hand, start a server and point the env var at it:
     # native:
     #   surreal start --user root --pass root memory
     # or Docker:
-    #   docker run --rm -p 8000:8000 surrealdb/surrealdb:latest \
+    #   docker run --rm -p 8000:8000 surrealdb/surrealdb:v4.0.1 \
     #     start --user root --pass root memory
 
     EPIMEMER_SURREAL_WS_URL=ws://127.0.0.1:8000/rpc \

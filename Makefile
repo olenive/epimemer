@@ -20,7 +20,10 @@
 # way unless EPIMEMER_TEST_POSTGRES_DSN is set, and `make test-postgres` is how
 # it runs.
 
-SURREAL_IMAGE ?= surrealdb/surrealdb:latest
+# A version, not `latest`: Docker never refreshes a cached `latest`, so a server
+# with known advisories would keep running unnoticed. docker-compose.yml, the
+# README and the persistence suite's default name the same version.
+SURREAL_IMAGE ?= surrealdb/surrealdb:v4.0.1
 SURREAL_CONTAINER ?= epimemer-surreal-it
 # Override when something already holds the port: `make test-integration
 # SURREAL_PORT=8123`. SURREAL_WS_URL follows it unless set too.
@@ -71,7 +74,7 @@ test-integration:
 		if [ "$$ready" != "1" ]; then echo "SurrealDB did not become ready on port $(SURREAL_PORT)"; exit 1; fi; \
 		EPIMEMER_SURREAL_WS_URL=$(SURREAL_WS_URL) \
 			uv run python -m pytest tests/storage/test_surrealdb_integration.py -v && \
-		EPIMEMER_SURREAL_PERSIST_TEST=1 \
+		EPIMEMER_SURREAL_PERSIST_TEST=1 EPIMEMER_SURREAL_IMAGE=$(SURREAL_IMAGE) \
 			uv run python -m pytest tests/storage/test_surrealdb_persistence.py -v
 
 # Readiness is asked over TCP inside the container, not the default socket: the
