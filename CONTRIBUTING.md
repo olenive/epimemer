@@ -81,15 +81,18 @@ duplication that makes them go stale.
 ### Before changing a dependency
 
 ```bash
-uv run python scripts/audit_dependencies.py
+GITHUB_TOKEN=$(gh auth token) uv run python scripts/audit_dependencies.py
 ```
 
-It asks OSV whether anything installed here has a published advisory. A weekly
-CI job runs the same command and files what it finds as an issue. It is the
-only thing watching this project's Python dependencies: Dependabot's `pip`
-ecosystem and GitHub's dependency graph do not read `uv.lock`. A finding names
-a package and a severity, not whether this code reaches the affected path.
-Updating is `uv lock --upgrade`, run the suite, one commit.
+It asks OSV and each installed package's GitHub repository whether anything
+installed here has a published advisory: a repository's own advisories reach
+OSV only once GitHub reviews them. The token is for GitHub's rate limit, and
+`--skip-github` checks OSV alone. A weekly CI job runs the same command and
+files what it finds as an issue. It is the only thing watching this project's
+Python dependencies: Dependabot's `pip` ecosystem and GitHub's dependency graph
+do not read `uv.lock`. A finding names a package and a severity, not whether
+this code reaches the affected path. Updating is `uv lock --upgrade`, run the
+suite, one commit.
 
 ## Conventions
 

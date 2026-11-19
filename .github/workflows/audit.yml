@@ -6,6 +6,10 @@ name: Dependency advisories
 # Measured once, on 2026-09-07: 19 of 132 installed packages carried an
 # advisory, one of them critical, and nothing had said so.
 #
+# It asks OSV and each dependency's own GitHub repository, because OSV carries
+# only what GitHub has reviewed into its global database, and a project's own
+# advisory can wait weeks for that.
+#
 # Weekly rather than on every push, because a new advisory is published against
 # code that has not changed: the trigger is the calendar, not the commit.
 #
@@ -30,7 +34,7 @@ env:
 
 jobs:
   audit:
-    name: OSV
+    name: OSV and GitHub
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -46,17 +50,23 @@ jobs:
       # if the low-severity findings ever become noise, and read the script's
       # docstring first: a finding is not a verdict, and most of the 19 were in
       # code paths this server never reaches.
+      #
+      # The token reads each dependency repository's advisories, which are
+      # public: without one GitHub allows 60 requests an hour, too few.
       - id: audit
         continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set +e
           uv run --no-sync python scripts/audit_dependencies.py > advisories.txt 2>&1
           echo "status=$?" >> "$GITHUB_OUTPUT"
           cat advisories.txt
 
-      # Exit 2 is the check itself failing, an unreachable OSV or a changed
-      # response shape. That says nothing about this environment, so it fails
-      # the run rather than being filed as a vulnerability.
+      # Exit 2 is the check itself failing: an unreachable OSV or GitHub, a
+      # rate limit, a missing token, or a changed response shape. That says
+      # nothing about this environment, so it fails the run rather than being
+      # filed as a vulnerability.
       - name: The check has to have run
         if: steps.audit.outputs.status == '2'
         run: |
